@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ورشة · Warsha — من أول طلب لحد المتجر</title>
+  <meta name="description" content="ورشة: مصنع برمجيات عربي بالذكاء الاصطناعي. اكتب طلبك، وفريق وكلاء يبني تطبيقك ويختبره وينشره.">
+  <link rel="icon" href="assets/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com/">
+  <link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav>
+    <div class="wrap">
+      <a href="#" class="brand"><img src="assets/warsha-wordmark-dark.svg" alt="ورشة · Warsha"></a>
+      <div class="links" id="navLinks">
+        <a href="#inside"><span data-ar>جوه ورشة</span><span data-en>Inside</span></a>
+        <a href="#start"><span data-ar>نقطة البداية</span><span data-en>Where you start</span></a>
+        <a href="#how"><span data-ar>إزاي بتشتغل</span><span data-en>How it works</span></a>
+        <a href="#after"><span data-ar>بعد النشر</span><span data-en>After launch</span></a>
+        <a href="#specs"><span data-ar>المواصفات</span><span data-en>Specs</span></a>
+        <a href="#road"><span data-ar>فين وصلنا</span><span data-en>Roadmap</span></a>
+        <a href="#faq"><span data-ar>أسئلة</span><span data-en>FAQ</span></a>
+        <a href="https://github.com/athar-studios/warsha">GitHub</a>
+      </div>
+      <div class="nav-actions">
+        <button type="button" class="lang-btn" id="lang" aria-label="Switch language"><span data-ar>English</span><span data-en>العربية</span></button>
+        <button type="button" class="nav-toggle" id="navToggle" aria-label="Toggle navigation menu" aria-expanded="false">
+          <span></span>
+          <span></span>
+          <span></span>
+        </button>
+      </div>
+    </div>
+  </nav>
+
+  <main class="fade" id="root">
+    <header>
+      <div class="wrap">
+        <span class="pill"><i></i><span data-ar>v0.2.0 · قبل الإطلاق · مفتوح المصدر للاطلاع</span><span data-en>v0.2.0 · Pre-launch · Source-available</span></span>
+        <h1><span data-ar>اطلب تطبيقك بالعربي.<br><em>استلمه على المتجر.</em><span class="cur"></span></span><span data-en>Ask for your app in Arabic.<br><em>Get it in the store.</em><span class="cur"></span></span></h1>
+        <p class="lead"><span data-ar>اكتب طلب واحد زي ما بتكلم موظف. ورشة تسألك كام سؤال، وفريق وكلاء يبني التطبيق ويختبره وينشره. وانت بتوافق على كل خطوة مهمة.</span><span data-en>Write one request, the way you'd brief a colleague. Warsha asks a few questions, then an agent team builds, tests and ships the app. You approve every step that matters.</span></p>
+        <div class="cta">
+          <a class="btn" href="https://github.com/athar-studios/warsha"><span data-ar>جرّب ورشة على GitHub</span><span data-en>Try Warsha on GitHub</span> <span data-ar>&larr;</span><span data-en>&rarr;</span></a>
+          <a class="btn secondary" href="#how"><span data-ar>شوف القصة كاملة</span><span data-en>See the full story</span></a>
+        </div>
+        <p class="note"><span data-ar>ويندوز · ماك · لينكس — والتحكم من موبايلك</span><span data-en>Windows · macOS · Linux — with control from your phone</span></p>
+        <div class="prompt reveal" aria-live="polite">
+          <div class="bar"><span class="d"></span><span class="d"></span><span class="d"></span><span class="prompt-title">warsha</span><span class="sp demo"><span data-ar>مثال توضيحي</span><span data-en>Illustrative</span></span></div>
+          <div class="body">
+            <div class="who"><span data-ar>د. سارة · عيادة أسنان</span><span data-en>Dr. Sara · dental clinic</span></div>
+            <div class="typed" id="typed"></div>
+            <div class="ask" id="ask">
+              <span class="chip q"><span data-ar>ورشة: كام دكتور في العيادة؟</span><span data-en>Warsha: How many doctors?</span></span>
+              <span class="chip q"><span data-ar>الدفع أونلاين ولا في العيادة؟</span><span data-en>Pay online or at the clinic?</span></span>
+              <span class="chip q"><span data-ar>التذكير واتساب ولا SMS؟</span><span data-en>Reminders by WhatsApp or SMS?</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <section id="inside" class="section-dark">
+      <div class="wrap">
+        <div class="center reveal">
+          <span class="tag"><span data-ar>جوه ورشة</span><span data-en>Inside Warsha</span></span>
+          <h2><span data-ar>طلبك، والفريق، والتطبيق. <em>في شاشة واحدة.</em></span><span data-en>Your request, the team, the app. <em>One screen.</em></span></h2>
+          <p class="sub"><span data-ar>بتشوف مين شغال على إيه دلوقتي، وكل أمر اتنفذ، والتطبيق وهو بيتكوّن قدامك.</span><span data-en>See who is working on what, every command that ran, and the app taking shape in front of you.</span></p>
+        </div>
+        <div class="mock reveal" id="mock">
+          <div class="mbar"><img src="assets/warsha-icon.svg" alt="" width="20" height="20"><b><span data-ar>عيادة د. سارة</span><span data-en>Dr. Sara's Clinic</span></b><span class="demo"><span data-ar>مثال توضيحي</span><span data-en>Illustrative</span></span><span class="sp">warshad · local</span></div>
+          <div class="cols">
+            <div class="pane">
+              <h6>build log</h6>
+              <div class="log" id="log">
+                <div><b>plan</b> 6 screens · bookings · reminders</div>
+                <div><b>rust-coder</b> api/appointments ✓</div>
+                <div><b>web-coder</b> screens/booking ✓</div>
+                <div><b>gate</b> <span class="ok">tests 48/48 passed</span></div>
+                <div><b>gate</b> <span class="ok">lint · typecheck · build ✓</span></div>
+                <div><b>debugger</b> review: no blockers</div>
+                <div><b>ship</b> waiting for owner approval…</div>
+              </div>
+            </div>
+            <div class="pane">
+              <h6><span data-ar>الفريق</span><span data-en>Team</span></h6>
+              <div class="agent" data-a><div class="av">PM</div><div><span data-ar>المخطِّط</span><span data-en>Planner</span><small><span data-ar>بيقسّم الطلب لمهام</span><span data-en>Splits the request</span></small></div><span class="st">idle</span></div>
+              <div class="agent" data-a><div class="av">BE</div><div><span data-ar>مطوّر الخلفية</span><span data-en>Backend coder</span><small><span data-ar>المواعيد والتذكير</span><span data-en>Bookings &amp; reminders</span></small></div><span class="st">idle</span></div>
+              <div class="agent" data-a><div class="av">UI</div><div><span data-ar>مطوّر الواجهة</span><span data-en>UI coder</span><small><span data-ar>شاشات الحجز</span><span data-en>Booking screens</span></small></div><span class="st">idle</span></div>
+              <div class="agent" data-a><div class="av">QA</div><div><span data-ar>المراجِع</span><span data-en>Reviewer</span><small><span data-ar>بيقرا بس، مبيعدّلش</span><span data-en>Read-only</span></small></div><span class="st">idle</span></div>
+              <div class="appr" id="appr">
+                <b><span data-ar>محتاج موافقتك</span><span data-en>Needs your approval</span></b>
+                <p><span data-ar>التطبيق جاهز. أرفعه على المتجر باسم «عيادة د. سارة»؟</span><span data-en>The app is ready. Publish it as "Dr. Sara's Clinic"?</span></p>
+                <div class="row"><button type="button" class="y" id="ok"><span data-ar>وافق</span><span data-en>Approve</span></button><button type="button" id="no"><span data-ar>لسه</span><span data-en>Not yet</span></button></div>
+                <span class="okmsg"><span data-ar>● تمام — بيترفع دلوقتي</span><span data-en>● Done — publishing now</span></span>
+              </div>
+            </div>
+            <div class="pane prev">
+              <div class="phone">
+                <div class="scr" id="scr">
+                  <div class="ph-h"><span data-ar>عيادة د. سارة</span><span data-en>Dr. Sara's Clinic</span></div>
+                  <div class="ph-s"><span data-ar>احجز كشفك في دقيقة</span><span data-en>Book in a minute</span></div>
+                  <div class="days"><span>Sa</span><span class="on">Su</span><span>Mo</span><span>Tu</span></div>
+                  <div class="slot">10:00</div>
+                  <div class="slot on">11:30 ✓</div>
+                  <div class="ph-b"><span data-ar>أكّد الحجز</span><span data-en>Confirm</span></div>
+                  <div class="ph-n"><span data-ar>🔔 هنفكّرك قبلها بيوم</span><span data-en>🔔 Reminder a day before</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="start" class="section-light">
+      <div class="wrap">
+        <div class="reveal">
+          <span class="tag"><span data-ar>نقطة البداية</span><span data-en>Where you start</span></span>
+          <h2><span data-ar>ابدأ من فكرة. <em>أو من اللي عندك.</em></span><span data-en>Start from an idea. <em>Or from what you have.</em></span></h2>
+        </div>
+        <div class="two">
+          <div class="box reveal">
+            <span class="num tag">01</span>
+            <h3><span data-ar>عندك فكرة بيزنس</span><span data-en>You have a business idea</span></h3>
+            <p><span data-ar>اوصف المشكلة والنتيجة اللي عايزها. ورشة تحوّلها لخطة، وبعدين لتطبيق شغال.</span><span data-en>Describe the problem and the result you want. Warsha turns it into a plan, then a working app.</span></p>
+            <div class="chips">
+              <span class="chip"><span data-ar>حجز مواعيد</span><span data-en>Bookings</span></span>
+              <span class="chip"><span data-ar>متجر صغير</span><span data-en>Small shop</span></span>
+              <span class="chip"><span data-ar>نظام طلبات</span><span data-en>Orders</span></span>
+            </div>
+          </div>
+          <div class="box reveal">
+            <span class="num tag">02</span>
+            <h3><span data-ar>عندك مشروع شغال</span><span data-en>You have a running project</span></h3>
+            <p><span data-ar>افتح الريبو واطلب ميزة أو إصلاح. الفريق بيشتغل على فرع، وانت بتراجع قبل الدمج.</span><span data-en>Open your repo and ask for a feature or a fix. The team works on a branch; you review before merging.</span></p>
+            <div class="chips">
+              <span class="chip">git</span>
+              <span class="chip"><span data-ar>اختبارات</span><span data-en>Tests</span></span>
+              <span class="chip"><span data-ar>مراجعة</span><span data-en>Review</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="how" class="section-dark">
+      <div class="wrap steps">
+        <div class="rail reveal">
+          <span class="tag"><span data-ar>القصة كاملة</span><span data-en>The full story</span></span>
+          <h2><span data-ar>من أول رسالة <em>لحد المتجر.</em></span><span data-en>From first message <em>to the store.</em></span></h2>
+          <p class="sub"><span data-ar>عيادة د. سارة، خطوة بخطوة.</span><span data-en>Dr. Sara's clinic, step by step.</span> <span class="demo"><span data-ar>مثال توضيحي</span><span data-en>Illustrative</span></span></p>
+          <div class="bar2"><i id="pbar"></i></div>
+          <div class="prog" id="prog">
+            <a href="#s1"><span>01</span><span data-ar>الطلب</span><span data-en>The request</span></a>
+            <a href="#s2"><span>02</span><span data-ar>الأسئلة</span><span data-en>Questions</span></a>
+            <a href="#s3"><span>03</span><span data-ar>البناء</span><span data-en>The build</span></a>
+            <a href="#s4"><span>04</span><span data-ar>الاختبار</span><span data-en>Testing</span></a>
+            <a href="#s5"><span>05</span><span data-ar>النشر</span><span data-en>Publishing</span></a>
+          </div>
+        </div>
+        <div>
+          <div class="stp" id="s1">
+            <span class="n">01</span>
+            <h3><span data-ar>سارة كتبت سطرين.</span><span data-en>Sara wrote two lines.</span></h3>
+            <p><span data-ar>من غير مصطلحات ولا مواصفات. بس اللي محتاجاه العيادة.</span><span data-en>No jargon, no spec. Just what the clinic needs.</span></p>
+            <div class="bub">
+              <div class="me"><span data-ar>عايزة تطبيق المرضى يحجزوا منه ويوصلهم تذكير.</span><span data-en>I want an app where patients book and get a reminder.</span></div>
+            </div>
+          </div>
+          <div class="stp" id="s2">
+            <span class="n">02</span>
+            <h3><span data-ar>ورشة سألت ٣ أسئلة بس.</span><span data-en>Warsha asked just 3 questions.</span></h3>
+            <p><span data-ar>اللي يفرق في التطبيق فعلاً. الباقي بياخد فيه قرار معقول ويقولك عليه.</span><span data-en>Only what changes the app. For the rest it makes a sensible call and tells you.</span></p>
+            <div class="bub">
+              <div><span data-ar>كام دكتور؟ الدفع فين؟ التذكير إزاي؟</span><span data-en>How many doctors? Where do you pay? How to remind?</span></div>
+              <div class="me"><span data-ar>دكتورين، في العيادة، واتساب.</span><span data-en>Two, at the clinic, WhatsApp.</span></div>
+            </div>
+          </div>
+          <div class="stp" id="s3">
+            <span class="n">03</span>
+            <h3><span data-ar>فريق كامل اشتغل بالتوازي.</span><span data-en>A whole team worked in parallel.</span></h3>
+            <p><span data-ar>واحد للخلفية، وواحد للواجهة، ومراجِع بيقرا بس. والقائد هو الوحيد اللي بيعتمد الشغل.</span><span data-en>One on the backend, one on the UI, and a read-only reviewer. Only the lead signs off.</span></p>
+            <div class="term">$ warsha run clinic<br><b>rust-coder</b> api/appointments<br><b>web-coder</b>  screens/booking<br><b>debugger</b>   watching…</div>
+          </div>
+          <div class="stp" id="s4">
+            <span class="n">04</span>
+            <h3><span data-ar>مفيش حاجة بتعدّي من غير اختبار.</span><span data-en>Nothing ships untested.</span></h3>
+            <p><span data-ar>١٤ مرحلة في الخط، وأربع بوابات بتستنى موافقتك: تنسيق، تحليل، اختبارات، وبناء. لو واحدة وقعت، الشغل بيرجع.</span><span data-en>14 pipeline stages, and four gates that wait for your approval: format, lint, tests, build. If one fails, the work goes back.</span></p>
+            <div class="term"><span class="w">gates</span> fmt ✓ clippy ✓ test ✓ typecheck ✓ build ✓ …<br><b>14/14</b> passed</div>
+          </div>
+          <div class="stp" id="s5">
+            <span class="n">05</span>
+            <h3><span data-ar>سارة ضغطت «وافق».</span><span data-en>Sara pressed "Approve".</span></h3>
+            <p><span data-ar>ورشة بتجهّز مسودة النشر. النشر على المتاجر لسه يدوي؛ ورشة بتجهّز المسودة وبتستنى موافقتك. ومن موبايلك تقدر تتابع وتطلب تعديل في أي وقت.</span><span data-en>Warsha prepares the publish draft. Store publishing is still manual; Warsha prepares the draft and waits for your approval. From her phone she can follow along and ask for changes anytime.</span></p>
+            <div class="term">$ warsha approve run-7 gate-d<br><b>✓</b> <span class="w">approved · publish draft ready</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="after" class="section-light">
+      <div class="wrap">
+        <div class="reveal">
+          <span class="tag"><span data-ar>بعد النشر</span><span data-en>After launch</span></span>
+          <h2><span data-ar>التطبيق اتنشر. <em>ورشة لسه شغالة.</em></span><span data-en>The app is live. <em>Warsha keeps working.</em></span></h2>
+          <p class="sub"><span data-ar>مش مجرد ديمو حلو. ورشة معمولة عشان التطبيق يفضل شغال بعد أول يوم.</span><span data-en>Not just a nice demo. Warsha is built so the app keeps running after day one.</span></p>
+        </div>
+        <div class="grid">
+          <div class="box reveal">
+            <div class="ico">ع</div>
+            <h3><span data-ar>عربي من الأساس</span><span data-en>Arabic at the core</span></h3>
+            <p><span data-ar>الواجهة والوكلا والتطبيقات الناتجة RTL صح من أول سطر، مش ترجمة متركّبة.</span><span data-en>The UI, the agents and the apps they build are proper RTL from line one, not a bolted-on translation.</span></p>
+          </div>
+          <div class="box reveal">
+            <div class="ico">✓</div>
+            <h3><span data-ar>انت صاحب القرار</span><span data-en>You make the call</span></h3>
+            <p><span data-ar>النشر، والدفع، وأي حاجة مهمة بتستنى موافقتك. وكل أمر متسجّل وتقدر تراجعه.</span><span data-en>Publishing, payments and anything important waits for you. Every command is logged and reviewable.</span></p>
+          </div>
+          <div class="box reveal">
+            <div class="ico">$</div>
+            <h3><span data-ar>التكلفة قدامك</span><span data-en>Costs in plain sight</span></h3>
+            <p><span data-ar>استخدام كل وكيل وتكلفته متحسبين. بتعرف صرفت كام قبل ما تتفاجئ.</span><span data-en>Usage and cost per agent are tracked. You know what you spent before it surprises you.</span></p>
+          </div>
+          <div class="box reveal">
+            <div class="ico">⌂</div>
+            <h3><span data-ar>على جهازك أو سيرفرك</span><span data-en>Your laptop or your server</span></h3>
+            <p><span data-ar><code>warshad</code> يشتغل محلي أو على سيرفرك. اقفل اللابتوب والشغل مكمّل.</span><span data-en><code>warshad</code> runs locally or on your server. Close the laptop; the work goes on.</span></p>
+          </div>
+          <div class="box reveal">
+            <div class="ico">▯</div>
+            <h3><span data-ar>موبايلك ريموت</span><span data-en>Your phone is the remote</span></h3>
+            <p><span data-ar>تابع ووافق واطلب تعديل من تطبيق الويب على الموبايل.</span><span data-en>Follow, approve and request changes from the phone web app.</span></p>
+          </div>
+          <div class="box reveal">
+            <div class="ico">↻</div>
+            <h3><span data-ar>رعاية بعد الإطلاق</span><span data-en>Post-launch care</span></h3>
+            <p><span data-ar>تحديثات، وإصلاحات، ومتابعة للأعطال. <span class="demo">قريبًا</span></span><span data-en>Updates, fixes and crash follow-up. <span class="demo">Coming</span></span></p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="specs" class="section-dark">
+      <div class="wrap">
+        <div class="center reveal">
+          <span class="tag"><span data-ar>المواصفات التقنية</span><span data-en>Technical Specs</span></span>
+          <h2><span data-ar>أرقام حقيقية. <em>كود مفحوص ومثبت.</em></span><span data-en>Real numbers. <em>Verified code.</em></span></h2>
+          <p class="sub"><span data-ar>كل رقم هنا متطابق مع مستودع الكود والاختبارات الآلية الحية.</span><span data-en>Every number here is traceable to the codebase and live automated test suites.</span></p>
+        </div>
+        <div class="reveal">
+          <table class="specs-table">
+            <thead>
+              <tr>
+                <th scope="col"><span data-ar>البند والمواصفة</span><span data-en>Specification</span></th>
+                <th scope="col"><span data-ar>القيمة والتحقق</span><span data-en>Verified Metric</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="label-col"><span data-ar>وكلاء الفريق المتخصصون</span><span data-en>Specialized Agents</span></td>
+                <td class="val-col"><span class="metric">12</span></td>
+              </tr>
+              <tr>
+                <td class="label-col"><span data-ar>مراحل خط الإنتاج الهندسي</span><span data-en>Pipeline Stages</span></td>
+                <td class="val-col"><span class="metric">14</span></td>
+              </tr>
+              <tr>
+                <td class="label-col"><span data-ar>بوابات اعتماد المالك الإلزامية</span><span data-en>Owner Approval Gates</span></td>
+                <td class="val-col"><span class="metric">4</span></td>
+              </tr>
+              <tr>
+                <td class="label-col"><span data-ar>أنظمة التشغيل المدعومة</span><span data-en>Supported Platforms</span></td>
+                <td class="val-col"><span class="metric">3</span> (Windows · macOS · Linux)</td>
+              </tr>
+              <tr>
+                <td class="label-col"><span data-ar>اختبارات Rust الآلية</span><span data-en>Rust Automated Tests</span></td>
+                <td class="val-col"><span class="metric">725</span> passed</td>
+              </tr>
+              <tr>
+                <td class="label-col"><span data-ar>اختبارات TypeScript</span><span data-en>TypeScript Tests</span></td>
+                <td class="val-col"><span class="metric">1001</span> passed</td>
+              </tr>
+              <tr>
+                <td class="label-col"><span data-ar>اختبارات المسار الشامل (E2E)</span><span data-en>End-to-End Tests</span></td>
+                <td class="val-col"><span class="metric">785</span> passed</td>
+              </tr>
+              <tr>
+                <td class="label-col"><span data-ar>الفحص الذاتي لتطبيق الديسكتوب</span><span data-en>Desktop Self-Check</span></td>
+                <td class="val-col"><span class="metric">11/11</span> passed</td>
+              </tr>
+              <tr>
+                <td class="label-col"><span data-ar>الترخيص القانوني للكود</span><span data-en>Software License</span></td>
+                <td class="val-col">PolyForm Noncommercial 1.0.0</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="provider-strip">
+            <div class="provider-head">
+              <h3><span data-ar>وصّل الذكاء اللي بتدفع له أصلاً</span><span data-en>Bring the AI you already pay for</span></h3>
+              <span class="keychain-note"><span data-ar>المفاتيح في keychain جهازك</span><span data-en>Keys stay in your OS keychain</span></span>
+            </div>
+            <div class="provider-chips">
+              <span class="provider-chip">OpenAI</span>
+              <span class="provider-chip">Anthropic</span>
+              <span class="provider-chip">Gemini</span>
+              <span class="provider-chip">DeepSeek</span>
+              <span class="provider-chip">OpenRouter</span>
+              <span class="provider-chip">Azure</span>
+              <span class="provider-chip">Ollama</span>
+              <span class="provider-chip">LM Studio</span>
+              <span class="provider-chip">Claude Code</span>
+              <span class="provider-chip">Codex CLI</span>
+              <span class="provider-chip">Gemini CLI</span>
+              <span class="provider-chip">Cursor CLI</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="road" class="section-light">
+      <div class="wrap">
+        <div class="reveal">
+          <span class="tag"><span data-ar>فين وصلنا</span><span data-en>Where we are</span></span>
+          <h2><span data-ar>بنبني على العلن.</span><span data-en>Built in the open.</span></h2>
+          <p class="sub"><span data-ar>مبني على Goose. الكود كله على GitHub تحت رخصة PolyForm Noncommercial 1.0.0.</span><span data-en>Built on Goose. All code on GitHub under PolyForm Noncommercial 1.0.0.</span></p>
+        </div>
+        <div class="road reveal">
+          <div class="ms done">
+            <b>M0–M5 ✓</b>
+            <span data-ar>النواة، والمحرّك، ومزوّدو النماذج، والـCLI، وتطبيق الديسكتوب (ويندوز)</span><span data-en>Core, engine, providers, CLI, desktop (Windows)</span>
+          </div>
+          <div class="ms">
+            <b>M6 ◐</b>
+            <span data-ar>اقتران الموبايل تم، والترحيل المشفّر قيد التطوير</span><span data-en>Phone pairing done, encrypted relay not implemented</span>
+          </div>
+          <div class="ms">
+            <b>M7 ◐</b>
+            <span data-ar>بيئات التطوير اكتملت، وواجهة عميل GitHub قيد التطوير</span><span data-en>Coding backends done, GitHub client has no screen yet</span>
+          </div>
+          <div class="ms done">
+            <b>M8 ✓</b>
+            <span data-ar>عربي وإنجليزي RTL كامل</span><span data-en>Arabic/English RTL</span>
+          </div>
+          <div class="ms">
+            <b>M9 ◐</b>
+            <span data-ar>المثبّت المحلي مبني، ولا يوجد إصدار منشور بعد</span><span data-en>Local installer built, no published release</span>
+          </div>
+        </div>
+        <div class="legend reveal">
+          <span data-ar>✓ تم الإنجاز · ◐ جزئي</span><span data-en>✓ delivered · ◐ partial</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="faq" class="section-dark">
+      <div class="wrap">
+        <div class="center reveal">
+          <span class="tag">FAQ</span>
+          <h2><span data-ar>أسئلة تستاهل إجابة.</span><span data-en>Questions worth answering.</span></h2>
+        </div>
+        <div class="faq reveal">
+          <details>
+            <summary><span data-ar>لازم أكون مبرمج؟</span><span data-en>Do I need to code?</span></summary>
+            <p><span data-ar>لأ. بتكتب اللي محتاجه بلغتك. لو حاجة محتاجة قرار تقني، ورشة بتشرحهولك ببساطة وتسيبلك الاختيار.</span><span data-en>No. You write what you need in your own words. When a technical decision comes up, Warsha explains it simply and lets you choose.</span></p>
+          </details>
+          <details>
+            <summary><span data-ar>هل ورشة بتنشر من غير ما تسألني؟</span><span data-en>Does Warsha publish without asking?</span></summary>
+            <p><span data-ar>لأ. النشر والدفع وأي خطوة مش بترجع، بتستنى موافقتك الصريحة.</span><span data-en>No. Publishing, payments and any irreversible step wait for your explicit approval.</span></p>
+          </details>
+          <details>
+            <summary><span data-ar>الكود بتاعي؟</span><span data-en>Is the code mine?</span></summary>
+            <p><span data-ar>أيوه. التطبيق بيتبني في ريبو عندك، وتقدر تفتحه وتعدّل فيه بنفسك.</span><span data-en>Yes. The app is built in your own repo, and you can open and edit it yourself.</span></p>
+          </details>
+          <details>
+            <summary><span data-ar>ينفع أشغّلها على سيرفري؟</span><span data-en>Can I run it on my own server?</span></summary>
+            <p><span data-ar>أيوه. <code>warshad</code> بيشتغل على اللابتوب أو على سيرفرك، وبتتحكم فيه من الموبايل.</span><span data-en>Yes. <code>warshad</code> runs on your laptop or your server, controlled from your phone.</span></p>
+          </details>
+          <details>
+            <summary><span data-ar>ورشة جاهزة دلوقتي؟</span><span data-en>Is Warsha ready now?</span></summary>
+            <p><span data-ar>إحنا في v0.2.0 قبل الإطلاق. مفيش ملف تنزيل منشور لسه — البناء من المصدر متاح، وتقدر تتبع الخطوات في <a href="https://github.com/athar-studios/warsha/blob/main/docs/DEVELOPERS.md">دليل المطوّرين على GitHub</a>.</span><span data-en>We're at v0.2.0 pre-launch. No published download yet — build from source is available, follow the steps in the <a href="https://github.com/athar-studios/warsha/blob/main/docs/DEVELOPERS.md">developers guide on GitHub</a>.</span></p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <section id="final" class="final section-dark">
+      <div class="wrap reveal">
+        <h2><span data-ar>اطلبه. ابنيه. <em>انشره.</em><span class="cur"></span></span><span data-en>Ask it. Build it. <em>Ship it.</em><span class="cur"></span></span></h2>
+        <p class="lead"><span data-ar>تطبيقك الجاي يبدأ برسالة واحدة.</span><span data-en>Your next app starts with one message.</span></p>
+        <div class="cta">
+          <a class="btn" href="https://github.com/athar-studios/warsha"><span data-ar>ابدأ من GitHub</span><span data-en>Start on GitHub</span> <span data-ar>&larr;</span><span data-en>&rarr;</span></a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <span>© 2026 Athar Studios · PolyForm Noncommercial 1.0.0</span>
+      <span><a href="https://github.com/athar-studios/warsha">GitHub</a> · <span data-ar>مبني على Goose</span><span data-en>Built on Goose</span></span>
+    </div>
+  </footer>
+
+  <script src="site.js"></script>
+</body>
+</html>
