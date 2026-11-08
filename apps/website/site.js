@@ -54,7 +54,59 @@
     } catch (e) {
       // ignore storage errors
     }
+    if (themeToggle) {
+      var current = H.getAttribute("data-theme") === "light" ? "light" : "dark";
+      themeToggle.setAttribute(
+        "aria-label",
+        current === "light"
+          ? (l === "ar" ? "التبديل إلى الوضع الداكن" : "Switch to dark theme")
+          : (l === "ar" ? "التبديل إلى الوضع الفاتح" : "Switch to light theme")
+      );
+    }
     type();
+  }
+
+  // Theme management (Dark / Light)
+  var themeToggle = document.getElementById("themeToggle");
+  var savedTheme = null;
+  try {
+    savedTheme = localStorage.getItem("warsha_theme");
+  } catch (e) {
+    // ignore storage errors
+  }
+
+  if (!savedTheme) {
+    var prefersLight =
+      window.matchMedia &&
+      window.matchMedia("(prefers-color-scheme: light)").matches;
+    savedTheme = prefersLight ? "light" : "dark";
+  }
+
+  function applyTheme(theme) {
+    H.setAttribute("data-theme", theme);
+    try {
+      localStorage.setItem("warsha_theme", theme);
+    } catch (e) {
+      // ignore storage errors
+    }
+    if (themeToggle) {
+      themeToggle.setAttribute(
+        "aria-label",
+        theme === "light"
+          ? (H.lang === "ar" ? "التبديل إلى الوضع الداكن" : "Switch to dark theme")
+          : (H.lang === "ar" ? "التبديل إلى الوضع الفاتح" : "Switch to light theme")
+      );
+    }
+  }
+
+  applyTheme(savedTheme);
+
+  if (themeToggle) {
+    themeToggle.addEventListener("click", function () {
+      var current = H.getAttribute("data-theme") === "light" ? "light" : "dark";
+      var next = current === "light" ? "dark" : "light";
+      applyTheme(next);
+    });
   }
 
   var savedLang = null;
@@ -243,5 +295,157 @@
     steps.forEach(function (s) {
       stepObserver.observe(s);
     });
+  }
+
+  // Inside Warsha: AI Factory Visualizer
+  var factoryVisualizer = document.getElementById("factoryVisualizer");
+  var stepNodes = document.querySelectorAll(".station-node");
+  var stationPanels = document.querySelectorAll(".station-panel");
+  var conduitFill = document.getElementById("conduitFill");
+  var factoryPlayPause = document.getElementById("factoryPlayPause");
+  var factorySimulate = document.getElementById("factorySimulate");
+  var factoryTrack = document.getElementById("factoryTrack");
+
+  var currentStation = 0;
+  var factoryTimer = null;
+  var simInterval = null;
+  var isPaused = false;
+  var isSimulating = false;
+  var totalStations = stepNodes.length;
+
+  function cancelSimulation() {
+    if (simInterval) {
+      clearInterval(simInterval);
+      simInterval = null;
+    }
+    isSimulating = false;
+    if (factoryTrack) factoryTrack.classList.remove("simulating");
+  }
+
+  function setStation(idx) {
+    currentStation = idx;
+    stepNodes.forEach(function (node, i) {
+      var active = i === idx;
+      node.classList.toggle("active", active);
+      node.setAttribute("aria-selected", active ? "true" : "false");
+    });
+
+    stationPanels.forEach(function (panel, i) {
+      var active = i === idx;
+      panel.classList.toggle("active", active);
+    });
+
+    if (conduitFill && totalStations > 1) {
+      var pct = (idx / (totalStations - 1)) * 100;
+      conduitFill.style.width = pct + "%";
+    }
+  }
+
+  function nextStation() {
+    var next = (currentStation + 1) % totalStations;
+    setStation(next);
+  }
+
+  function startFactoryCycle() {
+    stopFactoryCycle();
+    if (R || isPaused || isSimulating) return;
+    factoryTimer = setInterval(nextStation, 3500);
+  }
+
+  function stopFactoryCycle() {
+    if (factoryTimer) {
+      clearInterval(factoryTimer);
+      factoryTimer = null;
+    }
+  }
+
+  if (stepNodes.length > 0) {
+    setStation(0);
+
+    stepNodes.forEach(function (node) {
+      node.addEventListener("click", function () {
+        var step = parseInt(node.getAttribute("data-step"), 10);
+        if (!isNaN(step)) {
+          cancelSimulation();
+          setStation(step);
+          if (!isPaused) {
+            startFactoryCycle();
+          }
+        }
+      });
+    });
+
+    if (factoryTrack) {
+      factoryTrack.addEventListener("keydown", function (e) {
+        if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+          var stepDelta = H.dir === "rtl" ? (e.key === "ArrowLeft" ? 1 : -1) : (e.key === "ArrowRight" ? 1 : -1);
+          var next = (currentStation + stepDelta + totalStations) % totalStations;
+          cancelSimulation();
+          setStation(next);
+          if (stepNodes[next]) stepNodes[next].focus();
+          if (!isPaused) startFactoryCycle();
+        }
+      });
+    }
+
+    if (factoryPlayPause) {
+      factoryPlayPause.addEventListener("click", function () {
+        cancelSimulation();
+        isPaused = !isPaused;
+        factoryPlayPause.classList.toggle("paused", isPaused);
+        if (isPaused) {
+          stopFactoryCycle();
+        } else {
+          startFactoryCycle();
+        }
+      });
+    }
+
+    if (factorySimulate) {
+      factorySimulate.addEventListener("click", function () {
+        cancelSimulation();
+        stopFactoryCycle();
+        isSimulating = true;
+        if (factoryTrack) factoryTrack.classList.add("simulating");
+
+        if (R) {
+          setStation(totalStations - 1);
+          cancelSimulation();
+          isPaused = true;
+          if (factoryPlayPause) factoryPlayPause.classList.add("paused");
+          return;
+        }
+
+        var step = 0;
+        setStation(0);
+
+        simInterval = setInterval(function () {
+          step++;
+          if (step < totalStations) {
+            setStation(step);
+          } else {
+            cancelSimulation();
+            isPaused = true;
+            if (factoryPlayPause) factoryPlayPause.classList.add("paused");
+          }
+        }, 650);
+      });
+    }
+
+    if (factoryVisualizer && "IntersectionObserver" in window) {
+      var factoryObserver = new IntersectionObserver(
+        function (entries) {
+          if (entries[0].isIntersecting) {
+            startFactoryCycle();
+          } else {
+            stopFactoryCycle();
+          }
+        },
+        { threshold: 0.15 }
+      );
+      factoryObserver.observe(factoryVisualizer);
+    } else {
+      startFactoryCycle();
+    }
   }
 })();

@@ -14,7 +14,10 @@
 <body>
   <nav>
     <div class="wrap">
-      <a href="#" class="brand"><img src="assets/warsha-wordmark-dark.svg" alt="ورشة · Warsha"></a>
+      <a href="#" class="brand">
+        <img src="assets/warsha-wordmark-dark.svg" alt="ورشة · Warsha" class="brand-dark">
+        <img src="assets/warsha-wordmark-light.svg" alt="ورشة · Warsha" class="brand-light">
+      </a>
       <div class="links" id="navLinks">
         <a href="#inside"><span data-ar>جوه ورشة</span><span data-en>Inside</span></a>
         <a href="#start"><span data-ar>نقطة البداية</span><span data-en>Where you start</span></a>
@@ -26,6 +29,10 @@
         <a href="https://github.com/athar-studios/warsha">GitHub</a>
       </div>
       <div class="nav-actions">
+        <button type="button" class="theme-btn" id="themeToggle" aria-label="Toggle color theme">
+          <span class="theme-icon-dark"><span data-ar>☀️ فاتح</span><span data-en>☀️ Light</span></span>
+          <span class="theme-icon-light"><span data-ar>🌙 داكن</span><span data-en>🌙 Dark</span></span>
+        </button>
         <button type="button" class="lang-btn" id="lang" aria-label="Switch language"><span data-ar>English</span><span data-en>العربية</span></button>
         <button type="button" class="nav-toggle" id="navToggle" aria-label="Toggle navigation menu" aria-expanded="false">
           <span></span>
@@ -107,6 +114,230 @@
                   <div class="slot on">11:30 ✓</div>
                   <div class="ph-b"><span data-ar>أكّد الحجز</span><span data-en>Confirm</span></div>
                   <div class="ph-n"><span data-ar>🔔 هنفكّرك قبلها بيوم</span><span data-en>🔔 Reminder a day before</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Inside Warsha: AI Factory Visualizer -->
+        <div class="factory-visualizer reveal" id="factoryVisualizer">
+          <div class="factory-header center">
+            <span class="tag"><span data-ar>المصنع من الداخل</span><span data-en>Inside the Factory</span></span>
+            <h3><span data-ar>شاهد ورشة تعمل: <em>من الفكرة إلى المتجر</em></span><span data-en>Watch Warsha in Action: <em>From Idea to Store</em></span></h3>
+            <p class="sub"><span data-ar>خط إنتاج برمجي حي يعمل فيه وكلاء متخصصون بالتوازي تحت إشرافك المباشر.</span><span data-en>A live software assembly line where specialized AI agents collaborate in parallel under your direct supervision.</span></p>
+          </div>
+
+          <div class="factory-controls">
+            <div class="factory-ctrl-group">
+              <button type="button" class="btn secondary factory-ctrl-btn" id="factoryPlayPause" aria-label="Pause or resume auto-cycle">
+                <span class="ctrl-pause"><span class="ctrl-icon">⏸</span> <span data-ar>إيقاف مؤقت</span><span data-en>Pause</span></span>
+                <span class="ctrl-play"><span class="ctrl-icon">▶</span> <span data-ar>تشغيل</span><span data-en>Play</span></span>
+              </button>
+              <button type="button" class="btn factory-ctrl-btn" id="factorySimulate">
+                <span class="ctrl-icon">⚡</span> <span data-ar>جرّب المحاكاة</span><span data-en>Simulate Run</span>
+              </button>
+            </div>
+            <div class="factory-status-pill">
+              <span class="status-pulse"></span>
+              <span class="status-label"><span data-ar>محاكاة خط الإنتاج الآلي</span><span data-en>Automated Pipeline Simulation</span></span>
+            </div>
+          </div>
+
+          <div class="factory-track" id="factoryTrack" role="tablist" aria-label="Factory Stations">
+            <div class="conduit-rail" aria-hidden="true">
+              <div class="conduit-fill" id="conduitFill"></div>
+              <div class="conduit-laser" id="conduitLaser"></div>
+            </div>
+
+            <button type="button" class="station-node active" data-step="0" role="tab" aria-selected="true" aria-controls="panel0" id="step0">
+              <span class="node-num">01</span>
+              <span class="node-icon">💡</span>
+              <span class="node-name"><span data-ar>الفكرة</span><span data-en>The Request</span></span>
+              <span class="node-state"><span data-ar>المدخلات</span><span data-en>Input</span></span>
+            </button>
+
+            <button type="button" class="station-node" data-step="1" role="tab" aria-selected="false" aria-controls="panel1" id="step1">
+              <span class="node-num">02</span>
+              <span class="node-icon">📋</span>
+              <span class="node-name"><span data-ar>التخطيط</span><span data-en>Planning</span></span>
+              <span class="node-state"><span data-ar>المواصفات</span><span data-en>Specs</span></span>
+            </button>
+
+            <button type="button" class="station-node" data-step="2" role="tab" aria-selected="false" aria-controls="panel2" id="step2">
+              <span class="node-num">03</span>
+              <span class="node-icon">⚙️</span>
+              <span class="node-name"><span data-ar>الورشة المتوازية</span><span data-en>Parallel Coding</span></span>
+              <span class="node-state"><span data-ar>البناء</span><span data-en>Build</span></span>
+            </button>
+
+            <button type="button" class="station-node" data-step="3" role="tab" aria-selected="false" aria-controls="panel3" id="step3">
+              <span class="node-num">04</span>
+              <span class="node-icon">🛡️</span>
+              <span class="node-name"><span data-ar>مختبر الفحص</span><span data-en>Verification QA</span></span>
+              <span class="node-state"><span data-ar>14 فحص</span><span data-en>14 Gates</span></span>
+            </button>
+
+            <button type="button" class="station-node" data-step="4" role="tab" aria-selected="false" aria-controls="panel4" id="step4">
+              <span class="node-num">05</span>
+              <span class="node-icon">🔑</span>
+              <span class="node-name"><span data-ar>بوابة المالك</span><span data-en>Owner Approval</span></span>
+              <span class="node-state"><span data-ar>المتجر</span><span data-en>Store</span></span>
+            </button>
+          </div>
+
+          <div class="factory-card" id="factoryCard">
+            <!-- Panel 0: Idea -->
+            <div class="station-panel active" id="panel0" role="tabpanel" aria-labelledby="step0" data-panel="0">
+              <div class="station-info">
+                <div class="station-meta">
+                  <span class="station-num-tag">01 / 05</span>
+                  <span class="station-agent-tag"><span data-ar>الوكيل المسند: المستخدم / المالك</span><span data-en>Assigned: Client / Owner</span></span>
+                </div>
+                <h4><span data-ar>💡 الفكرة: العميل يكتب طلبه بالعربي البسيط</span><span data-en>💡 The Request: Plain Language Briefing</span></h4>
+                <p><span data-ar>العميل يكتب طلبه بالعربي البسيط دون تعقيد برمجي: مواصفات التطبيق، الشاشات المطلوبة، وسير العمل كما يشرحه لزميل عمل.</span><span data-en>The client writes their request in simple language without tech jargon: app specs, required screens, and workflows just like briefing a colleague.</span></p>
+                <div class="station-highlights">
+                  <span class="chip"><span data-ar>بدون كود أولي</span><span data-en>Zero Code Needed</span></span>
+                  <span class="chip"><span data-ar>تحليل لغوي فوري</span><span data-en>Instant Intent Parsing</span></span>
+                  <span class="chip"><span data-ar>خصوصية محلية كاملة</span><span data-en>Full Local Privacy</span></span>
+                </div>
+              </div>
+              <div class="station-telemetry">
+                <div class="telemetry-bar">
+                  <span class="d"></span><span class="d"></span><span class="d"></span>
+                  <span class="telemetry-title">station://01-request-intake</span>
+                  <span class="telemetry-badge"><span data-ar>مستلم بنجاح</span><span data-en>INTAKE_OK</span></span>
+                </div>
+                <div class="telemetry-log">
+                  <div><span class="term-k">RAW_BRIEF:</span> <span class="term-v">"تطبيق عيادة أسنان: حجز مواعيد وتذكير واتساب"</span></div>
+                  <div><span class="term-k">INTENT_EXTRACTED:</span> <span class="term-v">CLINIC_APPOINTMENTS_SYSTEM</span></div>
+                  <div><span class="term-k">LOCAL_KEYCHAIN:</span> <span class="term-ok">ENCRYPTED_VAULT_ACTIVE</span></div>
+                  <div><span class="term-k">NEXT_STATION:</span> <span class="term-v">STATION_02_PLANNER</span></div>
+                  <div><span class="term-k">PIPELINE_STATUS:</span> <span class="term-ok">STREAMING_FORWARD &gt;&gt;</span></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Panel 1: Planning -->
+            <div class="station-panel" id="panel1" role="tabpanel" aria-labelledby="step1" data-panel="1">
+              <div class="station-info">
+                <div class="station-meta">
+                  <span class="station-num-tag">02 / 05</span>
+                  <span class="station-agent-tag"><span data-ar>الوكيل المسند: وكيل التخطيط والمعمارية</span><span data-en>Assigned: Planner Agent</span></span>
+                </div>
+                <h4><span data-ar>📋 التخطيط: تفكيك الطلب لمواصفات وبوابات تحقق</span><span data-en>📋 Planning: Architecture &amp; Gate Setup</span></h4>
+                <p><span data-ar>تفكيك الطلب لمواصفات تقنية وبوابات تحقق صارمة: فصل المهام إلى وحدات قابلة للتنفيذ بالتوازي وتجهيز بيئات عمل Git معزولة.</span><span data-en>Decomposing the request into technical specifications and verification gates: splitting tasks into parallel work units and spinning isolated Git worktrees.</span></p>
+                <div class="station-highlights">
+                  <span class="chip"><span data-ar>خطة معمارية دقيقة</span><span data-en>Precise Architecture</span></span>
+                  <span class="chip"><span data-ar>بيئات عمل معزولة</span><span data-en>Isolated Worktrees</span></span>
+                  <span class="chip"><span data-ar>بوابات جودة ملزمة</span><span data-en>Mandatory Gates</span></span>
+                </div>
+              </div>
+              <div class="station-telemetry">
+                <div class="telemetry-bar">
+                  <span class="d"></span><span class="d"></span><span class="d"></span>
+                  <span class="telemetry-title">station://02-architecture-planner</span>
+                  <span class="telemetry-badge"><span data-ar>تم التخطيط</span><span data-en>SPECS_LOCKED</span></span>
+                </div>
+                <div class="telemetry-log">
+                  <div><span class="term-k">SPEC_OUTPUT:</span> <span class="term-v">ARCH_AUDIT.md + PLAN.md</span></div>
+                  <div><span class="term-k">CONCURRENT_TRACKS:</span> <span class="term-v">TRACK_BACKEND, TRACK_FRONTEND</span></div>
+                  <div><span class="term-k">ISOLATION:</span> <span class="term-ok">git worktree /foundry-isolated</span></div>
+                  <div><span class="term-k">MANDATORY_GATES:</span> <span class="term-v">G1_ARCH .. G6_ASSETS (ENFORCED)</span></div>
+                  <div><span class="term-k">PIPELINE_STATUS:</span> <span class="term-ok">DISPATCHING_WORKERS &gt;&gt;</span></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Panel 2: Parallel Coding -->
+            <div class="station-panel" id="panel2" role="tabpanel" aria-labelledby="step2" data-panel="2">
+              <div class="station-info">
+                <div class="station-meta">
+                  <span class="station-num-tag">03 / 05</span>
+                  <span class="station-agent-tag"><span data-ar>الوكيل المسند: مطورو الواجهة والخلفية بالتوازي</span><span data-en>Assigned: Parallel Coders</span></span>
+                </div>
+                <h4><span data-ar>⚙️ الورشة المتوازية: مطورو الواجهة والخلفية يبنون الكود بالتوازي</span><span data-en>⚙️ Parallel Foundry: Concurrent Full-Stack Build</span></h4>
+                <p><span data-ar>مطور الواجهة ومطور الخلفية يبنون الكود بالتوازي في بيئات عمل معزولة دون تضارب، مع ربط واجهات API والمواعيد بدقة.</span><span data-en>Frontend and backend developers build concurrently in isolated worktrees without collisions, syncing APIs and appointment flows seamlessly.</span></p>
+                <div class="station-highlights">
+                  <span class="chip"><span data-ar>تطوير متوازي 100%</span><span data-en>100% Concurrent Dev</span></span>
+                  <span class="chip"><span data-ar>محرك Rust عالي الأداء</span><span data-en>High-Performance Rust</span></span>
+                  <span class="chip"><span data-ar>واجهات متوافقة RTL</span><span data-en>RTL-First Responsive UI</span></span>
+                </div>
+              </div>
+              <div class="station-telemetry">
+                <div class="telemetry-bar">
+                  <span class="d"></span><span class="d"></span><span class="d"></span>
+                  <span class="telemetry-title">station://03-parallel-foundry</span>
+                  <span class="telemetry-badge"><span data-ar>بناء نشط</span><span data-en>ACTIVE_BUILD</span></span>
+                </div>
+                <div class="telemetry-log">
+                  <div><span class="term-k">BACKEND_WORKER:</span> <span class="term-v">crates/api-appointments [COMPILED]</span></div>
+                  <div><span class="term-k">FRONTEND_WORKER:</span> <span class="term-v">apps/mobile/booking-flow [RENDERED]</span></div>
+                  <div><span class="term-k">DATABASE_MIGRATION:</span> <span class="term-ok">sqlite /appointments.db [MIGRATED]</span></div>
+                  <div><span class="term-k">WORKTREE_DIFF:</span> <span class="term-v">18 files changed, 0 collisions</span></div>
+                  <div><span class="term-k">PIPELINE_STATUS:</span> <span class="term-ok">FORWARDING_TO_QA &gt;&gt;</span></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Panel 3: Verification QA -->
+            <div class="station-panel" id="panel3" role="tabpanel" aria-labelledby="step3" data-panel="3">
+              <div class="station-info">
+                <div class="station-meta">
+                  <span class="station-num-tag">04 / 05</span>
+                  <span class="station-agent-tag"><span data-ar>الوكيل المسند: وكيل الفحص والتدقيق الآلي</span><span data-en>Assigned: QA &amp; Verification Lab</span></span>
+                </div>
+                <h4><span data-ar>🛡️ مختبر الفحص: 14 مرحلة فحص آلي واختبارات صارمة</span><span data-en>🛡️ QA Testing Lab: 14 Rigorous Automated Gates</span></h4>
+                <p><span data-ar>14 مرحلة فحص آلي واختبارات صارمة: أمان الأسرار، تغطية الاختبارات بنسبة 100%، إتاحة WCAG، والتأكد من خلو الكود من أي تحذيرات.</span><span data-en>14 automated testing stages and strict verification: secret leak prevention, 100% test coverage, WCAG accessibility, and zero clippy warnings.</span></p>
+                <div class="station-highlights">
+                  <span class="chip"><span data-ar>14 بوابة تحقق آلية</span><span data-en>14 Automated Gates</span></span>
+                  <span class="chip"><span data-ar>فحص الأسرار Gitleaks</span><span data-en>Gitleaks Security</span></span>
+                  <span class="chip"><span data-ar>مطابقة WCAG AA</span><span data-en>WCAG AA Contrast</span></span>
+                </div>
+              </div>
+              <div class="station-telemetry">
+                <div class="telemetry-bar">
+                  <span class="d"></span><span class="d"></span><span class="d"></span>
+                  <span class="telemetry-title">station://04-qa-verification</span>
+                  <span class="telemetry-badge"><span data-ar>14 فحص ناجح</span><span data-en>14/14 PASSED</span></span>
+                </div>
+                <div class="telemetry-log">
+                  <div><span class="term-k">GATE_SECURITY:</span> <span class="term-ok">gitleaks detect [0 LEAKS]</span></div>
+                  <div><span class="term-k">GATE_UNIT_TESTS:</span> <span class="term-ok">cargo test (48 passed, 0 failed)</span></div>
+                  <div><span class="term-k">GATE_LINTER:</span> <span class="term-ok">cargo clippy -D warnings [CLEAN]</span></div>
+                  <div><span class="term-k">GATE_CONTRAST:</span> <span class="term-ok">WCAG AA &gt; 4.5:1 [ALL PASS]</span></div>
+                  <div><span class="term-k">PIPELINE_STATUS:</span> <span class="term-ok">READY_FOR_OWNER_GATE &gt;&gt;</span></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Panel 4: Owner Approval -->
+            <div class="station-panel" id="panel4" role="tabpanel" aria-labelledby="step4" data-panel="4">
+              <div class="station-info">
+                <div class="station-meta">
+                  <span class="station-num-tag">05 / 05</span>
+                  <span class="station-agent-tag"><span data-ar>الوكيل المسند: قرار المالك البشري الصريح</span><span data-en>Assigned: Human Owner Sign-Off</span></span>
+                </div>
+                <h4><span data-ar>🔑 بوابة المالك: يتوقف الخط بانتظار موافقتك الصريحة</span><span data-en>🔑 Owner Gate: Pipeline Halts for Your Explicit Approval</span></h4>
+                <p><span data-ar>يتوقف الخط بانتظار موافقتك الصريحة: أنت صاحب القرار النهائي. لا يُنشر أي سطر كود أو تطبيق للمتجر دون مفتاح موافقتك المباشرة.</span><span data-en>The line pauses waiting for your explicit approval: you hold ultimate authority. No code or release reaches app stores without your direct sign-off.</span></p>
+                <div class="station-highlights">
+                  <span class="chip"><span data-ar>موافقة المالك الصريحة</span><span data-en>Explicit Owner Consent</span></span>
+                  <span class="chip"><span data-ar>معاينة حيّة على الموبايل</span><span data-en>Live Mobile Preview</span></span>
+                  <span class="chip"><span data-ar>جاهز للنشر في المتاجر</span><span data-en>Store Deployment Ready</span></span>
+                </div>
+              </div>
+              <div class="station-telemetry">
+                <div class="telemetry-bar">
+                  <span class="d"></span><span class="d"></span><span class="d"></span>
+                  <span class="telemetry-title">station://05-owner-signoff</span>
+                  <span class="telemetry-badge"><span data-ar>بانتظار موافقتك</span><span data-en>AWAITING_APPROVAL</span></span>
+                </div>
+                <div class="telemetry-log">
+                  <div><span class="term-k">PACKAGE_NAME:</span> <span class="term-v">com.drsaraclinic.app</span></div>
+                  <div><span class="term-k">TARGET_STORES:</span> <span class="term-v">APPLE_APP_STORE, GOOGLE_PLAY</span></div>
+                  <div><span class="term-k">HUMAN_GATE_STATUS:</span> <span class="term-warn">HALTED_AWAITING_APPROVAL</span></div>
+                  <div><span class="term-k">DEPLOY_LOCK:</span> <span class="term-ok">ARMED_WITH_SECURE_KEYS</span></div>
+                  <div><span class="term-k">PIPELINE_STATUS:</span> <span class="term-ok">DEPLOY_ON_TAP [STANDBY]</span></div>
                 </div>
               </div>
             </div>

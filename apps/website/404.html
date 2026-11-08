@@ -14,12 +14,19 @@
 <body>
   <nav>
     <div class="wrap">
-      <a href="index.html" class="brand"><img src="assets/warsha-wordmark-dark.svg" alt="ورشة · Warsha"></a>
+      <a href="index.html" class="brand">
+        <img src="assets/warsha-wordmark-dark.svg" alt="ورشة · Warsha" class="brand-dark">
+        <img src="assets/warsha-wordmark-light.svg" alt="ورشة · Warsha" class="brand-light">
+      </a>
       <div class="links" id="navLinks">
         <a href="index.html"><span data-ar>الرئيسية</span><span data-en>Home</span></a>
         <a href="https://github.com/athar-studios/warsha">GitHub</a>
       </div>
       <div class="nav-actions">
+        <button type="button" class="theme-btn" id="themeToggle" aria-label="Toggle color theme">
+          <span class="theme-icon-dark"><span data-ar>☀️ فاتح</span><span data-en>☀️ Light</span></span>
+          <span class="theme-icon-light"><span data-ar>🌙 داكن</span><span data-en>🌙 Dark</span></span>
+        </button>
         <button type="button" class="lang-btn" id="lang" aria-label="Switch language"><span data-ar>English</span><span data-en>العربية</span></button>
         <button type="button" class="nav-toggle" id="navToggle" aria-label="Toggle navigation menu" aria-expanded="false">
           <span></span>
