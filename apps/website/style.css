@@ -1292,9 +1292,12 @@ footer a:hover {
     border-block-end: 1px solid #1a1a1a;
   }
 
+  .nav-actions {
+    margin-inline-start: auto;
+  }
+
   .nav-toggle {
     display: flex;
-    margin-inline-start: auto;
   }
 
   header {

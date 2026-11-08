@@ -188,13 +188,13 @@
           <div class="stp" id="s4">
             <span class="n">04</span>
             <h3><span data-ar>مفيش حاجة بتعدّي من غير اختبار.</span><span data-en>Nothing ships untested.</span></h3>
-            <p><span data-ar>١٤ مرحلة في الخط، وأربع بوابات بتستنى موافقتك: تنسيق، تحليل، اختبارات، وبناء. لو واحدة وقعت، الشغل بيرجع.</span><span data-en>14 pipeline stages, and four gates that wait for your approval: format, lint, tests, build. If one fails, the work goes back.</span></p>
-            <div class="term"><span class="w">gates</span> fmt ✓ clippy ✓ test ✓ typecheck ✓ build ✓ …<br><b>14/14</b> passed</div>
+            <p><span data-ar>١٤ مرحلة في الخط، وأربع بوابات بتستنى موافقتك: الفكرة، والمواصفات، والدمج، والنشر. وكل مرحلة فيها فحوص آلية: تنسيق، وتحليل، واختبارات، وبناء. لو واحدة وقعت، الشغل بيرجع.</span><span data-en>14 pipeline stages, and four gates that wait for your approval: idea, spec, merge and publish. Every stage runs automated checks: format, lint, tests, build. If one fails, the work goes back.</span></p>
+            <div class="term"><span class="w">checks</span> fmt ✓ clippy ✓ test ✓ typecheck ✓ build ✓<br><b>4 gates</b> waiting for owner approval</div>
           </div>
           <div class="stp" id="s5">
             <span class="n">05</span>
             <h3><span data-ar>سارة ضغطت «وافق».</span><span data-en>Sara pressed "Approve".</span></h3>
-            <p><span data-ar>ورشة بتجهّز مسودة النشر. النشر على المتاجر لسه يدوي؛ ورشة بتجهّز المسودة وبتستنى موافقتك. ومن موبايلك تقدر تتابع وتطلب تعديل في أي وقت.</span><span data-en>Warsha prepares the publish draft. Store publishing is still manual; Warsha prepares the draft and waits for your approval. From her phone she can follow along and ask for changes anytime.</span></p>
+            <p><span data-ar>ورشة بتجهّز مسودة النشر وبتستنى موافقتك؛ النشر على المتاجر لسه يدوي. ومن موبايلك تقدر تتابع وتطلب تعديل في أي وقت.</span><span data-en>Warsha prepares the publish draft and waits for your approval; store publishing is still manual. From her phone Sara can follow along and ask for changes anytime.</span></p>
             <div class="term">$ warsha approve run-7 gate-d<br><b>✓</b> <span class="w">approved · publish draft ready</span></div>
           </div>
         </div>
@@ -335,11 +335,11 @@
           </div>
           <div class="ms">
             <b>M6 ◐</b>
-            <span data-ar>اقتران الموبايل تم، والترحيل المشفّر قيد التطوير</span><span data-en>Phone pairing done, encrypted relay not implemented</span>
+            <span data-ar>اقتران الموبايل تم، والترحيل المشفّر مش منفّذ بعد</span><span data-en>Phone pairing done, encrypted relay not implemented</span>
           </div>
           <div class="ms">
             <b>M7 ◐</b>
-            <span data-ar>بيئات التطوير اكتملت، وواجهة عميل GitHub قيد التطوير</span><span data-en>Coding backends done, GitHub client has no screen yet</span>
+            <span data-ar>بيئات التطوير اكتملت، وعميل GitHub لسه من غير شاشة أو أمر بيشغّله</span><span data-en>Coding backends done, GitHub client has no screen yet</span>
           </div>
           <div class="ms done">
             <b>M8 ✓</b>
