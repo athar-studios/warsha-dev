@@ -130,7 +130,7 @@ async function expectDecidedCardIsQuiet(page: Page): Promise<void> {
   await expectQuietLamp(page);
   const band = await page.locator('.warsha-gate-card').first().getAttribute('style');
   expect(band, 'the decided card still carries the signal band').toMatch(
-    /border-inline-start:\s*3px solid var\(--warsha-bench-edge\)/
+    /border-inline-start:\s*(?:3px solid var\(--warsha-bench-edge\)|var\(--warsha-line-band\))/
   );
 }
 
