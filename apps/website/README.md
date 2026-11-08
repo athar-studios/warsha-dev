@@ -10,9 +10,9 @@ Static, zero-dependency, bilingual (Arabic-first RTL + English toggle) marketing
 | `--bg-light` | `#ffffff` | Pure white background for light sections |
 | `--plate-dark` | `#1a1a1a` | Dark surface / card background |
 | `--rule` | `#5e5e5e` | Borders, ledger dividers, section borders |
-| `--signal` | `#76b900` | Signature green accent on dark surfaces (borders, underlines, signals) |
-| `--signal-light` | `#3f8500` | Darker green for text & essential borders on white (WCAG 4.5:1+) |
-| `--signal-bright` | `#bff230` | Bright lime hover highlight on dark |
+| `--signal` | `#FFD60A` | Signature yellow accent on dark surfaces (borders, underlines, signals) |
+| `--signal-light` | `#8a6a00` | Amber-yellow for text & essential borders on white (WCAG AA 5.12:1) |
+| `--signal-bright` | `#FFE866` | Bright yellow hover highlight on dark |
 | `--text-dark` | `#ffffff` | Primary text on dark backgrounds |
 | `--text-light` | `#000000` | Primary text on light backgrounds |
 | `--muted-on-dark` | `#a7a7a7` | Muted secondary text on dark surfaces |

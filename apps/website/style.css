@@ -3,9 +3,9 @@
   --bg-light: #ffffff;
   --plate-dark: #1a1a1a;
   --rule: #5e5e5e;
-  --signal: #76b900;
-  --signal-light: #3f8500;
-  --signal-bright: #bff230;
+  --signal: #FFD60A;
+  --signal-light: #8a6a00;
+  --signal-bright: #FFE866;
   --text-dark: #ffffff;
   --text-light: #000000;
   --muted-on-dark: #a7a7a7;
@@ -27,8 +27,8 @@ html[data-theme="light"] {
   --bg-light: #ffffff;
   --plate-dark: #ffffff;
   --rule: #dcdfe3;
-  --signal: #3f8500;
-  --signal-bright: #326b00;
+  --signal: #8a6a00;
+  --signal-bright: #6e5400;
   --text-dark: #121316;
   --text-light: #121316;
   --muted-on-dark: #5c626b;
@@ -224,14 +224,17 @@ h3 {
 }
 
 .btn:hover {
-  background: var(--btn-hover);
-  color: #ffffff;
-  border-color: var(--btn-hover);
-  box-shadow: 0 0 10px rgba(118, 185, 0, 0.35);
+  background: var(--signal);
+  color: #000000;
+  border-color: var(--signal);
+  box-shadow: 0 0 10px rgba(255, 214, 10, 0.35);
 }
 
 html[data-theme="light"] .btn:hover {
-  box-shadow: 0 0 10px rgba(63, 133, 0, 0.35);
+  background: var(--signal-light);
+  color: #ffffff;
+  border-color: var(--signal-light);
+  box-shadow: 0 0 10px rgba(138, 106, 0, 0.35);
 }
 
 .btn:active {
@@ -319,14 +322,17 @@ nav .links a:hover {
 }
 
 .lang-btn:hover {
-  background: var(--btn-hover);
-  color: #ffffff;
-  border-color: var(--btn-hover);
-  box-shadow: 0 0 10px rgba(118, 185, 0, 0.35);
+  background: var(--signal);
+  color: #000000;
+  border-color: var(--signal);
+  box-shadow: 0 0 10px rgba(255, 214, 10, 0.35);
 }
 
 html[data-theme="light"] .lang-btn:hover {
-  box-shadow: 0 0 10px rgba(63, 133, 0, 0.35);
+  background: var(--signal-light);
+  color: #ffffff;
+  border-color: var(--signal-light);
+  box-shadow: 0 0 10px rgba(138, 106, 0, 0.35);
 }
 
 .lang-btn:focus-visible {
@@ -349,11 +355,11 @@ html[data-theme="light"] .lang-btn:hover {
 .theme-btn:hover {
   border-color: var(--signal);
   color: var(--signal);
-  box-shadow: 0 0 10px rgba(118, 185, 0, 0.35);
+  box-shadow: 0 0 10px rgba(255, 214, 10, 0.35);
 }
 
 html[data-theme="light"] .theme-btn:hover {
-  box-shadow: 0 0 10px rgba(63, 133, 0, 0.35);
+  box-shadow: 0 0 10px rgba(138, 106, 0, 0.35);
 }
 
 .theme-btn:focus-visible {
@@ -426,13 +432,13 @@ header::before {
   inset-block-start: 0;
   inset-inline: 0;
   height: 100%;
-  background: radial-gradient(ellipse at 50% 0%, rgba(118, 185, 0, 0.16), transparent 70%);
+  background: radial-gradient(ellipse at 50% 0%, rgba(255, 214, 10, 0.16), transparent 70%);
   pointer-events: none;
   animation: heroBreathe 6s ease-in-out infinite;
 }
 
 html[data-theme="light"] header::before {
-  background: radial-gradient(ellipse at 50% 0%, rgba(63, 133, 0, 0.12), transparent 70%);
+  background: radial-gradient(ellipse at 50% 0%, rgba(138, 106, 0, 0.10), transparent 70%);
 }
 
 header .wrap {
@@ -517,9 +523,9 @@ h1 em, h2 em {
 }
 
 .section-light .btn:hover {
-  background: var(--btn-hover);
+  background: var(--signal-light);
   color: #ffffff;
-  border-color: var(--btn-hover);
+  border-color: var(--signal-light);
 }
 
 .section-light .box {
@@ -700,12 +706,12 @@ h1 em, h2 em {
 
 .chip:hover {
   border-color: var(--signal);
-  box-shadow: 0 0 8px rgba(118, 185, 0, 0.25);
+  box-shadow: 0 0 8px rgba(255, 214, 10, 0.25);
   transform: translateY(-1px);
 }
 
 html[data-theme="light"] .chip:hover {
-  box-shadow: 0 0 8px rgba(63, 133, 0, 0.25);
+  box-shadow: 0 0 8px rgba(138, 106, 0, 0.25);
 }
 
 .chip.q {
@@ -827,23 +833,23 @@ html[data-theme="light"] .chip:hover {
 
 .agent.busy {
   border-inline-start: 3px solid var(--signal);
-  background: #111a05;
+  background: #1a1600;
   animation: pulseEdge 2s ease-in-out infinite;
 }
 
 @keyframes pulseEdge {
   0%, 100% {
     border-inline-start-color: var(--signal);
-    box-shadow: 0 0 8px rgba(118, 185, 0, 0.25);
+    box-shadow: 0 0 8px rgba(255, 214, 10, 0.25);
   }
   50% {
     border-inline-start-color: var(--signal-bright);
-    box-shadow: 0 0 16px rgba(118, 185, 0, 0.55);
+    box-shadow: 0 0 16px rgba(255, 214, 10, 0.55);
   }
 }
 
 html[data-theme="light"] .agent.busy {
-  background: #f0f9e2;
+  background: #fdf8db;
 }
 
 .agent.busy .st {
@@ -874,7 +880,7 @@ html[data-theme="light"] .agent .av {
   border-radius: var(--radius);
   padding: 14px;
   margin-block-start: 12px;
-  background: #0f1606;
+  background: #161400;
 }
 
 .appr p {
@@ -1201,7 +1207,7 @@ html[data-theme="light"] .agent .av {
 }
 
 .bub .me {
-  background: #111a05;
+  background: #1a1600;
   border-color: var(--signal);
   align-self: flex-start;
 }
@@ -1402,7 +1408,7 @@ details p {
 .final {
   text-align: center;
   padding-block: 100px;
-  background: radial-gradient(ellipse at 50% 100%, rgba(118, 185, 0, 0.12), transparent 60%), var(--bg-dark);
+  background: radial-gradient(ellipse at 50% 100%, rgba(255, 214, 10, 0.12), transparent 60%), var(--bg-dark);
 }
 
 .final h2 {
@@ -1431,7 +1437,7 @@ footer a:hover {
 
 /* Light Theme Component Overrides */
 html[data-theme="light"] .appr {
-  background: #f3fae8;
+  background: #fdf8db;
   border-color: var(--signal);
 }
 
@@ -1445,7 +1451,7 @@ html[data-theme="light"] .prev {
 }
 
 html[data-theme="light"] .bub .me {
-  background: #f0f9e2;
+  background: #fdf8db;
   border-color: var(--signal);
 }
 
@@ -1456,7 +1462,7 @@ html[data-theme="light"] .term {
 }
 
 html[data-theme="light"] .term b {
-  color: #3f8500;
+  color: #8a6a00;
 }
 
 html[data-theme="light"] .term .w {
@@ -1477,7 +1483,7 @@ html[data-theme="light"] .specs-table tbody tr:nth-child(even) {
 }
 
 html[data-theme="light"] .final {
-  background: radial-gradient(ellipse at 50% 100%, rgba(63, 133, 0, 0.08), transparent 60%), var(--bg-dark);
+  background: radial-gradient(ellipse at 50% 100%, rgba(138, 106, 0, 0.08), transparent 60%), var(--bg-dark);
 }
 
 /* Inside Warsha: AI Factory Visualizer */
@@ -1642,14 +1648,14 @@ html[data-theme="light"] .final {
 
 .station-node:hover {
   border-color: var(--signal);
-  box-shadow: 0 0 12px rgba(118, 185, 0, 0.3);
+  box-shadow: 0 0 12px rgba(255, 214, 10, 0.3);
   transform: translateY(-2px);
 }
 
 .station-node.active {
   border-color: var(--signal);
   background: var(--bg-dark);
-  box-shadow: 0 0 16px rgba(118, 185, 0, 0.35);
+  box-shadow: 0 0 16px rgba(255, 214, 10, 0.35);
 }
 
 .node-num {
@@ -1834,7 +1840,7 @@ html[data-theme="light"] .final {
 }
 
 .term-ok {
-  color: #76b900;
+  color: var(--signal);
   font-weight: 700;
 }
 
@@ -1844,20 +1850,20 @@ html[data-theme="light"] .final {
 }
 
 html[data-theme="light"] .station-node:hover {
-  box-shadow: 0 0 12px rgba(63, 133, 0, 0.3);
+  box-shadow: 0 0 12px rgba(138, 106, 0, 0.3);
 }
 
 html[data-theme="light"] .station-node.active {
-  box-shadow: 0 0 14px rgba(63, 133, 0, 0.25);
+  box-shadow: 0 0 14px rgba(138, 106, 0, 0.25);
 }
 
 html[data-theme="light"] .conduit-fill {
-  box-shadow: 0 0 8px rgba(63, 133, 0, 0.5);
+  box-shadow: 0 0 8px rgba(138, 106, 0, 0.5);
 }
 
 html[data-theme="light"] .conduit-laser {
-  background: #76b900;
-  box-shadow: 0 0 12px rgba(63, 133, 0, 0.6);
+  background: var(--signal-light);
+  box-shadow: 0 0 12px rgba(138, 106, 0, 0.6);
 }
 
 html[data-theme="light"] .station-telemetry {
