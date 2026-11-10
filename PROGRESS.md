@@ -1,5 +1,90 @@
 # PROGRESS.md — Warsha Build Log
 
+## Website SEO + Google discovery — 2026-11-10
+
+- **Crawlable bilingual URLs**: the site now ships two real URLs, `/` (Arabic, RTL, also `x-default`) and
+  `/en/` (English, LTR), emitted by `bridge-io/website-redesign/build-seo.mjs` into `apps/website/dist`.
+  Each page contains **only its own language** — the paired `data-ar`/`data-en` spans are resolved at build
+  time, so Google no longer sees mixed-language text on one URL. The language control is a real link between
+  the two, and the runtime no longer overrides `lang` from storage.
+- **Prerendered content**: the team (12 cards), roadmap (10), FAQ (6), workbench table, file tree, diff,
+  terminal, cost chart and the five stage names are captured from the running page and written into the
+  HTML, so the whole site is readable with JavaScript disabled (verified).
+- **Structured data**: JSON-LD `@graph` with Organization, WebSite, WebPage, SoftwareApplication, ItemList
+  (the five stages) and FAQPage. No `aggregateRating` or `review` is invented. Claims limited to verified
+  facts: version 0.2.0, Windows, free, PolyForm licence, source repository.
+- **Meta and share assets**: per-language title/description/keywords, self-canonical, reciprocal
+  `hreflang` ar/en/x-default, full Open Graph + Twitter large card, and rendered 1200×630 `og-ar.png` /
+  `og-en.png` (228/231 KB after gradient posterisation), plus apple-touch and 16/32 px PNG icons.
+- **Crawl directives**: `sitemap.xml` with both URLs, `lastmod`, three `xhtml:link` alternates and image
+  annotations each; `robots.txt` allowing all and advertising the sitemap; `_headers` with CSP, HSTS,
+  nosniff, DENY framing, immutable font caching and revalidating HTML; `_redirects` canonicalising
+  `/index.html` → `/`.
+- **Verified**: `seo-gates.mjs` **151/151**; `verify-dist.mjs` **66/66** against the built output served the
+  way Pages serves it (both URLs, both themes, mobile, no-JS, reduced motion, full four-gate run, export,
+  dialogs, zero console errors, zero overflow).
+- **Google's own verdict**: the Rich Results Test crawled both live URLs successfully and reported
+  **1 valid Software Apps item** on each. The only note is the optional `aggregateRating`, deliberately
+  omitted because Warsha has no ratings.
+  - `/` → <https://search.google.com/test/rich-results/result?id=JDewYr0Y_X-yNXaWXcII9g>
+- **Discovery lever applied**: the public repository `athar-studios/warsha` had an empty website field; it
+  now points at `https://warsha-dev.pages.dev`, giving Google a link from a page it already crawls.
+- **Deployed**: `https://931fba29.warsha-dev.pages.dev`, live at `https://warsha-dev.pages.dev`. All headers,
+  robots, sitemap and both language URLs verified 200 on production.
+- **Owner step remaining**: Search Console property verification and sitemap submission require the owner's
+  Google account — no Google credentials exist on this host and the in-app browser has no Google session.
+  `apps/website/search-console.json` carries the exact procedure; pasting the HTML-tag token there and
+  rebuilding injects the verification meta tag into both pages automatically. The legacy
+  `google.com/ping?sitemap=` endpoint is retired (returns 404) and was not used.
+
+## Website rebuilt on Design System v3 «حِرفة» — 2026-11-09
+
+- **Scope**: `apps/website` rebuilt from scratch on the owner-approved v3 spec
+  (`docs/designs/DESIGN_SYSTEM_V3.md`, run `2026-11-09-ui-v3`). The NVIDIA-style v2-era site is gone:
+  warm paper `#F6F4EF` / warm night `#131210`, logo yellow `#FFD400` spent on one action per view,
+  orange `#A8430A`/`#FF9D5C` reserved for "waiting on the owner", radius 6/10/14/20, motion 120/200/320 ms.
+- **Sections**: sticky nav with scroll-spy and a gradient progress rail; hero with a working idea composer
+  (validation, counter, four preset chips, animated verified counters); the interactive factory; the
+  approval-gate demo; Simple/Advanced mode demo; the 12-role team; the measured-numbers table plus an
+  explicit "what does not work yet" panel; 10 roadmap milestones; 6-question FAQ; CTA; footer; v3 404.
+- **Factory**: five owner-facing stages over the real 14-stage / 4-gate pipeline. A permanently visible
+  control desk carries 13 live controls — play/pause, step, reset, speed, scenario, budget cap, signal glow,
+  parallel coders, auto-approve, machine log, track grid, density, randomize and JSON export. Gates halt the
+  run until the owner approves; exceeding the cap halts it until the cap is raised. Stations flip to check
+  marks as they complete, artifacts appear as stages produce them, and coder lanes track parallel work.
+  Sound is synthesised in-browser, tied to visible events, muted from one button.
+- **Fonts**: IBM Plex Sans Arabic + IBM Plex Mono vendored as 10 `woff2` subsets (280 KB) with the OFL text;
+  no CDN at runtime. `THIRD_PARTY_NOTICES.md` gained both OFL rows.
+- **Verified on this host**: `node bridge-io/policy/2026-11-09-website-v3/gates.mjs` → **31/31 static gates**
+  (v3 token fidelity against the approved spec, 24 WCAG contrast pairs, logical-property purity, 174 ar/en
+  pairs in `index.html` + 3 in `404.html`, asset/icon resolution, one-primary rule, dependency-free boundary).
+  `node bridge-io/website-redesign/verify-v3.mjs` → **92/92 browser checks** on host Chrome at 1440×900 and
+  390×844, ar/en × light/dark, including a full run through all four gates, export download, replay,
+  budget-cap halt and recovery, every tab and dialog, zero console errors, zero horizontal overflow,
+  control reachability and reduced-motion behaviour. `check-arch.mjs` 0 violations; `check-engineering-policy.mjs`
+  0 failures. Screenshots and `runtime-report.json` in `bridge-io/policy/2026-11-09-website-v3/`.
+- **Defects found and fixed during verification**: `hidden` was overridden by author `display` rules (global
+  `[hidden]` guard added); the switch input had no positioned ancestor and escaped to the page origin;
+  `fonts.css` resolved its own URLs against `assets/`, 404-ing every font; the first machine-log line was
+  emitted twice; the sticky control desk was taller than the viewport and hid its own bottom controls
+  (now internally scrollable); on mobile the desk sat above the line and buried the visualization (reordered).
+- **Deployed 2026-11-10 on the owner's instruction**: `wrangler pages deploy apps/website --project-name warsha-dev --branch main`
+  uploaded 20 files → `https://580a3288.warsha-dev.pages.dev`, live at `https://warsha-dev.pages.dev`.
+  Post-deploy verification drove the **production URL** in host Chrome:
+  `node bridge-io/website-redesign/verify-live.mjs` → **35/35 live checks** — root 200, every asset 200
+  (`tokens.css`, `style.css`, `site.js`, `fonts.css`, mark, `woff2`, `OFL.txt`), 404 returns 404, Plex served
+  from the edge, a full run through all four approval gates, JSON export download, gate approve/change/reject
+  with its dialog, all five Advanced tabs, ar↔en toggle, light/dark, 390×844 mobile with the line ahead of the
+  desk, zero console errors and zero horizontal overflow. Screenshots and `live-report.json` in
+  `bridge-io/policy/2026-11-09-website-v3/live/`.
+
+## Website Redesign & Cloudflare Pages Deployment — 2026-11-08
+
+- **Scope**: Redesigned `apps/website` with Warsha's industrial design system, Arabic-first RTL default, instant English toggle, Light/Dark mode switcher (`#themeToggle`), micro-animations adhering to GitHub `frontend-design` standards, and the interactive "Inside Warsha" software factory visualizer (`#inside`).
+- **Brand Palette**: Signal Yellow (`#FFD60A` on dark, `#8a6a00` on light for WCAG AA contrast compliance) replacing third-party green tones across borders, laser conduit, badges, and buttons.
+- **Verification**: All 6 acceptance gates (G1–G6) passed. Visual baselines captured across 10 desktop and mobile viewports.
+- **Deployment**: Successfully deployed to Cloudflare Pages project `warsha-dev` (`https://warsha-dev.pages.dev` and deployment hash `https://28f48278.warsha-dev.pages.dev`) following explicit owner approval.
+
 ## System Environment Remediation — 2026-11-08 (Windows Host Low Mandatory Level Resolved)
 
 - **Diagnosis**: Native Windows executables compiled inside `C:\Users\Dragonfly\Downloads\Warsha` or spawned by processes inside the workspace failed during DLL initialization with `0xC0000142` (`STATUS_DLL_INIT_FAILED`). Affected targets included `warsha-backends` (linking `shell32.dll`), `warsha-git` (spawning `git init`), and child CLI tools (`whoami`, `powershell`, `node`, `git`).
@@ -5999,3 +6084,27 @@ hypotheses left in this triage.
 - **Measured**: `pnpm -F @warsha/client test` 90/90; `pnpm -F warsha-desktop test` 387/387 (41 files);
   `pnpm -F @warsha/i18n test` 52/52; `pnpm -F warsha-desktop typecheck` exit 0; eslint clean on all
   changed files. Nothing committed or pushed.
+
+## 2026-11-08 — Warsha Website NVIDIA-Style Redesign (Ready for Owner Review)
+- **Scope**: Redesigned marketing website in isolated worktree `agent-Coder-159cc7b1` under `apps/website/` (commit `51e99f509079f0a682a3acbcfce36c60f9ed2c37` on base `642ae95`).
+- **Design system**: NVIDIA-adapted palette (`#000000`, `#ffffff`, `#76b900` signal on dark, `#3f8500` signal on light for WCAG AA compliance), 2px border radius, single ambient shadow, alternating section rhythm, bold industrial type scale (36px hero, 24px section headings, 14px uppercase nav), solid black sticky nav, transparent buttons with 2px green border, and mobile hamburger overlay.
+- **Content & Features**:
+  - Arabic-first RTL default with instantaneous English toggle (`data-ar`/`data-en`).
+  - Restyled interactive typing prompt demo with blinking cursor and question chips.
+  - 3-column workbench mock (build log with JetBrains Mono, agent ledger rows with 3px green inline-start signal edge, interactive gate approval card, phone preview).
+  - Sticky 5-step story rail with dynamic progress bar.
+  - New industrial Tech Specs table with verified metrics from `README.md` (12 agents, 14 stages, 4 owner gates, 3 OS, 725 Rust / 1001 TS / 785 E2E tests, 11/11 self-check).
+  - Provider strip with local OS keychain security note.
+  - Accurate roadmap (M0–M5, M8 delivered; M6, M7, M9 partial).
+  - Expandable FAQ with rotating plus marker and honest source-build instructions.
+  - Static 404 page, robots.txt, and sitemap.xml.
+  - Derived SVG brand assets without baked dark rectangles and with recolored `#76b900` signal bar.
+- **Verification**:
+  - G1 (`node scripts/check-arch.mjs`): exit 0 (5 rules, 0 violations).
+  - G2 (`node scripts/check-engineering-policy.mjs`): exit 0 (8 checks, 0 failures).
+  - G3 (`npx html-validate`): exit 0 on `index.html` and `404.html`.
+  - G4 (`g4-i18n-rtl.mjs`): exit 0 (132 bilingual pairs, logical CSS properties only).
+  - G5 (`g5-contrast.mjs`): exit 0 (all WCAG AA contrast ratios satisfied).
+  - G6 (`g6-links-assets.mjs`): exit 0 (all 40 local and external links/assets valid).
+  - Visual preview: 11 PNG screenshots captured using host Chrome across desktop (`1440x900`) and mobile (`390x844`), ar and en.
+- **Deployment Status**: Held pending owner approval. Local static server serving on `http://127.0.0.1:8791/`.

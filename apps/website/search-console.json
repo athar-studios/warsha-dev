@@ -1,0 +1,24 @@
+{
+  "_readme": [
+    "Google Search Console verification for https://warsha-dev.pages.dev/",
+    "",
+    "1. Open https://search.google.com/search-console/welcome while signed into the",
+    "   Google account that should own the property.",
+    "2. Choose 'URL prefix' (not Domain — pages.dev is Cloudflare's domain, so the",
+    "   DNS route is not available to you) and enter: https://warsha-dev.pages.dev/",
+    "3. Pick the 'HTML tag' method. Google shows a tag like:",
+    "   <meta name=\"google-site-verification\" content=\"AbCdEf123...\" />",
+    "4. Copy ONLY the content value into \"htmlTagContent\" below.",
+    "5. Rebuild and deploy:",
+    "   node bridge-io/website-redesign/build-seo.mjs",
+    "   npx wrangler pages deploy apps/website/dist --project-name warsha-dev --branch main",
+    "6. Press Verify in Search Console, then open Sitemaps and submit: sitemap.xml",
+    "7. Use URL Inspection on https://warsha-dev.pages.dev/ and",
+    "   https://warsha-dev.pages.dev/en/ and press 'Request indexing' for each.",
+    "",
+    "Alternatively set \"htmlFile\" to { \"name\": \"googleXXXX.html\", \"body\": \"google-site-verification: googleXXXX.html\" }",
+    "and the build will emit that file at the site root instead."
+  ],
+  "htmlTagContent": "",
+  "htmlFile": null
+}

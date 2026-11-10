@@ -1295,3 +1295,49 @@ cryptographic; no app loads IBM Plex; the `daemon_ws_url` 8766 → 8765 fix is c
 - **Context**: Tests run on Windows PC were failing with exit code `0xC0000142` (`STATUS_DLL_INIT_FAILED`) whenever binaries attempted to initialize `user32.dll` or spawn child tools (`git`, `powershell`, `whoami`).
 - **Root Cause**: Directory was tagged with `Mandatory Label\Low Mandatory Level:(OI)(CI)(NW)` left by previous sandbox tooling. Low-integrity processes are blocked by Windows kernel from accessing interactive Win32k/desktop objects.
 - **Resolution**: Reset integrity SACL to Medium. Verified `cargo test --workspace` and `pnpm -r test` completely green.
+
+## 2026-11-08 — Warsha Website Redesign & Cloudflare Pages Production Deployment (Run 2026-11-08-website-nvidia)
+- **Decision**: Redesign the Warsha marketing site (`apps/website/`, targeted to Cloudflare Pages project `warsha-dev`) using Warsha's industrial design system: pure black `#000000`, pure white `#ffffff`, Warsha signature Signal Yellow (`#FFD60A` on dark, `#8a6a00` on light for WCAG AA contrast compliance > 5:1), 2px radius, bold industrial typography, alternating section rhythm, Light/Dark mode toggle (`#themeToggle`), micro-animations adhering to GitHub `frontend-design` standards, and the interactive "Inside Warsha" AI factory visualizer (`#inside`). Deployed to Cloudflare Pages production (`warsha-dev.pages.dev`) following explicit owner approval.
+- **Alternatives**: (1) Retain green accent; (2) Convert to a React/Next.js/Astro framework; (3) Deploy without owner preview.
+- **Reason**: The owner explicitly directed replacing green with Warsha's signature yellow to preserve brand identity, and approved deployment after visual verification. Building as a zero-dependency static site under `apps/website/` keeps it completely decoupled from the monorepo's `pnpm -r` build/test scripts and arch rules, while maintaining full version-controlled provenance.
+- **Status**: Verified by independent debugger subagent across gates G1–G6 (arch clean, policy clean, html-validate clean, i18n-rtl clean with 186 pairs, contrast clean, links/assets clean). Visual baselines captured via Playwright with host Chrome. Successfully deployed to Cloudflare Pages (`https://warsha-dev.pages.dev` and `https://28f48278.warsha-dev.pages.dev`).
+- **Superseded 2026-11-09** by the v3 «حِرفة» rebuild below, which went live on 2026-11-10.
+
+## 2026-11-09 — The website moves to Design System v3 «حِرفة», not a website-only theme
+
+- **Decision**: Rebuild `apps/website` on the owner-approved `docs/designs/DESIGN_SYSTEM_V3.md` (run `2026-11-09-ui-v3`) rather than inventing a marketing-only palette. `apps/website/tokens.css` copies the v3 semantic values verbatim — warm paper `#F6F4EF` / warm night `#131210`, logo yellow `#FFD400`, attention orange, the four semantic hue pairs, radius 6/10/14/20, motion 120/200/320 ms with `cubic-bezier(.2,.8,.2,1)`, IBM Plex Sans Arabic + IBM Plex Mono. A gate diffs all 46 light/dark values against the spec file so drift cannot pass silently.
+- **Alternatives**: (1) Keep the NVIDIA-style black/white site and only swap the accent; (2) give the marketing site its own tokens independent of the product; (3) port the site to React/Next.js to reuse `@warsha/ui/v3` components directly.
+- **Reason**: The owner asked for the site to follow v3, and v3 is a clean slate that explicitly drops the v2 metaphors — a reskinned v2 site would contradict the spec it claims to follow. A separate marketing palette would fork the brand the moment either side changed. Importing `@warsha/ui/v3` would pull the monorepo's build graph into a static site that today has no `package.json`, no bundler and no runtime network calls; the architecture boundary is worth more than component reuse for eleven static files.
+- **v3 rules carried into marketing**: yellow is spent once per view (the hero composer's run button, a decision card's approve, and the closing CTA — never simultaneously in one viewport); selected rows, chips and tabs use `primary-soft` + `primary-text`; orange appears only on decision cards and "waiting on you" pills; running work is `info` blue; every status carries an icon and a word; on the light theme yellow lines and text use `primary-text` because `#FFD400` on paper is ≈1.3:1.
+- **Marketing additions on top of the spec, not deviations from it**: a display type scale above `text-3xl` in the same family; ambient multi-hue aura fields and grain; a scroll-progress rail; and the interactive factory. The factory's control desk is permanently visible with 13 live controls because the line is an object the visitor steers, not a figure to read. On viewports ≤1080px the line is ordered before the desk so the subject is never buried under its own controls.
+- **Fonts**: vendored as 10 `woff2` subsets with the OFL text rather than linked from Google Fonts, matching the v3 decision for the offline Tauri app and making the site render identically without a network. `THIRD_PARTY_NOTICES.md` carries both OFL rows.
+- **Honesty constraint kept**: the numbers table publishes only what `README.md` measured (725 Rust, 1001 TypeScript, 180 a11y, 252 states, 308 visual, 45 flows, 11/11 shell), and an adjacent panel states plainly what does not work — no published release, no encrypted relay, no screen driving the GitHub client, no Android APK, Linux-only visual baselines.
+- **Status**: 31/31 static gates and 92/92 host-Chrome runtime checks green; `check-arch.mjs` and `check-engineering-policy.mjs` clean. **Deployed 2026-11-10** on the owner's explicit instruction to `warsha-dev` branch `main` (`https://580a3288.warsha-dev.pages.dev`, live at `https://warsha-dev.pages.dev`), then re-verified against the production URL: 35/35 live browser checks covering a full four-gate run, export, every tab and dialog, both languages, both themes and mobile, with zero console errors and zero overflow.
+
+## 2026-11-10 — SEO: two real language URLs, not one page with a JS toggle
+
+- **Decision**: Emit `/` (Arabic, `x-default`) and `/en/` (English) as separate static documents from a
+  single source template. The build resolves the paired `data-ar`/`data-en` spans so each URL carries only
+  its own language, prerenders the JS-built regions into the HTML, and writes per-language metadata,
+  self-canonicals, reciprocal `hreflang` and JSON-LD. The language control became a link between the URLs;
+  the runtime no longer sets `lang` from `localStorage` or a query parameter.
+- **Alternatives**: (1) Keep one URL and let the JS toggle swap languages; (2) keep both languages in the DOM
+  and rely on `hreflang` alone; (3) serve language by `Accept-Language` on one URL; (4) add a framework and
+  server-side rendering.
+- **Reason**: With one URL, Google indexes a single document containing both Arabic and English for every
+  string, which dilutes relevance and makes `hreflang` a lie because the alternate URL does not exist.
+  `Accept-Language` variation is explicitly discouraged by Google for language targeting. A framework would
+  break the dependency-free boundary that `check-arch.mjs` protects, for a site that is eleven static files.
+  A build step over the existing template gives correct language targeting with no new runtime dependency.
+- **Prerender source of truth**: the fragments are captured from the running page with Playwright rather than
+  duplicated in the build, so the static HTML and the runtime cannot drift apart.
+- **Honesty constraint**: no `aggregateRating` or `review` is emitted. Google's Rich Results Test flags the
+  missing `aggregateRating` as an optional non-critical field; inventing a rating to silence it would be
+  fabricated data. Both URLs otherwise report **1 valid Software Apps item**.
+- **Google submission boundary**: property verification and sitemap submission in Search Console require the
+  owner's Google account. No Google credentials exist on this host, the in-app browser has no Google session,
+  and the legacy `google.com/ping?sitemap=` endpoint is retired (404). What was done instead: the sitemap is
+  live and advertised in `robots.txt`, both URLs are proven crawlable by Google's own tester, and the public
+  repository's website field now links to the site so Google can discover it from a page it already crawls.
+  `apps/website/search-console.json` turns the remaining step into pasting one token and rebuilding.
+- **Status**: 151/151 SEO gates, 66/66 built-site runtime checks, deployed and re-verified on production.

@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#F6F4EF">
+<title>ورشة · الصفحة غير موجودة</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/fonts.css">
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/style.css">
+<script>
+  (function () {
+    try {
+      var t = localStorage.getItem('warsha.theme') || 'system';
+      var l = localStorage.getItem('warsha.lang') || 'ar';
+      var dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      document.documentElement.lang = l;
+      document.documentElement.dir = l === 'ar' ? 'rtl' : 'ltr';
+    } catch (e) { /* defaults already set on <html> */ }
+  })();
+</script>
+</head>
+<body>
+<main class="hero nf" id="main">
+  <div class="aura" aria-hidden="true"><i class="a1"></i><i class="a3"></i></div>
+  <div class="grain" aria-hidden="true"></div>
+  <div class="wrap hero-in">
+    <img src="/assets/warsha-mark.svg" alt="" width="64" height="64" class="cta-mark" aria-hidden="true">
+    <p class="eyebrow"><span class="ltr">404</span></p>
+    <h1 class="display">
+      <span data-ar>الصفحة غير <em>موجودة.</em></span>
+      <span data-en>This page is <em>not here.</em></span>
+    </h1>
+    <p class="lede">
+      <span data-ar>الرابط الذي فتحته لا يقود إلى شيء. ارجع إلى الصفحة الرئيسية وابدأ من هناك.</span>
+      <span data-en>The link you opened leads nowhere. Go back to the home page and start from there.</span>
+    </p>
+    <div class="cta-acts">
+      <a class="btn btn-primary" href="/">
+        <span data-ar>الصفحة الرئيسية</span><span data-en>Home page</span>
+      </a>
+      <a class="btn btn-secondary" href="https://github.com/athar-studios/warsha" target="_blank" rel="noopener noreferrer">GitHub</a>
+    </div>
+  </div>
+</main>
+<style>
+  html[lang='ar'] [data-en], html[lang='en'] [data-ar] { display: none; }
+  .nf { min-block-size: 100vh; display: grid; place-items: center; }
+  .nf .display { font-size: clamp(28px, 6vw, 60px); }
+</style>
+</body>
+</html>

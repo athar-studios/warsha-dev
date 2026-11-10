@@ -1,0 +1,184 @@
+/**
+ * Warsha Design System v3 — «حِرفة» (Hirfa)
+ * Website token layer. Values copied verbatim from
+ * docs/designs/DESIGN_SYSTEM_V3.md §2.1–2.4 (run 2026-11-09-ui-v3).
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Colour — light (warm paper) */
+  --w-bg: #f6f4ef;
+  --w-surface: #ffffff;
+  --w-sunken: #efece5;
+  --w-line: #e2ddd3;
+  --w-line-strong: #8c877c;
+  --w-text: #1b1a17;
+  --w-text-muted: #5f5b53;
+  --w-text-faint: #7a756b;
+  --w-primary: #ffd400;
+  --w-primary-hover: #f2c600;
+  --w-on-primary: #1b1a17;
+  --w-primary-soft: #fff4c2;
+  --w-primary-text: #7a5c00;
+  --w-attention: #a8430a;
+  --w-attention-soft: #ffeedf;
+  --w-success: #1b6b39;
+  --w-success-soft: #e4f3e8;
+  --w-danger: #a8261d;
+  --w-danger-soft: #fce9e7;
+  --w-info: #1f55a0;
+  --w-info-soft: #e7effa;
+  --w-focus: #7a5c00;
+  --w-scrim: #1b1a1766;
+
+  /* Ambient fields — multi-stop gradients across the semantic hues */
+  --w-aura-1: #ffd40029;
+  --w-aura-2: #a8430a1f;
+  --w-aura-3: #1f55a01f;
+  --w-aura-4: #1b6b391a;
+  --w-grain-opacity: 0.035;
+  --w-grid-line: #1b1a170a;
+  --w-glass: #ffffffd9;
+
+  /* Typography */
+  --w-font-sans: 'IBM Plex Sans Arabic', 'Segoe UI', 'Noto Sans Arabic', Tahoma, system-ui, sans-serif;
+  --w-font-mono: 'IBM Plex Mono', Consolas, ui-monospace, monospace;
+
+  --w-font-size-xs: 12px;
+  --w-font-size-sm: 14px;
+  --w-font-size-md: 16px;
+  --w-font-size-lg: 18px;
+  --w-font-size-xl: 22px;
+  --w-font-size-2xl: 28px;
+  --w-font-size-3xl: 36px;
+
+  --w-line-height-xs: 18px;
+  --w-line-height-sm: 22px;
+  --w-line-height-md: 26px;
+  --w-line-height-lg: 28px;
+  --w-line-height-xl: 32px;
+  --w-line-height-2xl: 40px;
+  --w-line-height-3xl: 48px;
+
+  --w-font-weight-regular: 400;
+  --w-font-weight-medium: 500;
+  --w-font-weight-semibold: 600;
+  --w-font-weight-bold: 700;
+  --w-tracking-code: 0.01em;
+
+  /* Marketing display scale — extends the v3 ladder upward, same family */
+  --w-display-sm: 44px;
+  --w-display-sm-lh: 56px;
+  --w-display: 60px;
+  --w-display-lh: 72px;
+  --w-display-lg: 76px;
+  --w-display-lg-lh: 88px;
+
+  /* Borders */
+  --w-border-width: 1px;
+  --w-border-width-strong: 2px;
+
+  /* Space (4-based) */
+  --w-space-1: 4px;
+  --w-space-2: 8px;
+  --w-space-3: 12px;
+  --w-space-4: 16px;
+  --w-space-5: 20px;
+  --w-space-6: 24px;
+  --w-space-7: 32px;
+  --w-space-8: 40px;
+  --w-space-9: 48px;
+  --w-space-10: 64px;
+  --w-space-11: 88px;
+  --w-space-12: 120px;
+
+  /* Radius */
+  --w-radius-sm: 6px;
+  --w-radius-md: 10px;
+  --w-radius-lg: 14px;
+  --w-radius-xl: 20px;
+  --w-radius-full: 9999px;
+
+  /* Elevation */
+  --w-shadow-1: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --w-shadow-2: 0 4px 12px rgba(0, 0, 0, 0.12);
+  --w-shadow-overlay: 0 12px 32px rgba(0, 0, 0, 0.2);
+
+  /* Layers */
+  --w-layer-base: 0;
+  --w-layer-sticky: 10;
+  --w-layer-dropdown: 100;
+  --w-layer-overlay: 900;
+  --w-layer-modal: 1000;
+  --w-layer-toast: 1100;
+
+  /* Motion */
+  --w-dur-fast: 120ms;
+  --w-dur: 200ms;
+  --w-dur-slow: 320ms;
+  --w-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* Layout & density */
+  --w-content-narrow: 720px;
+  --w-content: 1120px;
+  --w-content-wide: 1440px;
+  --w-nav-height: 68px;
+  --w-control-height: 44px;
+  --w-table-text-size: var(--w-font-size-md);
+  --w-table-line-height: var(--w-line-height-md);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --w-bg: #131210;
+  --w-surface: #1b1a17;
+  --w-sunken: #24221e;
+  --w-line: #33302a;
+  --w-line-strong: #7d776c;
+  --w-text: #f1eee7;
+  --w-text-muted: #b3aea3;
+  --w-text-faint: #948f84;
+  --w-primary: #ffd400;
+  --w-primary-hover: #ffe04a;
+  --w-on-primary: #1b1a17;
+  --w-primary-soft: #3a3008;
+  --w-primary-text: #ffd84d;
+  --w-attention: #ff9d5c;
+  --w-attention-soft: #3d2314;
+  --w-success: #5cc98a;
+  --w-success-soft: #15301f;
+  --w-danger: #f07a70;
+  --w-danger-soft: #3a1714;
+  --w-info: #7db0f5;
+  --w-info-soft: #152842;
+  --w-focus: #ffd400;
+  --w-scrim: #000000a3;
+
+  --w-aura-1: #ffd40024;
+  --w-aura-2: #ff9d5c1f;
+  --w-aura-3: #7db0f524;
+  --w-aura-4: #5cc98a1a;
+  --w-grain-opacity: 0.05;
+  --w-grid-line: #f1eee70a;
+  --w-glass: #1b1a17e0;
+
+  --w-shadow-1: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --w-shadow-2: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --w-shadow-overlay: 0 12px 32px rgba(0, 0, 0, 0.6);
+}
+
+[data-density='compact'] {
+  --w-control-height: 32px;
+  --w-table-text-size: var(--w-font-size-sm);
+  --w-table-line-height: var(--w-line-height-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --w-dur-fast: 0ms;
+    --w-dur: 0ms;
+    --w-dur-slow: 0ms;
+  }
+}
