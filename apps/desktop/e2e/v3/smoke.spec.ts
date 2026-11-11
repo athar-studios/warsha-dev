@@ -39,3 +39,32 @@ for (const locale of LOCALES) {
   }
 }
 
+test('v3 loads bundled IBM Plex Sans Arabic and IBM Plex Mono offline with non-loopback requests aborted', async ({
+  page,
+}) => {
+  const blockedExternal: string[] = [];
+  await page.route(/^https?:\/\/(?!(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$))/i, (route) => {
+    blockedExternal.push(route.request().url());
+    return route.abort();
+  });
+
+  await openV3(page, '/p/proj-ui/r/run-code/overview', { lang: 'ar', mode: 'advanced' });
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+  });
+
+  const loadedFamilies = await page.evaluate(() => {
+    const out: { family: string; status: string }[] = [];
+    for (const face of document.fonts) {
+      if (face.status === 'loaded') {
+        out.push({ family: face.family.replace(/["']/g, ''), status: face.status });
+      }
+    }
+    return out;
+  });
+
+  expect(blockedExternal).toEqual([]);
+  expect(loadedFamilies.some((f) => f.family.includes('IBM Plex Sans Arabic'))).toBe(true);
+  expect(loadedFamilies.some((f) => f.family.includes('IBM Plex Mono'))).toBe(true);
+});
+
