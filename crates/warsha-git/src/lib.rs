@@ -50,6 +50,18 @@ pub enum GitError {
     /// Local filesystem failure.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    /// Path does not exist or is not a directory.
+    #[error("Path not found: {0}")]
+    PathNotFound(String),
+    /// Path is not a git repository.
+    #[error("Not a git repository: {0}")]
+    NotAGitRepo(String),
+    /// Working tree is dirty.
+    #[error("Working tree is dirty: {0}")]
+    DirtyWorkingTree(String),
+    /// Branch name or ref is invalid.
+    #[error("Invalid branch name: {0}")]
+    InvalidBranchName(String),
     /// Anything that does not fit the variants above.
     #[error("Other: {0}")]
     Other(String),
@@ -58,13 +70,55 @@ pub enum GitError {
 /// Result alias used throughout this crate.
 pub type Result<T> = std::result::Result<T, GitError>;
 
+fn validate_branch_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(GitError::InvalidBranchName(
+            "branch name cannot be empty".to_string(),
+        ));
+    }
+    if name.starts_with('-') {
+        return Err(GitError::InvalidBranchName(format!(
+            "branch name cannot start with '-': {name}"
+        )));
+    }
+    if name.contains("..") {
+        return Err(GitError::InvalidBranchName(format!(
+            "branch name cannot contain '..': {name}"
+        )));
+    }
+    if name
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_ascii_control())
+    {
+        return Err(GitError::InvalidBranchName(format!(
+            "branch name cannot contain whitespace or control characters: {name}"
+        )));
+    }
+    // Reject other git check-ref-format invalid characters: ~ ^ : ? * [ \
+    if name
+        .chars()
+        .any(|c| matches!(c, '~' | '^' | ':' | '?' | '*' | '[' | '\\'))
+    {
+        return Err(GitError::InvalidBranchName(format!(
+            "branch name contains invalid character: {name}"
+        )));
+    }
+    if name.ends_with('/') || name.ends_with('.') || name.ends_with(".lock") {
+        return Err(GitError::InvalidBranchName(format!(
+            "branch name has invalid ending: {name}"
+        )));
+    }
+    Ok(())
+}
+
 /// Reject ref/remote arguments that `git` would read as options, or that cannot
 /// be a valid name, so shelling out to the CLI stays predictable.
 fn validate_ref_arg(kind: &str, name: &str) -> Result<()> {
     let invalid = name.is_empty()
         || name.starts_with('-')
         || name.contains("..")
-        || name.contains(char::is_whitespace);
+        || name.contains(char::is_whitespace)
+        || name.chars().any(|c| c.is_ascii_control());
     if invalid {
         return Err(GitError::Other(format!("invalid {kind}: {name}")));
     }
@@ -219,6 +273,207 @@ impl GitRepo {
 
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
+}
+
+/// Build a `git` command scoped strictly to `path` so git never discovers or mutates an
+/// enclosing parent repository (or inherits outer `GIT_DIR` / `GIT_WORK_TREE` hooks).
+fn scoped_git_command(path: &Path) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
+        .arg(path.as_os_str())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_COMMON_DIR");
+
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if let Some(parent) = canonical.parent() {
+        cmd.env("GIT_CEILING_DIRECTORIES", parent);
+    }
+    cmd
+}
+
+/// Run a git command strictly in `path` with explicit arguments array, never a shell.
+fn run_git_cmd(path: &Path, args: &[&str]) -> Result<String> {
+    let output = scoped_git_command(path)
+        .args(args)
+        .output()
+        .map_err(|e| GitError::Git(format!("could not run git: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let detail = if stderr.is_empty() {
+            output.status.to_string()
+        } else {
+            stderr
+        };
+        let command = args.join(" ");
+        return Err(GitError::Git(format!("git {command} failed: {detail}")));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+/// Verify that `path` is an existing directory, a valid git repository,
+/// and has a clean working tree.
+///
+/// Refuses non-existent paths, non-directories, non-git repositories,
+/// and repositories with uncommitted or unstaged changes.
+pub fn verify_clean_git_repo(path: &Path) -> Result<()> {
+    if !path.exists() || !path.is_dir() {
+        return Err(GitError::PathNotFound(path.display().to_string()));
+    }
+
+    // Verify `path` itself is a git working tree root (bounded by GIT_CEILING_DIRECTORIES).
+    let output = scoped_git_command(path)
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .output()
+        .map_err(|e| GitError::Git(format!("could not run git: {e}")))?;
+
+    if !output.status.success() {
+        return Err(GitError::NotAGitRepo(path.display().to_string()));
+    }
+
+    let is_work_tree = String::from_utf8_lossy(&output.stdout).trim() == "true";
+    if !is_work_tree {
+        return Err(GitError::NotAGitRepo(path.display().to_string()));
+    }
+
+    // Check status --porcelain
+    let status_output = run_git_cmd(path, &["status", "--porcelain"])?;
+    if !status_output.trim().is_empty() {
+        return Err(GitError::DirtyWorkingTree(path.display().to_string()));
+    }
+
+    Ok(())
+}
+
+/// Default `.gitignore` content written when initializing a fresh project repository.
+const DEFAULT_GITIGNORE: &str = r"# Build artifacts and caches
+/target/
+/dist/
+/build/
+/node_modules/
+*.log
+.DS_Store
+";
+
+/// Initialize a fresh git repository under `path` if not already initialized.
+///
+/// Writes a default `.gitignore` or README if the repository is empty so an initial
+/// commit can succeed, sets repo-local `user.name` and `user.email` ONLY if unset
+/// in that repo, and creates an initial commit. NEVER touches global git config
+/// or any repository outside `path`.
+pub fn init_project_repo(path: &Path) -> Result<()> {
+    if !path.exists() {
+        std::fs::create_dir_all(path)?;
+    } else if !path.is_dir() {
+        return Err(GitError::PathNotFound(format!(
+            "path is not a directory: {}",
+            path.display()
+        )));
+    }
+
+    // Check if `path` itself is already a git repo (never walk to parent repositories).
+    let is_git = scoped_git_command(path)
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .output()
+        .map(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true")
+        .unwrap_or(false);
+
+    if !is_git {
+        run_git_cmd(path, &["init"])?;
+    }
+
+    // Set repo-local user.name / user.email ONLY if unset locally in that repo
+    let local_name = scoped_git_command(path)
+        .args(["config", "--local", "user.name"])
+        .output();
+    let name_is_set = match local_name {
+        Ok(out) => out.status.success() && !String::from_utf8_lossy(&out.stdout).trim().is_empty(),
+        Err(_) => false,
+    };
+    if !name_is_set {
+        run_git_cmd(path, &["config", "--local", "user.name", "Warsha"])?;
+    }
+
+    let local_email = scoped_git_command(path)
+        .args(["config", "--local", "user.email"])
+        .output();
+    let email_is_set = match local_email {
+        Ok(out) => out.status.success() && !String::from_utf8_lossy(&out.stdout).trim().is_empty(),
+        Err(_) => false,
+    };
+    if !email_is_set {
+        run_git_cmd(path, &["config", "--local", "user.email", "warsha@local"])?;
+    }
+
+    // Check if HEAD resolves (i.e. repository already has commits)
+    let head_exists = scoped_git_command(path)
+        .args(["rev-parse", "--verify", "HEAD"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if !head_exists {
+        // Check if there are any files tracked or untracked
+        let status = run_git_cmd(path, &["status", "--porcelain"])?;
+        if status.trim().is_empty() {
+            // Repo is completely empty: write default .gitignore
+            let gitignore_path = path.join(".gitignore");
+            if !gitignore_path.exists() {
+                std::fs::write(&gitignore_path, DEFAULT_GITIGNORE.as_bytes())?;
+            }
+        }
+        // Stage everything and create initial commit
+        run_git_cmd(path, &["add", "-A"])?;
+        run_git_cmd(path, &["commit", "-m", "Initial commit"])?;
+    }
+
+    Ok(())
+}
+
+/// Create or check out a local branch in `work_dir`.
+///
+/// Validates `branch_name` strictly (refusing `--` / `-` prefix, whitespace, `..`,
+/// or control characters), creates or checks out the local branch in `work_dir`,
+/// and NEVER pushes or force-updates. Returns the branch name on success.
+pub fn create_local_branch(work_dir: &Path, branch_name: &str) -> Result<String> {
+    validate_branch_name(branch_name)?;
+
+    if !work_dir.exists() || !work_dir.is_dir() {
+        return Err(GitError::PathNotFound(work_dir.display().to_string()));
+    }
+
+    // Verify `work_dir` itself is a git working tree root (bounded by GIT_CEILING_DIRECTORIES).
+    let is_work_tree = scoped_git_command(work_dir)
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .output()
+        .map(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true")
+        .unwrap_or(false);
+
+    if !is_work_tree {
+        return Err(GitError::NotAGitRepo(work_dir.display().to_string()));
+    }
+
+    // Check if branch already exists locally: git show-ref --verify --quiet refs/heads/<branch>
+    let branch_ref = format!("refs/heads/{branch_name}");
+    let ref_exists = scoped_git_command(work_dir)
+        .args(["show-ref", "--verify", "--quiet", &branch_ref])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if ref_exists {
+        // Branch already exists locally: switch / checkout
+        run_git_cmd(work_dir, &["checkout", branch_name])?;
+    } else {
+        // Create branch and check it out: git checkout -b <branch_name>
+        run_git_cmd(work_dir, &["checkout", "-b", branch_name])?;
+    }
+
+    Ok(branch_name.to_string())
 }
 
 /// Merge strategy accepted by the GitHub merge endpoint.
@@ -1248,5 +1503,189 @@ mod tests {
         assert_eq!(MergeMethod::Rebase.as_str(), "rebase");
         assert_eq!(MergeMethod::default(), MergeMethod::Merge);
         assert_eq!(MergeMethod::Squash.to_string(), "squash");
+    }
+
+    #[test]
+    fn verify_clean_git_repo_rejects_non_existent_and_non_git() {
+        let dir = fresh_tempdir();
+        let non_existent = dir.path().join("does_not_exist");
+        assert!(matches!(
+            verify_clean_git_repo(&non_existent),
+            Err(GitError::PathNotFound(_))
+        ));
+
+        let non_git = dir.path().join("plain_dir");
+        std::fs::create_dir_all(&non_git).unwrap();
+        assert!(matches!(
+            verify_clean_git_repo(&non_git),
+            Err(GitError::NotAGitRepo(_))
+        ));
+    }
+
+    #[test]
+    fn verify_clean_git_repo_rejects_dirty_and_accepts_clean() {
+        let dir = fresh_tempdir();
+        let repo_path = dir.path().join("test_repo");
+        init_project_repo(&repo_path).expect("init repo");
+
+        // Should be clean now
+        assert!(verify_clean_git_repo(&repo_path).is_ok());
+
+        // Make it dirty by creating an untracked file
+        std::fs::write(repo_path.join("dirty.txt"), "dirty").unwrap();
+        assert!(matches!(
+            verify_clean_git_repo(&repo_path),
+            Err(GitError::DirtyWorkingTree(_))
+        ));
+
+        // Commit it and verify it becomes clean
+        let repo = GitRepo::open(&repo_path).unwrap();
+        repo.commit("commit dirty").unwrap();
+        assert!(verify_clean_git_repo(&repo_path).is_ok());
+
+        // Make it dirty by modifying an existing tracked file
+        std::fs::write(repo_path.join("dirty.txt"), "modified").unwrap();
+        assert!(matches!(
+            verify_clean_git_repo(&repo_path),
+            Err(GitError::DirtyWorkingTree(_))
+        ));
+    }
+
+    #[test]
+    fn init_project_repo_creates_valid_repo_with_initial_commit() {
+        let dir = fresh_tempdir();
+        let repo_path = dir.path().join("fresh_project");
+
+        init_project_repo(&repo_path).expect("initialize fresh repo");
+
+        assert!(repo_path.join(".git").exists());
+        assert!(repo_path.join(".gitignore").exists());
+
+        // Verify git rev-parse HEAD succeeds
+        let head = run_git_cmd(&repo_path, &["rev-parse", "HEAD"]).expect("rev-parse HEAD");
+        assert!(!head.trim().is_empty());
+
+        // Calling init_project_repo again is idempotent and does not fail
+        init_project_repo(&repo_path).expect("idempotent init");
+
+        // Verify local config was set
+        let name = run_git_cmd(&repo_path, &["config", "--local", "user.name"]).unwrap();
+        assert_eq!(name.trim(), "Warsha");
+        let email = run_git_cmd(&repo_path, &["config", "--local", "user.email"]).unwrap();
+        assert_eq!(email.trim(), "warsha@local");
+    }
+
+    #[test]
+    fn init_project_repo_preserves_existing_local_config() {
+        let dir = fresh_tempdir();
+        let repo_path = dir.path().join("custom_config_repo");
+        std::fs::create_dir_all(&repo_path).unwrap();
+
+        run_git_cmd(&repo_path, &["init"]).unwrap();
+        run_git_cmd(
+            &repo_path,
+            &["config", "--local", "user.name", "CustomUser"],
+        )
+        .unwrap();
+        run_git_cmd(
+            &repo_path,
+            &["config", "--local", "user.email", "custom@example.com"],
+        )
+        .unwrap();
+
+        init_project_repo(&repo_path).expect("init with pre-existing config");
+
+        let name = run_git_cmd(&repo_path, &["config", "--local", "user.name"]).unwrap();
+        assert_eq!(name.trim(), "CustomUser");
+        let email = run_git_cmd(&repo_path, &["config", "--local", "user.email"]).unwrap();
+        assert_eq!(email.trim(), "custom@example.com");
+    }
+
+    #[test]
+    fn create_local_branch_validates_branch_names_strictly() {
+        let dir = fresh_tempdir();
+        let repo_path = dir.path().join("branch_test_repo");
+        init_project_repo(&repo_path).expect("init repo");
+
+        // Invalid branch names
+        for invalid_name in [
+            "",
+            "-dash",
+            "--option-injection",
+            "-b",
+            "branch with spaces",
+            "branch\nnewline",
+            "branch\tcontrol",
+            "bad..branch",
+            "bad~branch",
+            "bad^branch",
+            "bad:branch",
+            "bad?branch",
+            "bad*branch",
+            "bad[branch",
+            "bad\\branch",
+            "trailing-slash/",
+            "trailing-dot.",
+            "lock.lock",
+        ] {
+            assert!(
+                matches!(
+                    create_local_branch(&repo_path, invalid_name),
+                    Err(GitError::InvalidBranchName(_))
+                ),
+                "expected rejection for branch name: {invalid_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn create_local_branch_creates_and_switches_branch() {
+        let dir = fresh_tempdir();
+        let repo_path = dir.path().join("branch_switch_repo");
+        init_project_repo(&repo_path).expect("init repo");
+
+        // Create new branch on clean repo
+        let res = create_local_branch(&repo_path, "feature/clean-work").expect("create branch");
+        assert_eq!(res, "feature/clean-work");
+
+        let current = run_git_cmd(&repo_path, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .expect("current branch");
+        assert_eq!(current.trim(), "feature/clean-work");
+
+        // Make it dirty with an untracked file, create another branch
+        std::fs::write(repo_path.join("dirty_file.txt"), "dirty").unwrap();
+        let res2 =
+            create_local_branch(&repo_path, "feature/dirty-work").expect("create branch dirty");
+        assert_eq!(res2, "feature/dirty-work");
+
+        let current2 = run_git_cmd(&repo_path, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .expect("current branch");
+        assert_eq!(current2.trim(), "feature/dirty-work");
+
+        // Switching to existing branch
+        let res3 =
+            create_local_branch(&repo_path, "feature/clean-work").expect("checkout existing");
+        assert_eq!(res3, "feature/clean-work");
+
+        let current3 = run_git_cmd(&repo_path, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .expect("current branch");
+        assert_eq!(current3.trim(), "feature/clean-work");
+    }
+
+    #[test]
+    fn create_local_branch_rejects_non_git_or_missing_path() {
+        let dir = fresh_tempdir();
+        let missing = dir.path().join("missing_dir");
+        assert!(matches!(
+            create_local_branch(&missing, "feature/test"),
+            Err(GitError::PathNotFound(_))
+        ));
+
+        let non_git = dir.path().join("not_git");
+        std::fs::create_dir_all(&non_git).unwrap();
+        assert!(matches!(
+            create_local_branch(&non_git, "feature/test"),
+            Err(GitError::NotAGitRepo(_))
+        ));
     }
 }
