@@ -2,7 +2,7 @@
 
 use axum::{
     extract::{ws::WebSocketUpgrade, ConnectInfo, Query, State},
-    http::{header::AUTHORIZATION, HeaderMap},
+    http::{header::AUTHORIZATION, HeaderMap, HeaderValue},
     response::{IntoResponse, Json, Response},
     routing::get,
     Router,
@@ -5653,6 +5653,25 @@ pub async fn start_daemon_with_provider_factory(
     // the other listener and is refused from the static path by name
     // ([`is_reserved_static_path`]). The fallback is mounted only when a bundle is
     // configured: with none, an unmatched path 404s exactly as it did before.
+    // CSP middleware to add Content-Security-Policy headers to all responses
+    let csp_middleware = tower::ServiceBuilder::new()
+        .map_response(|mut response: Response| {
+            // Add CSP header to restrict sources
+            let csp_value = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' http://127.0.0.1:8765 ws://127.0.0.1:8766 http://localhost:8765 ws://localhost:8766; frame-ancestors 'none'; form-action 'self';";
+            if let Ok(header_value) = HeaderValue::from_str(csp_value) {
+                response.headers_mut().insert("Content-Security-Policy", header_value);
+            }
+            // Add X-Content-Type-Options header
+            if let Ok(header_value) = HeaderValue::from_str("nosniff") {
+                response.headers_mut().insert("X-Content-Type-Options", header_value);
+            }
+            // Add X-Frame-Options header
+            if let Ok(header_value) = HeaderValue::from_str("DENY") {
+                response.headers_mut().insert("X-Frame-Options", header_value);
+            }
+            response
+        });
+
     let app = Router::new()
         .route("/health", get(health_handler))
         .route("/events", get(events_handler));
@@ -5662,6 +5681,7 @@ pub async fn start_daemon_with_provider_factory(
         app
     };
     let app = app
+        .layer(csp_middleware)
         .layer(auth_middleware)
         .layer(cors)
         .with_state(state.clone());
@@ -5870,6 +5890,79 @@ pub async fn load_or_create_config(config_path: Option<&Path>) -> Result<DaemonC
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        }
+
+        // Set permissions on Windows to restrict access to owner only
+        #[cfg(windows)]
+        {
+            use windows::{
+                core::*,
+                Win32::Foundation::*,
+                Win32::Security::*,
+                Win32::System::Threading::*,
+            };
+            
+            // Convert path to wide string for Windows API
+            let path_wide: Vec<u16> = std::ffi::OsStr::new(path).encode_wide().chain(std::iter::once(0)).collect();
+            
+            // Get the current process token
+            let token = unsafe { GetCurrentProcessToken() };
+            
+            // Get the owner SID from the token
+            let mut owner_sid_size = 0u32;
+            
+            // First call to get the required buffer size
+            unsafe {
+                GetTokenInformation(
+                    token,
+                    TokenOwner,
+                    None,
+                    0,
+                    Some(&mut owner_sid_size),
+                );
+            }
+            
+            if owner_sid_size > 0 {
+                // Allocate buffer for the SID
+                let mut owner_sid_buf = vec![0u8; owner_sid_size as usize];
+                
+                // Get the owner SID
+                let result = unsafe {
+                    GetTokenInformation(
+                        token,
+                        TokenOwner,
+                        Some(&mut owner_sid_buf),
+                        owner_sid_size,
+                        Some(&mut owner_sid_size),
+                    )
+                };
+                
+                if result.as_bool() {
+                    let owner_sid = unsafe { std::mem::transmute::<&[u8], PSID>(&owner_sid_buf) };
+                    
+                    // Set file security to only allow owner access
+                    // Use PROTECTED_DACL_SECURITY_INFORMATION to prevent inheritance
+                    // This removes inherited permissions and sets explicit owner-only access
+                    unsafe {
+                        let hr = SetNamedSecurityInfoW(
+                            PCWSTR(path_wide.as_ptr()),
+                            SE_FILE_OBJECT,
+                            DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                            Some(owner_sid),
+                            None,
+                            None,
+                            None,
+                        );
+                        
+                        // Log if the operation failed
+                        if !hr.is_ok() {
+                            warn!("Failed to set Windows file permissions for token file: {:?}", path);
+                        }
+                    }
+                } else {
+                    warn!("Failed to get owner SID for token file permissions");
+                }
+            }
         }
 
         // A brand-new daemon has just minted the one owner token it will never show
