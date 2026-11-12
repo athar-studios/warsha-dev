@@ -1,0 +1,69 @@
+# deploy/Caddyfile — the only TLS endpoint of a Warsha deployment.
+#
+# Caddy terminates TLS for {$WARSHA_DOMAIN} (automatic certificate via the
+# ACME issuance built into Caddy; `localhost` falls back to Caddy's local
+# CA for a LAN/IP-less test) and reverse-proxies to `warshad`, which is
+# plain HTTP and never sees a certificate, a key, or the Internet.
+#
+# Routing (docs/DEPLOY.md section 2):
+#   /events* and /health  -> warshad:8765  (the axum HTTP surface)
+#   /rpc*                 -> warshad:8766  (the JSON-RPC surface: WebSocket
+#                           upgrade plus JSON POST)
+#   / and everything else -> warshad:8765  (the remote UI bundle warshad serves
+#                           statically when WARSHA_REMOTE_ASSETS_DIR is set;
+#                           hashed assets immutable, index.html and client
+#                           routes no-cache)
+# WebSocket upgrades and streamed event frames are transparent to Caddy's
+# reverse_proxy; `flush_interval -1` keeps event frames unbuffered.
+
+{
+	# The admin API is a local control plane; a read-only container with no
+	# need for runtime config reloads does not expose it at all.
+	admin off
+}
+
+{$WARSHA_DOMAIN:localhost} {
+	# --- strict security headers on every response -----------------------
+	# HSTS: once the domain has served HTTPS, downgrade attempts are
+	# refused by the browser for a year including subdomains.
+	# X-Frame-Options DENY: the remote PWA is never framed; clickjacking a
+	# gate-approval button is the exact attack this stops.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# --- daemon HTTP surface: health probe and the live event stream -----
+	@daemon_http {
+		path /health /health/* /events /events*
+	}
+	handle @daemon_http {
+		reverse_proxy warshad:8765 {
+			flush_interval -1
+		}
+	}
+
+	# --- daemon RPC surface: the /rpc prefix the CLI and PWA use ---------
+	@daemon_rpc {
+		path /rpc /rpc/*
+	}
+	handle @daemon_rpc {
+		reverse_proxy warshad:8766
+	}
+
+	# --- everything else: the remote UI, served by the daemon itself --------
+	# With `WARSHA_REMOTE_ASSETS_DIR` set in the daemon's environment, warshad
+	# serves the built `apps/remote` bundle from its HTTP listener: the bundle's
+	# files, an SPA history fallback to `index.html` for client routes like
+	# `/runs/<id>`, and 404 for paths with no file behind them. The daemon
+	# refuses traversal out of the bundle directory and never answers `/rpc`,
+	# `/events*` or `/health*` from static serving.
+	handle {
+		reverse_proxy warshad:8765
+	}
+
+	encode gzip zstd
+}

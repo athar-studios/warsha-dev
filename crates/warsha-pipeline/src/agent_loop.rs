@@ -35,17 +35,18 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use warsha_core::Role;
 use warsha_providers::{ChatMessage, ChatRequest, MessageRole, ProviderError, ProviderRouter};
 
 use crate::agent_tools::{AgentTool, NoToolExecutor, ToolExecutor, ToolResult};
 use crate::agent_workflow::{
-    AgentMode, AgentWorkflowError, AskUserQueue, ContextCompactor, Mention, MentionParser,
-    MessageBus, ModeManager, ModeTransition, OutputCompressor, SlashCommand, SlashCommandRegistry,
-    TodoItem, TodoList, TodoStatus,
+    AgentMode, AgentWorkflowError, AskUserQueue, AskUserRequest, CompressedOutput,
+    ContextCompactor, Mention, MentionKind, MentionParser, MessageBus, ModeManager, ModeTransition,
+    OutputCompressor, SlashCommand, SlashCommandRegistry, TodoItem, TodoList, TodoStatus,
 };
 use crate::backend_kit::BackendKit;
+use crate::mcp_permission::{McpPermissionSource, ToolPermission, MCP_AGENT_ROLE};
 use crate::mcp_transport::{McpManager, McpTransportError};
 
 /// The transcript budget a turn is compacted to, in estimated tokens.
@@ -176,7 +177,15 @@ impl Router for ProviderRouterAdapter {
             stream: false,
         };
 
-        let mut providers = self.providers.write().await;
+        // A handle to the router, not a lock held through the call (audit N-3): the
+        // adapter's turn is exactly the path where a retry sleep used to sit in front of
+        // every other `providers.*` request and every other agent turn. The spend ledger,
+        // the routing and the paid-call semaphore are shared with the router the daemon
+        // holds, so an agent turn is metered and bounded like a pipeline stage.
+        let providers = {
+            let router = self.providers.read().await;
+            (*router).clone()
+        };
         let response = providers
             .chat_with_fallback(self.role, &self.project_id, request)
             .await?;
@@ -241,15 +250,56 @@ pub struct AgentLoop {
     /// Head/tail compression for tool output, held as the loop's tool.
     pub compressor: OutputCompressor,
     /// The file and command layer an Agent-mode tool request runs through.
-    pub tool_executor: Box<dyn ToolExecutor>,
+    pub tool_executor: Arc<dyn ToolExecutor>,
     /// The model call an Agent-mode turn makes. `None` means the response says so.
     pub router: Option<Arc<dyn Router>>,
     /// The MCP manager handling tool calls.
     pub mcp_manager: Option<Arc<dyn McpManager>>,
+    /// The `server::tool::role` permission table consulted before every call.
+    /// `None` asks on every call; it never means allow.
+    pub mcp_permissions: Option<Arc<dyn McpPermissionSource>>,
     /// The backend kit updated on backend tool mutations.
     pub backend_kit: Option<Arc<RwLock<BackendKit>>>,
+    /// The gate that keeps two turns of this conversation from interleaving.
+    ///
+    /// The daemon runs a turn in three phases — prepare under the loop's write
+    /// lock, execute without it, finish under it again — so the loop's `RwLock`
+    /// no longer covers a whole turn. This mutex is what preserves the one-turn-
+    /// at-a-time rule across that gap: a second turn waits from prepare through
+    /// finish, and a mode switch cannot land in the middle of one. It is an
+    /// `Arc` so a caller can take the gate out from under the `RwLock` and hold
+    /// it across execution without holding the state lock.
+    turn_lock: Arc<Mutex<()>>,
     /// The transcript the compactor works on, oldest first.
     context: Vec<String>,
+}
+
+/// Captured state for one turn so tool/model execution can proceed without
+/// holding any lock on [`AgentLoop`].
+pub struct PreparedTurn {
+    input: String,
+    mode: AgentMode,
+    mentions: Vec<Mention>,
+    command: Option<SlashCommand>,
+    requested: Option<String>,
+    todo: Option<String>,
+    plan_response: Option<String>,
+    tool_executor: Arc<dyn ToolExecutor>,
+    router: Option<Arc<dyn Router>>,
+    mcp_manager: Option<Arc<dyn McpManager>>,
+    mcp_permissions: Option<Arc<dyn McpPermissionSource>>,
+    backend_kit: Option<Arc<RwLock<BackendKit>>>,
+}
+
+/// Completed execution output ready to be committed to [`AgentLoop`].
+pub struct ExecutedTurn {
+    input: String,
+    mode: AgentMode,
+    mentions: Vec<Mention>,
+    command: Option<SlashCommand>,
+    response: String,
+    questions: Vec<AskUserRequest>,
+    tools: Vec<ToolResult>,
 }
 
 impl AgentLoop {
@@ -266,6 +316,11 @@ impl AgentLoop {
     ///
     /// [`AgentLoop::with_router`] adds the model call.
     pub fn with_tool_executor(tool_executor: Box<dyn ToolExecutor>) -> Self {
+        Self::with_shared_tool_executor(Arc::from(tool_executor))
+    }
+
+    /// A loop whose tool requests run through a shared `tool_executor`.
+    pub fn with_shared_tool_executor(tool_executor: Arc<dyn ToolExecutor>) -> Self {
         Self {
             mode_manager: ModeManager::new(),
             todo_list: TodoList::new(),
@@ -276,9 +331,21 @@ impl AgentLoop {
             tool_executor,
             router: None,
             mcp_manager: None,
+            mcp_permissions: None,
             backend_kit: None,
+            turn_lock: Arc::new(Mutex::new(())),
             context: Vec::new(),
         }
+    }
+
+    /// The gate every turn of this conversation is serialized by.
+    ///
+    /// Taken before [`AgentLoop::prepare_turn`] and released after
+    /// [`AgentLoop::finish_turn`]; see the `turn_lock` field. Cloning it lets a
+    /// caller hold the gate across a phased turn without holding the loop's own
+    /// lock, which is what keeps `agent.state` answerable while a command runs.
+    pub fn turn_lock(&self) -> Arc<Mutex<()>> {
+        Arc::clone(&self.turn_lock)
     }
 
     /// The same loop with the model call wired.
@@ -290,6 +357,15 @@ impl AgentLoop {
     /// The same loop with the MCP manager wired.
     pub fn with_mcp(mut self, mcp: Arc<dyn McpManager>) -> Self {
         self.mcp_manager = Some(mcp);
+        self
+    }
+
+    /// The same loop with the MCP permission table wired.
+    ///
+    /// A loop with no source wired asks on every call; wiring one is the only way
+    /// an agent-initiated tool can reach the transport.
+    pub fn with_mcp_permissions(mut self, permissions: Arc<dyn McpPermissionSource>) -> Self {
+        self.mcp_permissions = Some(permissions);
         self
     }
 
@@ -343,6 +419,14 @@ impl AgentLoop {
     /// router for an answer; a Plan-mode turn and a tool turn both complete
     /// without waiting on anything.
     pub async fn run_turn(&mut self, input: &str, skills: &[SlashCommand]) -> AgentTurnResult {
+        let prepared = self.prepare_turn(input, skills);
+        let executed = prepared.execute().await;
+        self.finish_turn(executed)
+    }
+
+    /// Prepare a turn under the loop's lock, extracting mentions, commands,
+    /// and recording the initial todo before any tool or model execution begins.
+    pub fn prepare_turn(&mut self, input: &str, skills: &[SlashCommand]) -> PreparedTurn {
         let mentions = MentionParser::parse(input);
         let requested = requested_command(input);
         let command = requested.as_deref().and_then(|name| {
@@ -352,30 +436,68 @@ impl AgentLoop {
         });
         let mode = self.mode_manager.current;
 
-        let (response, tools) = match mode {
-            AgentMode::Plan => (
-                self.plan_response(input, &mentions, command.as_ref(), requested.as_deref()),
-                Vec::new(),
-            ),
-            AgentMode::Agent => {
-                self.execute_turn(input, &mentions, command.as_ref(), requested.as_deref())
-                    .await
+        match mode {
+            AgentMode::Plan => {
+                let response =
+                    self.plan_response(input, &mentions, command.as_ref(), requested.as_deref());
+                PreparedTurn {
+                    input: input.to_string(),
+                    mode,
+                    mentions,
+                    command,
+                    requested,
+                    todo: None,
+                    plan_response: Some(response),
+                    tool_executor: self.tool_executor.clone(),
+                    router: self.router.clone(),
+                    mcp_manager: self.mcp_manager.clone(),
+                    mcp_permissions: self.mcp_permissions.clone(),
+                    backend_kit: self.backend_kit.clone(),
+                }
             }
-        };
+            AgentMode::Agent => {
+                let todo = self.record_todo(
+                    format!("execute the turn: {}", first_line(input)),
+                    TodoStatus::Done,
+                );
+                PreparedTurn {
+                    input: input.to_string(),
+                    mode,
+                    mentions,
+                    command,
+                    requested,
+                    todo,
+                    plan_response: None,
+                    tool_executor: self.tool_executor.clone(),
+                    router: self.router.clone(),
+                    mcp_manager: self.mcp_manager.clone(),
+                    mcp_permissions: self.mcp_permissions.clone(),
+                    backend_kit: self.backend_kit.clone(),
+                }
+            }
+        }
+    }
 
-        // The transcript is the prompt and the answer of every turn so far, and
-        // the compactor folds the oldest of them away once it passes the budget.
-        self.context.push(format!("user: {}", input.trim()));
-        self.context.push(format!("assistant: {response}"));
+    /// Commit the completed turn to the transcript and compact context.
+    pub fn finish_turn(&mut self, executed: ExecutedTurn) -> AgentTurnResult {
+        self.context
+            .push(format!("user: {}", executed.input.trim()));
+        self.context
+            .push(format!("assistant: {}", executed.response));
         self.context = ContextCompactor::compact(&self.context, TURN_CONTEXT_BUDGET_TOKENS);
+        // Questions are queued under the lock, after execution: the tool path runs
+        // without the loop lock, so it carries them on the `ExecutedTurn`.
+        for question in executed.questions {
+            let _ = self.ask_queue.enqueue(question);
+        }
 
         AgentTurnResult {
-            mode,
-            mentions,
-            command,
-            response,
+            mode: executed.mode,
+            mentions: executed.mentions,
+            command: executed.command,
+            response: executed.response,
             todos: self.todo_list.items.clone(),
-            tools,
+            tools: executed.tools,
         }
     }
 
@@ -405,30 +527,45 @@ impl AgentLoop {
         .join("\n")
     }
 
-    /// The Agent-mode answer: run the turn's tool, or ask the model.
+    /// Record the turn's todo and return its id.
     ///
-    /// Returns the response and the tools it ran, so the caller gets both the line
-    /// a human reads and the record a run view shows.
-    async fn execute_turn(
-        &mut self,
-        input: &str,
-        mentions: &[Mention],
-        command: Option<&SlashCommand>,
-        requested: Option<&str>,
-    ) -> (String, Vec<ToolResult>) {
-        let todo = self.record_todo(
-            format!("execute the turn: {}", first_line(input)),
-            TodoStatus::Done,
-        );
+    /// The id is the next free number, so the store's duplicate check cannot fire
+    /// here; if a future caller removes todos and it does, the response says the
+    /// todo was not recorded instead of failing a turn over bookkeeping.
+    fn record_todo(&mut self, description: String, status: TodoStatus) -> Option<String> {
+        let id = format!("turn-{}", self.todo_list.len() + 1);
+        let item = TodoItem::new(id.clone(), description).with_status(status);
+        self.todo_list.add(item).ok().map(|()| id)
+    }
+}
+
+impl PreparedTurn {
+    /// Execute the prepared turn without holding the daemon's `AgentLoop` lock.
+    pub async fn execute(self) -> ExecutedTurn {
+        if let Some(response) = self.plan_response {
+            return ExecutedTurn {
+                input: self.input,
+                mode: self.mode,
+                mentions: self.mentions,
+                command: self.command,
+                response,
+                questions: Vec::new(),
+                tools: Vec::new(),
+            };
+        }
 
         let mut lines = vec![
             String::new(), // the summary line, filled in below
-            format!("- mentions: {}", mention_summary(mentions)),
-            format!("- command: {}", command_summary(command, requested)),
+            format!("- mentions: {}", mention_summary(&self.mentions)),
+            format!(
+                "- command: {}",
+                command_summary(self.command.as_ref(), self.requested.as_deref())
+            ),
         ];
 
         let mut tools = Vec::new();
-        match parse_tool_request(input) {
+        let mut questions: Vec<AskUserRequest> = Vec::new();
+        match parse_tool_request(&self.input) {
             Some(AgentTool::CallTool {
                 server,
                 tool,
@@ -465,106 +602,144 @@ impl AgentLoop {
                                 lines.push("- output:".to_string());
                                 lines.push(format!("  {}", res.output));
                                 tools.push(res);
-                                lines[0] =
-                                    format!("Summary (tool execution): {}", first_line(input));
+                                lines[0] = format!(
+                                    "Summary (tool execution): {}",
+                                    first_line(&self.input)
+                                );
                                 lines.push(format!(
                                     "- todo: {}",
-                                    todo_line(todo.as_deref(), "done")
+                                    todo_line(self.todo.as_deref(), "done")
                                 ));
-                                return (lines.join("\n"), tools);
+                                return ExecutedTurn {
+                                    input: self.input,
+                                    mode: self.mode,
+                                    mentions: self.mentions,
+                                    command: self.command,
+                                    response: lines.join("\n"),
+                                    questions: Vec::new(),
+                                    tools,
+                                };
                             }
                         }
                     };
 
-                    match mcp
-                        .call_tool(&target_server, &tool, arguments.clone())
-                        .await
-                    {
-                        Ok(tool_res) => {
-                            if tool_res.is_error {
-                                let text = tool_res
-                                    .content
-                                    .iter()
-                                    .map(|c| match c {
-                                        crate::mcp::McpContent::Text { text } => text.clone(),
-                                        crate::mcp::McpContent::Image { mime_type, .. } => {
-                                            format!("[image ({mime_type})]")
-                                        }
-                                        crate::mcp::McpContent::Resource { resource } => {
-                                            format!("[resource ({})]", resource.uri)
-                                        }
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join("\n");
-                                let out = if text.is_empty() {
-                                    format!("tool `{tool}` returned an error")
+                    let permission = self
+                        .mcp_permissions
+                        .as_ref()
+                        .map(|source| {
+                            source.check_permission(&target_server, &tool, MCP_AGENT_ROLE)
+                        })
+                        .unwrap_or(ToolPermission::Ask);
+                    match permission {
+                        ToolPermission::Allow => match mcp
+                            .call_tool(&target_server, &tool, arguments.clone())
+                            .await
+                        {
+                            Ok(tool_res) => {
+                                if tool_res.is_error {
+                                    let text = tool_res
+                                        .content
+                                        .iter()
+                                        .map(|c| match c {
+                                            crate::mcp::McpContent::Text { text } => text.clone(),
+                                            crate::mcp::McpContent::Image { mime_type, .. } => {
+                                                format!("[image ({mime_type})]")
+                                            }
+                                            crate::mcp::McpContent::Resource { resource } => {
+                                                format!("[resource ({})]", resource.uri)
+                                            }
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join("\n");
+                                    let out = if text.is_empty() {
+                                        format!("tool `{tool}` returned an error")
+                                    } else {
+                                        text
+                                    };
+                                    ToolResult::failed(call_tool_obj, out)
                                 } else {
-                                    text
-                                };
-                                ToolResult::failed(call_tool_obj, out)
-                            } else {
-                                let text_parts = tool_res
-                                    .content
-                                    .iter()
-                                    .map(|c| match c {
-                                        crate::mcp::McpContent::Text { text } => text.clone(),
-                                        crate::mcp::McpContent::Image { mime_type, .. } => {
-                                            format!("[image ({mime_type})]")
-                                        }
-                                        crate::mcp::McpContent::Resource { resource } => {
-                                            format!("[resource ({})]", resource.uri)
-                                        }
-                                    })
-                                    .collect::<Vec<_>>();
-                                let base_out = if text_parts.is_empty() {
-                                    format!("tool `{tool}` succeeded")
-                                } else {
-                                    text_parts.join("\n")
-                                };
+                                    let text_parts = tool_res
+                                        .content
+                                        .iter()
+                                        .map(|c| match c {
+                                            crate::mcp::McpContent::Text { text } => text.clone(),
+                                            crate::mcp::McpContent::Image { mime_type, .. } => {
+                                                format!("[image ({mime_type})]")
+                                            }
+                                            crate::mcp::McpContent::Resource { resource } => {
+                                                format!("[resource ({})]", resource.uri)
+                                            }
+                                        })
+                                        .collect::<Vec<_>>();
+                                    let base_out = if text_parts.is_empty() {
+                                        format!("tool `{tool}` succeeded")
+                                    } else {
+                                        text_parts.join("\n")
+                                    };
 
-                                let is_backend_mutation = matches!(
-                                    tool.as_str(),
-                                    "create_table"
-                                        | "add_table"
-                                        | "create_rls_policy"
-                                        | "add_rls_policy"
-                                        | "create_storage_bucket"
-                                        | "add_storage_bucket"
-                                        | "create_function"
-                                        | "add_function"
-                                );
-                                if is_backend_mutation {
-                                    if let Some(kit_lock) = &self.backend_kit {
-                                        let mut kit = kit_lock.write().await;
-                                        match kit.apply_tool_call(&tool, &arguments) {
-                                            Ok(msg) => ToolResult::ok(
-                                                call_tool_obj,
-                                                format!("{base_out}\n{msg}").trim().to_string(),
-                                            ),
-                                            Err(e) => ToolResult::failed(
-                                                call_tool_obj,
-                                                format!("backend update failed: {e}"),
-                                            ),
+                                    let is_backend_mutation = matches!(
+                                        tool.as_str(),
+                                        "create_table"
+                                            | "add_table"
+                                            | "create_rls_policy"
+                                            | "add_rls_policy"
+                                            | "create_storage_bucket"
+                                            | "add_storage_bucket"
+                                            | "create_function"
+                                            | "add_function"
+                                    );
+                                    if is_backend_mutation {
+                                        if let Some(kit_lock) = &self.backend_kit {
+                                            let mut kit = kit_lock.write().await;
+                                            match kit.apply_tool_call(&tool, &arguments) {
+                                                Ok(msg) => ToolResult::ok(
+                                                    call_tool_obj,
+                                                    format!("{base_out}\n{msg}").trim().to_string(),
+                                                ),
+                                                Err(e) => ToolResult::failed(
+                                                    call_tool_obj,
+                                                    format!("backend update failed: {e}"),
+                                                ),
+                                            }
+                                        } else {
+                                            ToolResult::ok(call_tool_obj, base_out)
                                         }
                                     } else {
                                         ToolResult::ok(call_tool_obj, base_out)
                                     }
-                                } else {
-                                    ToolResult::ok(call_tool_obj, base_out)
                                 }
                             }
+                            Err(McpTransportError::Timeout { seconds, .. }) => ToolResult::failed(
+                                call_tool_obj,
+                                format!("MCP tool call `{tool}` timed out after {seconds}s"),
+                            ),
+                            Err(McpTransportError::Protocol { problem, .. }) => ToolResult::failed(
+                                call_tool_obj,
+                                format!("MCP protocol error calling `{tool}`: {problem}"),
+                            ),
+                            Err(err) => ToolResult::failed(
+                                call_tool_obj,
+                                format!("MCP tool call `{tool}` failed: {err}"),
+                            ),
+                        },
+                        ToolPermission::Ask => {
+                            questions.push(AskUserRequest::new(
+                                format!("mcp-permission-{target_server}-{tool}"),
+                                format!(
+                                    "Approve the MCP tool `{target_server}::{tool}` for role `{MCP_AGENT_ROLE}`? Grant it with mcp.permissions.set {{ server: \"{target_server}\", tool: \"{tool}\", role: \"{MCP_AGENT_ROLE}\", permission: \"allow\" }}."
+                                ),
+                                true,
+                            ));
+                            ToolResult::failed(
+                                call_tool_obj,
+                                format!(
+                                    "approval required: {target_server}::{tool} is ask by default"
+                                ),
+                            )
                         }
-                        Err(McpTransportError::Timeout { seconds, .. }) => ToolResult::failed(
+                        ToolPermission::Deny => ToolResult::failed(
                             call_tool_obj,
-                            format!("MCP tool call `{tool}` timed out after {seconds}s"),
-                        ),
-                        Err(McpTransportError::Protocol { problem, .. }) => ToolResult::failed(
-                            call_tool_obj,
-                            format!("MCP protocol error calling `{tool}`: {problem}"),
-                        ),
-                        Err(err) => ToolResult::failed(
-                            call_tool_obj,
-                            format!("MCP tool call `{tool}` failed: {err}"),
+                            format!("denied by MCP permission {target_server}::{tool}"),
                         ),
                     }
                 } else {
@@ -586,10 +761,10 @@ impl AgentLoop {
                     lines.push(format!("  {line}"));
                 }
                 tools.push(result);
-                lines[0] = format!("Summary (tool execution): {}", first_line(input));
+                lines[0] = format!("Summary (tool execution): {}", first_line(&self.input));
             }
             Some(tool) => {
-                let result = self.tool_executor.execute(&tool);
+                let result = self.tool_executor.execute(&tool).await;
                 lines.push(format!(
                     "- tool: {} — {}",
                     result.tool.summary(),
@@ -604,15 +779,20 @@ impl AgentLoop {
                     lines.push(format!("  {line}"));
                 }
                 tools.push(result);
-                lines[0] = format!("Summary (tool execution): {}", first_line(input));
+                lines[0] = format!("Summary (tool execution): {}", first_line(&self.input));
             }
             None => {
-                // The router is cloned out of the loop so the borrow does not sit
-                // across the await; `Arc<dyn Router>` is what the daemon holds too.
                 let router = self.router.clone();
                 let (source, model_line) = match router {
                     Some(router) => {
-                        let prompt = model_prompt(input, mentions, command);
+                        let attachments =
+                            attach_file_mentions_with(&self.tool_executor, &self.mentions).await;
+                        let prompt = model_prompt(
+                            &self.input,
+                            &self.mentions,
+                            self.command.as_ref(),
+                            &attachments,
+                        );
                         match router.complete(&prompt).await {
                             Ok(answer) => {
                                 let answer = OutputCompressor::compress(
@@ -635,24 +815,54 @@ impl AgentLoop {
                 };
                 lines.push("- tool: none".to_string());
                 lines.push(model_line);
-                lines[0] = format!("Summary ({source}): {}", first_line(input));
+                lines[0] = format!("Summary ({source}): {}", first_line(&self.input));
             }
         }
 
-        lines.push(format!("- todo: {}", todo_line(todo.as_deref(), "done")));
-        (lines.join("\n"), tools)
+        lines.push(format!(
+            "- todo: {}",
+            todo_line(self.todo.as_deref(), "done")
+        ));
+        ExecutedTurn {
+            input: self.input,
+            mode: self.mode,
+            mentions: self.mentions,
+            command: self.command,
+            response: lines.join("\n"),
+            questions,
+            tools,
+        }
     }
+}
 
-    /// Record the turn's todo and return its id.
-    ///
-    /// The id is the next free number, so the store's duplicate check cannot fire
-    /// here; if a future caller removes todos and it does, the response says the
-    /// todo was not recorded instead of failing a turn over bookkeeping.
-    fn record_todo(&mut self, description: String, status: TodoStatus) -> Option<String> {
-        let id = format!("turn-{}", self.todo_list.len() + 1);
-        let item = TodoItem::new(id.clone(), description).with_status(status);
-        self.todo_list.add(item).ok().map(|()| id)
+/// Read every `@file` mention through the tool layer for the model prompt.
+async fn attach_file_mentions_with(
+    executor: &Arc<dyn ToolExecutor>,
+    mentions: &[Mention],
+) -> Vec<FileAttachment> {
+    let mut attachments = Vec::new();
+    for mention in mentions {
+        if mention.kind != MentionKind::File {
+            continue;
+        }
+        let result = executor
+            .execute(&AgentTool::ReadFile {
+                path: mention.target.clone(),
+            })
+            .await;
+        if result.success {
+            attachments.push(FileAttachment::Read {
+                path: mention.target.clone(),
+                content: OutputCompressor::compress(&result.output, MAX_TOOL_OUTPUT_LINES),
+            });
+        } else {
+            attachments.push(FileAttachment::Failed {
+                path: mention.target.clone(),
+                reason: result.output,
+            });
+        }
     }
+    attachments
 }
 
 impl Default for AgentLoop {
@@ -707,14 +917,15 @@ const CALL_MCP_PREFIX: &str = "call mcp ";
 ///   so multi-line content needs no quoting; a `write file` with no `:` writes an
 ///   empty file;
 /// - a `run command` turn splits its line on whitespace, with no shell and no
-///   quoting, exactly like the daemon's `process.spawn`;
+///   quoting;
 /// - a `call tool` / `call mcp` turn splits the target (which may be `server/tool`
 ///   or `tool`) and parses trailing JSON arguments, defaulting to `{}`;
 /// - a blank target is not a tool request at all, so `read file ` falls through to
 ///   the model rather than running a tool that cannot work;
 /// - an `@file src/main.rs` mention is *not* a tool request: a mention is context
-///   the loop attaches to the model's prompt ([`Mention`]), and reading it is the
-///   caller's job (PLAN.md M18 records the same limit).
+///   the loop attaches to the model's prompt ([`Mention`]). The loop reads each
+///   file mention through its [`ToolExecutor`] and attaches the compressed
+///   content, so an enforced read-before-write guard records the mention as read.
 fn parse_tool_request(input: &str) -> Option<AgentTool> {
     let trimmed = input.trim();
     let (head, rest_of_input) = match trimmed.split_once('\n') {
@@ -758,12 +969,18 @@ fn parse_tool_request(input: &str) -> Option<AgentTool> {
     }
 
     if let Some(rest) = rest_after_prefix(head, RUN_COMMAND_PREFIX) {
-        let mut parts = rest.split_whitespace();
-        let command = parts.next()?;
-        return Some(AgentTool::RunCommand {
-            command: command.to_string(),
-            args: parts.map(str::to_string).collect(),
-        });
+        let trimmed = rest.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        return match crate::process_spawn::split_command(trimmed) {
+            Ok((command, args)) => Some(AgentTool::RunCommand { command, args }),
+            Err(crate::process_spawn::ProcessError::EmptyCommand) => None,
+            Err(_) => Some(AgentTool::RunCommand {
+                command: trimmed.to_string(),
+                args: Vec::new(),
+            }),
+        };
     }
 
     if let Some(rest) = rest_after_prefix(head, CALL_TOOL_PREFIX)
@@ -840,9 +1057,40 @@ fn trim_quotes(text: &str) -> &str {
     trimmed
 }
 
+/// One `@file` mention the loop read (or tried to read) for the model's prompt.
+///
+/// Reading goes through the loop's [`ToolExecutor`], so a read-before-write guard
+/// records the mention as read; a failed read becomes a note rather than aborting
+/// the turn.
+enum FileAttachment {
+    /// The file was read and compressed to the tool-output line budget.
+    Read {
+        /// The mention's target path.
+        path: String,
+        /// The head/tail-compressed content.
+        content: CompressedOutput,
+    },
+    /// The read failed; the turn continues with a one-line note.
+    Failed {
+        /// The mention's target path.
+        path: String,
+        /// Why the read failed, as the executor reported it.
+        reason: String,
+    },
+}
+
 /// The prompt the router is handed: the instruction, the owner's turn, and what
 /// the loop attached to it.
-fn model_prompt(input: &str, mentions: &[Mention], command: Option<&SlashCommand>) -> String {
+///
+/// Every mention keeps its place on the `attached:` line; a file mention that was
+/// read additionally gets a content block (path, compressed text, and an "N of M
+/// lines shown" note), and one that could not be read gets a one-line note.
+fn model_prompt(
+    input: &str,
+    mentions: &[Mention],
+    command: Option<&SlashCommand>,
+    attachments: &[FileAttachment],
+) -> String {
     let mut lines = vec![
         AGENT_INSTRUCTION.to_string(),
         String::new(),
@@ -851,6 +1099,24 @@ fn model_prompt(input: &str, mentions: &[Mention], command: Option<&SlashCommand
     if !mentions.is_empty() {
         let rendered: Vec<String> = mentions.iter().map(Mention::rendered).collect();
         lines.push(format!("attached: {}", rendered.join(", ")));
+    }
+    for attachment in attachments {
+        match attachment {
+            FileAttachment::Read { path, content } => {
+                lines.push(format!("@file {path}:"));
+                lines.extend(content.text.lines().map(str::to_string));
+                lines.push(format!(
+                    "({} of {} lines shown)",
+                    content.compressed_lines, content.original_lines
+                ));
+            }
+            FileAttachment::Failed { path, reason } => {
+                lines.push(format!(
+                    "could not attach @file {path}: {}",
+                    reason.replace('\n', " ")
+                ));
+            }
+        }
     }
     if let Some(command) = command {
         lines.push(format!("skill: {} — {}", command.name, command.description));
@@ -906,10 +1172,10 @@ mod tests {
     use super::*;
     use crate::agent_tools::FilesystemToolExecutor;
     use crate::agent_workflow::MentionKind;
+    use crate::test_util::fresh_tempdir;
     use async_trait::async_trait;
     use std::path::Path;
     use std::sync::Mutex;
-    use tempfile::tempdir;
     use warsha_core::{RoleRouting, RoutingTarget};
     use warsha_providers::MockProvider;
 
@@ -1016,6 +1282,100 @@ mod tests {
             budget_cents_per_run: None,
         });
         ProviderRouterAdapter::new(Arc::new(RwLock::new(router)), AGENT_ROLE, "agent")
+    }
+
+    /// Audit N-3 on the path an agent turn actually takes.
+    ///
+    /// `ProviderRouterAdapter::complete` used to take the daemon's router **write** guard
+    /// and keep it across every await, so one turn's retry sleep sat in front of every
+    /// other `providers.*` request and every other turn, and the router's paid-call cap
+    /// could not be reached on this path at all. The adapter now takes a handle and
+    /// releases the lock, which is what this test measures the way the finding asked for:
+    /// the lock is free while a turn is backing off, and a second turn is served inside
+    /// that window.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_agent_turn_backing_off_holds_no_router_lock() {
+        use std::sync::atomic::Ordering;
+        use std::time::Duration;
+        use warsha_providers::{MockProvider, RetryPolicy};
+
+        /// Long enough for the test to observe the sleep, short enough to stay a unit test.
+        const BACKOFF: u64 = 400;
+
+        let mut router = ProviderRouter::new();
+        router.set_retry_policy(RetryPolicy {
+            max_retries_per_target: 1,
+            max_total_attempts: 2,
+            base_backoff_ms: BACKOFF,
+            max_backoff_ms: BACKOFF,
+            jitter: false,
+        });
+        // Every attempt is refused retryably, so each walk sleeps once and then gives up.
+        let provider = MockProvider::new("mock").with_retryable_failures(u32::MAX);
+        let calls = provider.call_counter();
+        router.register_provider(Box::new(provider));
+        router.set_role_routing(RoleRouting {
+            role: AGENT_ROLE,
+            targets: vec![RoutingTarget {
+                provider_id: "mock".to_string(),
+                model_id: "mock-model".to_string(),
+                weight: 100,
+            }],
+            fallback_enabled: false,
+            budget_cents_per_run: None,
+        });
+        let router = Arc::new(RwLock::new(router));
+        let adapter = ProviderRouterAdapter::new(Arc::clone(&router), AGENT_ROLE, "agent");
+
+        let first = tokio::spawn(async move { adapter.complete("the first turn").await });
+
+        // Wait until the attempt has actually been made: the turn is now in its sleep.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if calls.load(Ordering::Acquire) > 0 {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the turn reached the router"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        // The write lock is what `providers.add`, `providers.remove` and `roles.set` need.
+        let acquired = tokio::time::timeout(Duration::from_millis(100), router.write()).await;
+        assert!(
+            acquired.is_ok(),
+            "an agent turn held the router's write lock across its backoff sleep"
+        );
+        drop(acquired.expect("the router lock is free"));
+
+        // A second turn is served in the same window rather than queued behind the first,
+        // and it is metered under its own key: neither turn's spend is the other's.
+        let second = ProviderRouterAdapter::new(Arc::clone(&router), AGENT_ROLE, "second");
+        let second_outcome = second.complete("the second turn").await;
+        assert!(
+            second_outcome.is_err(),
+            "the throttled provider answered: {second_outcome:?}"
+        );
+
+        let first_outcome = first.await.expect("the turn finished");
+        assert!(
+            first_outcome.is_err(),
+            "the throttled provider answered the first turn: {first_outcome:?}"
+        );
+        // Two attempts each and no more: the per-call attempt cap survived the change, so
+        // removing the lock did not remove the bound on spend.
+        assert_eq!(calls.load(Ordering::Acquire), 4, "the attempt cap changed");
+
+        // Nothing is left holding a permit, which is what a leak would have shown as.
+        let guard = router.read().await;
+        assert_eq!(guard.paid_calls_in_flight(), 0);
+        assert_eq!(
+            guard.available_paid_permits(),
+            guard.max_concurrent_paid_calls(),
+            "a paid-call permit was not returned"
+        );
     }
 
     #[test]
@@ -1158,7 +1518,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_mode_reads_a_file_through_the_tool_layer() {
-        let temp = tempdir().expect("a temporary directory");
+        let temp = fresh_tempdir();
         std::fs::write(temp.path().join("notes.md"), "the file\n").expect("the file is written");
         let mut agent_loop = tool_loop(temp.path());
 
@@ -1183,7 +1543,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_mode_writes_a_file_through_the_tool_layer() {
-        let temp = tempdir().expect("a temporary directory");
+        let temp = fresh_tempdir();
         let mut agent_loop = tool_loop(temp.path());
 
         let turn = agent_loop
@@ -1208,9 +1568,23 @@ mod tests {
 
     #[tokio::test]
     async fn agent_mode_runs_a_command_through_the_tool_layer() {
-        let temp = tempdir().expect("a temporary directory");
-        let mut agent_loop = tool_loop(temp.path());
+        let temp = fresh_tempdir();
         let (command, args) = printing_command();
+        let mut executor = FilesystemToolExecutor::new(temp.path());
+        #[cfg(windows)]
+        {
+            executor = executor
+                .with_command_policy(crate::CommandPolicy::from_config(&["cmd".to_string()]));
+        }
+        #[cfg(not(windows))]
+        {
+            executor = executor
+                .with_command_policy(crate::CommandPolicy::from_config(&["echo".to_string()]));
+        }
+        let mut agent_loop = AgentLoop::with_tool_executor(Box::new(executor));
+        agent_loop
+            .approve_agent_mode("owner")
+            .expect("an approval is accepted");
         let input = format!(
             "run command {}",
             std::iter::once(command)
@@ -1235,6 +1609,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn agent_mode_refuses_disallowed_run_command_via_tool_layer() {
+        let temp = fresh_tempdir();
+        let mut agent_loop = tool_loop(temp.path());
+
+        let turn = agent_loop
+            .run_turn("run command sh -c id", &catalog())
+            .await;
+
+        assert_eq!(turn.tools.len(), 1);
+        assert!(!turn.tools[0].success);
+        assert!(turn.tools[0].output.contains("refused"));
+        assert!(turn.response.contains("Summary (tool execution):"));
+    }
+
+    #[tokio::test]
     async fn a_tool_request_with_no_executor_wired_reports_that_nothing_ran() {
         let mut agent_loop = approved_loop();
 
@@ -1248,7 +1637,7 @@ mod tests {
 
     #[tokio::test]
     async fn plan_mode_never_runs_a_tool() {
-        let temp = tempdir().expect("a temporary directory");
+        let temp = fresh_tempdir();
         let mut agent_loop =
             AgentLoop::with_tool_executor(Box::new(FilesystemToolExecutor::new(temp.path())));
 
@@ -1489,7 +1878,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_tool_turn_names_its_call_on_the_wire() {
-        let temp = tempdir().expect("a temporary directory");
+        let temp = fresh_tempdir();
         let mut agent_loop = tool_loop(temp.path());
 
         let turn = agent_loop
@@ -1624,6 +2013,16 @@ mod tests {
 
         agent_loop = agent_loop
             .with_mcp(mcp)
+            // This test exercises the backend-kit mutation, not the permission
+            // table: wire one explicit allow so the call reaches the mock.
+            .with_mcp_permissions(Arc::new(
+                crate::mcp_permission::StaticPermissions::from_rows([(
+                    "test_srv".to_string(),
+                    "create_table".to_string(),
+                    crate::mcp_permission::MCP_AGENT_ROLE.to_string(),
+                    crate::mcp_permission::ToolPermission::Allow,
+                )]),
+            ))
             .with_backend_kit(backend_kit.clone());
 
         let turn = agent_loop
@@ -1640,5 +2039,279 @@ mod tests {
         let kit = backend_kit.read().await;
         assert_eq!(kit.tables.len(), 1);
         assert_eq!(kit.tables[0].name, "users");
+    }
+
+    #[tokio::test]
+    async fn a_file_mentions_content_reaches_the_model_prompt() {
+        let temp = fresh_tempdir();
+        std::fs::write(temp.path().join("notes.md"), "alpha\nbeta\n").expect("the file is written");
+        let router = Arc::new(FixedRouter::answering("Read it."));
+        let mut agent_loop = tool_loop(temp.path()).with_router(router.clone());
+
+        let turn = agent_loop
+            .run_turn("summarize @file notes.md", &catalog())
+            .await;
+
+        assert!(turn.response.starts_with("Summary (model completion):"));
+        let prompts = router.prompts();
+        assert_eq!(prompts.len(), 1);
+        assert!(prompts[0].contains("@file notes.md"));
+        assert!(prompts[0].contains("alpha"));
+        assert!(prompts[0].contains("beta"));
+        assert!(prompts[0].contains("(2 of 2 lines shown)"));
+        // Reading a mention is prompt context, not a tool the turn ran.
+        assert!(turn.tools.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_long_file_mention_is_compressed_in_the_prompt() {
+        let temp = fresh_tempdir();
+        let long: String = (1..=200).map(|index| format!("line {index}\n")).collect();
+        std::fs::write(temp.path().join("big.log"), &long).expect("the file is written");
+        let router = Arc::new(FixedRouter::answering("Compressed."));
+        let mut agent_loop = tool_loop(temp.path()).with_router(router.clone());
+
+        agent_loop
+            .run_turn("summarize @file big.log", &catalog())
+            .await;
+
+        let prompts = router.prompts();
+        assert_eq!(prompts.len(), 1);
+        assert!(prompts[0].contains("(12 of 200 lines shown)"));
+        assert!(prompts[0].contains("lines omitted"));
+        // Head and tail survive; the middle was dropped.
+        assert!(prompts[0].contains("line 1\n"));
+        assert!(prompts[0].contains("line 200\n"));
+        assert!(!prompts[0].contains("line 100\n"));
+    }
+
+    #[tokio::test]
+    async fn a_missing_file_mention_notes_the_failure_and_completes_the_turn() {
+        let temp = fresh_tempdir();
+        let router = Arc::new(FixedRouter::answering("Still answered."));
+        let mut agent_loop = tool_loop(temp.path()).with_router(router.clone());
+
+        let turn = agent_loop
+            .run_turn("summarize @file missing.md", &catalog())
+            .await;
+
+        assert!(turn.response.starts_with("Summary (model completion):"));
+        let prompts = router.prompts();
+        assert_eq!(prompts.len(), 1);
+        assert!(prompts[0].contains("could not attach @file missing.md"));
+        assert!(turn.tools.is_empty());
+    }
+
+    #[tokio::test]
+    async fn non_file_mentions_keep_the_attached_line_without_a_read() {
+        let temp = fresh_tempdir();
+        let router = Arc::new(FixedRouter::answering("Overview."));
+        let mut agent_loop = tool_loop(temp.path()).with_router(router.clone());
+
+        agent_loop
+            .run_turn("overview @folder src and @codebase", &catalog())
+            .await;
+
+        let prompts = router.prompts();
+        assert_eq!(prompts.len(), 1);
+        assert!(prompts[0].contains("attached: @folder src, @codebase"));
+        // No file mention means no content block and no failure note.
+        assert!(!prompts[0].contains("could not attach"));
+        assert!(!prompts[0].contains("lines shown"));
+    }
+
+    #[tokio::test]
+    async fn a_file_mention_is_recorded_as_read_for_the_guard() {
+        let temp = fresh_tempdir();
+        std::fs::write(temp.path().join("notes.md"), "original").expect("the file is written");
+        let executor = FilesystemToolExecutor::new(temp.path()).with_read_before_write(true);
+        let router = Arc::new(FixedRouter::answering("Now edit it."));
+        let mut agent_loop = AgentLoop::with_tool_executor(Box::new(executor)).with_router(router);
+        agent_loop
+            .approve_agent_mode("owner")
+            .expect("an approval is accepted");
+
+        // The mention reads the file through the guarded executor...
+        agent_loop
+            .run_turn("look at @file notes.md", &catalog())
+            .await;
+        // ...so a later write turn to the same path is allowed.
+        let turn = agent_loop
+            .run_turn("write file notes.md: updated", &catalog())
+            .await;
+
+        assert_eq!(turn.tools.len(), 1);
+        assert!(
+            turn.tools[0].success,
+            "the guarded write was refused: {:?}",
+            turn.tools[0]
+        );
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("notes.md")).expect("the file is readable"),
+            "updated"
+        );
+    }
+
+    /// The MCP permission check at the call site (KEEL K6.1): deny and ask never
+    /// reach the transport, allow calls exactly once, and no source means ask.
+    mod mcp_permission {
+        use super::*;
+        use crate::mcp_permission::{StaticPermissions, ToolPermission, MCP_AGENT_ROLE};
+
+        #[derive(Default)]
+        struct RecordingMcp {
+            calls: std::sync::Mutex<Vec<(String, String, serde_json::Value)>>,
+        }
+
+        impl RecordingMcp {
+            fn calls(&self) -> Vec<(String, String, serde_json::Value)> {
+                self.calls.lock().expect("the recording lock").clone()
+            }
+        }
+
+        #[async_trait]
+        impl McpManager for RecordingMcp {
+            async fn connect(
+                &self,
+                _config: crate::mcp_transport::McpServerConfig,
+            ) -> Result<(), McpTransportError> {
+                Ok(())
+            }
+            async fn disconnect(&self, _name: &str) -> Result<(), McpTransportError> {
+                Ok(())
+            }
+            async fn list(&self) -> Vec<crate::mcp_transport::McpConnection> {
+                vec![crate::mcp_transport::McpConnection {
+                    config: crate::mcp_transport::McpServerConfig {
+                        name: "test_srv".to_string(),
+                        transport: crate::mcp_transport::McpTransport::Stdio,
+                        command: Some("dummy".to_string()),
+                        args: vec![],
+                    },
+                    status: crate::mcp_transport::McpStatus::Connected,
+                    process_id: Some("p1".to_string()),
+                    tools: vec!["echo".to_string()],
+                    tool_definitions: vec![],
+                }]
+            }
+            async fn send(&self, _name: &str, _payload: &str) -> Result<String, McpTransportError> {
+                Ok(String::new())
+            }
+            async fn call_tool(
+                &self,
+                name: &str,
+                tool: &str,
+                arguments: serde_json::Value,
+            ) -> Result<crate::mcp::McpToolResult, McpTransportError> {
+                self.calls.lock().expect("the recording lock").push((
+                    name.to_string(),
+                    tool.to_string(),
+                    arguments,
+                ));
+                Ok(crate::mcp::McpToolResult {
+                    content: vec![crate::mcp::McpContent::Text {
+                        text: "ok".to_string(),
+                    }],
+                    is_error: false,
+                })
+            }
+        }
+
+        fn call(server: Option<&str>) -> String {
+            match server {
+                Some(server) => format!("call mcp {server}/echo {{\"msg\":\"hi\"}}"),
+                None => "call tool echo {\"msg\":\"hi\"}".to_string(),
+            }
+        }
+
+        #[tokio::test]
+        async fn deny_never_reaches_the_transport() {
+            let table = StaticPermissions::new();
+            table.set("test_srv", "echo", MCP_AGENT_ROLE, ToolPermission::Deny);
+            let mcp = Arc::new(RecordingMcp::default());
+            let mut agent_loop = approved_loop()
+                .with_mcp(mcp.clone())
+                .with_mcp_permissions(Arc::new(table));
+            let turn = agent_loop
+                .run_turn(&call(Some("test_srv")), &catalog())
+                .await;
+            assert!(!turn.tools[0].success);
+            assert!(turn.tools[0].output.contains("denied by MCP permission"));
+            assert!(
+                mcp.calls().is_empty(),
+                "a denied call reached the transport"
+            );
+            assert!(agent_loop.ask_queue.is_empty(), "deny must not ask");
+        }
+
+        #[tokio::test]
+        async fn ask_queues_one_question_and_never_reaches_the_transport() {
+            let table = StaticPermissions::new();
+            let mcp = Arc::new(RecordingMcp::default());
+            let mut agent_loop = approved_loop()
+                .with_mcp(mcp.clone())
+                .with_mcp_permissions(Arc::new(table));
+            let turn = agent_loop
+                .run_turn(&call(Some("test_srv")), &catalog())
+                .await;
+            assert!(!turn.tools[0].success);
+            assert!(turn.tools[0].output.contains("approval required"));
+            assert!(mcp.calls().is_empty(), "an ask reached the transport");
+            assert_eq!(agent_loop.ask_queue.len(), 1);
+            let question = &agent_loop.ask_queue.pending()[0];
+            assert!(question.question.contains("test_srv::echo"));
+            assert!(question.question.contains("mcp.permissions.set"));
+        }
+
+        #[tokio::test]
+        async fn allow_calls_the_transport_exactly_once() {
+            let table = StaticPermissions::new();
+            table.set("test_srv", "echo", MCP_AGENT_ROLE, ToolPermission::Allow);
+            let mcp = Arc::new(RecordingMcp::default());
+            let mut agent_loop = approved_loop()
+                .with_mcp(mcp.clone())
+                .with_mcp_permissions(Arc::new(table));
+            let turn = agent_loop
+                .run_turn(&call(Some("test_srv")), &catalog())
+                .await;
+            assert!(turn.tools[0].success);
+            let calls = mcp.calls();
+            assert_eq!(calls.len(), 1, "allow did not call exactly once");
+            assert_eq!(calls[0].0, "test_srv");
+            assert_eq!(calls[0].1, "echo");
+            assert_eq!(calls[0].2["msg"], serde_json::json!("hi"));
+        }
+
+        #[tokio::test]
+        async fn a_loop_with_no_source_asks() {
+            let mcp = Arc::new(RecordingMcp::default());
+            let mut agent_loop = approved_loop().with_mcp(mcp.clone());
+            let turn = agent_loop
+                .run_turn(&call(Some("test_srv")), &catalog())
+                .await;
+            assert!(!turn.tools[0].success);
+            assert!(
+                mcp.calls().is_empty(),
+                "a loop with no source reached the transport"
+            );
+            assert_eq!(agent_loop.ask_queue.len(), 1);
+        }
+
+        #[tokio::test]
+        async fn auto_discovery_checks_the_resolved_server() {
+            let table = StaticPermissions::new();
+            table.set("test_srv", "echo", MCP_AGENT_ROLE, ToolPermission::Deny);
+            let mcp = Arc::new(RecordingMcp::default());
+            let mut agent_loop = approved_loop()
+                .with_mcp(mcp.clone())
+                .with_mcp_permissions(Arc::new(table));
+            // No server named: the loop resolves test_srv by advertising the tool.
+            let turn = agent_loop.run_turn(&call(None), &catalog()).await;
+            assert!(!turn.tools[0].success);
+            assert!(
+                mcp.calls().is_empty(),
+                "the auto-discovered call reached the transport"
+            );
+        }
     }
 }

@@ -31,8 +31,8 @@ use std::time::Duration;
 
 use chrono::Utc;
 use serde_json::json;
-use tempfile::tempdir;
-use tokio::sync::{broadcast, RwLock};
+use tempfile::TempDir;
+use tokio::sync::RwLock;
 use warsha_backends::BackendFactory;
 use warsha_core::{
     Artifact, CredentialsRef, DeviceId, Event, EventKind, GateState, Role, RoleRouting,
@@ -41,9 +41,9 @@ use warsha_core::{
 use warsha_pipeline::{
     AgentLoop, AgentMode, AskUserRequest, FilesystemToolExecutor, InMemoryCrashReportStore,
     InMemoryMcpManager, InMemoryPairingStore, InMemoryPreferenceStore, InMemoryProcessManager,
-    InMemoryStoreReviewStore, LivePreviewManager, McpManager, MockRoutineRunner, PipelineEngine,
-    ProcessManager, ProviderRouterAdapter, RoutineRegistry, RoutineRunner, RoutineScheduler,
-    RunMode, RunModeConfig, AGENT_ROLE,
+    InMemoryStoreReviewStore, LivePreviewManager, McpManager, PipelineEngine, ProcessManager,
+    ProviderRouterAdapter, RoutineRegistry, RoutineRunner, RoutineScheduler, RunMode,
+    RunModeConfig, UnavailableRoutineRunner, AGENT_ROLE,
 };
 use warsha_providers::{
     AnthropicProvider, ChatMessage, ChatProvider, ChatRequest, InMemorySecretStore, MessageRole,
@@ -103,6 +103,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+
+# Standalone: the scratch data dir can sit inside another workspace (the
+# daemon's fresh_tempdir lives under the repo's target dir), and cargo refuses
+# a package that is inside a workspace that does not list it as a member.
+[workspace]
 
 --- FILE: src/lib.rs ---
 //! Dental clinic appointment booking core domain and validation.
@@ -580,6 +585,34 @@ impl RealOrMockProvider {
 
 static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// A fresh temp directory for the daemon's data tree.
+///
+/// Prefers cargo's `CARGO_TARGET_TMPDIR`, then a `tmp` sibling of the test
+/// binary's `deps` directory (the target dir is writable wherever the build
+/// ran), and only then the system temp dir — which on some Windows machines is
+/// protected and rejects even creating a tempdir (`Access is denied`).
+fn fresh_tempdir() -> TempDir {
+    if let Some(base) = std::env::var_os("CARGO_TARGET_TMPDIR") {
+        let base = PathBuf::from(base);
+        if base.is_dir() {
+            if let Ok(dir) = TempDir::new_in(&base) {
+                return dir;
+            }
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(deps) = exe.parent() {
+            let base = deps.join("tmp");
+            if std::fs::create_dir_all(&base).is_ok() {
+                if let Ok(dir) = TempDir::new_in(&base) {
+                    return dir;
+                }
+            }
+        }
+    }
+    TempDir::new().expect("tempdir for the daemon data dir")
+}
+
 #[tokio::test]
 async fn e2e_real_arabic_request_clinic_flow() {
     let _env_guard = ENV_LOCK.lock().await;
@@ -591,15 +624,21 @@ async fn e2e_real_arabic_request_clinic_flow() {
     let is_real_model = matches!(provider_mode, RealOrMockProvider::Real { .. });
 
     // ---- 2. Setup: temporary directories, daemon state, RPC.
-    let temp = tempdir().expect("temporary directory");
+    let temp = fresh_tempdir();
     let data_dir = temp.path().join("data");
     let project_dir = temp.path().join(PACKAGE_NAME);
     let state = daemon_state(&data_dir, provider_mode).await;
     let rpc = WarshaRpc::new(state.clone());
+    // The session a request arrives with. Over the wire the transport builds it
+    // from the bearer credential; in-process, these extensions are that session,
+    // and `owner` is the device the daemon records a decision against.
+    let owner = DeviceId::new();
+    let ext = warshad::owner_session(owner);
 
     // ---- 3. Create project from Arabic prompt: "تطبيق حجز مواعيد لعيادة أسنان".
     let project = rpc
         .create_project(
+            &ext,
             PACKAGE_NAME.to_string(),
             ARABIC_REQUEST.to_string(),
             "ar".to_string(),
@@ -610,7 +649,7 @@ async fn e2e_real_arabic_request_clinic_flow() {
     assert_eq!(project.description, ARABIC_REQUEST);
 
     let run = rpc
-        .start_run(project.id, ARABIC_REQUEST.to_string())
+        .start_run(&ext, project.id, ARABIC_REQUEST.to_string())
         .await
         .expect("runs.start succeeds");
     assert_eq!(run.current_stage, Stage::Idea);
@@ -621,7 +660,7 @@ async fn e2e_real_arabic_request_clinic_flow() {
 
     // Initial event is logged
     let events = rpc
-        .get_events(run.id)
+        .get_events(&ext, run.id)
         .await
         .expect("the run's events are readable");
     assert_eq!(events.len(), 1);
@@ -679,21 +718,21 @@ async fn e2e_real_arabic_request_clinic_flow() {
     assert_eq!(approval.from, AgentMode::Plan);
     assert_eq!(approval.to, AgentMode::Agent);
 
+    // ---- 6. Pipeline stages walk and cost accounting.
+    let engine = state.pipeline.clone();
+    let run = engine.advance_stage(run.id).await.expect("Idea -> Gate A");
+    assert_eq!(run.current_stage, Stage::GateA);
+
     // Owner approves Gate A (brief approval)
-    let device = DeviceId::new();
+    let device = owner;
     let run = rpc
-        .approve_gate(run.id, Stage::GateA, device)
+        .approve_gate(&ext, run.id, Stage::GateA, Some(device))
         .await
         .expect("Gate A approves");
     assert!(matches!(
         run.gate_states[&Stage::GateA],
         GateState::Approved { .. }
     ));
-
-    // ---- 6. Pipeline stages walk and cost accounting.
-    let engine = state.pipeline.clone();
-    let run = engine.advance_stage(run.id).await.expect("Idea -> Gate A");
-    assert_eq!(run.current_stage, Stage::GateA);
 
     let run = engine
         .advance_stage(run.id)
@@ -714,7 +753,7 @@ async fn e2e_real_arabic_request_clinic_flow() {
     assert_eq!(run.current_stage, Stage::GateB);
 
     let run = rpc
-        .approve_gate(run.id, Stage::GateB, device)
+        .approve_gate(&ext, run.id, Stage::GateB, Some(device))
         .await
         .expect("Gate B approves");
     assert!(matches!(
@@ -948,10 +987,13 @@ async fn e2e_real_arabic_request_clinic_flow() {
     );
 
     // ---- 13. Event log persists and reads back with gate approvals.
-    let stored_run = rpc.get_run(run.id).await.expect("run is readable");
+    let stored_run = rpc.get_run(&ext, run.id).await.expect("run is readable");
     assert_eq!(stored_run.current_stage, Stage::ReviewQaSecurity);
 
-    let all_events = rpc.get_events(run.id).await.expect("events are readable");
+    let all_events = rpc
+        .get_events(&ext, run.id)
+        .await
+        .expect("events are readable");
     let decisions: Vec<&Event> = all_events
         .iter()
         .filter(|e| e.kind == EventKind::GateDecision)
@@ -1056,18 +1098,16 @@ async fn daemon_state(data_dir: &Path, provider_mode: RealOrMockProvider) -> Arc
     }
 
     let providers = Arc::new(RwLock::new(router));
-    let pipeline = Arc::new(PipelineEngine::new(store.clone(), providers.clone()));
-
-    let identity = DeviceIdentity::generate("arabic e2e daemon".to_string()).expect("device id");
-    let (event_tx, _receiver) = broadcast::channel::<Event>(64);
-    let processes: Arc<dyn ProcessManager> = InMemoryProcessManager::shared();
-    let mcp: Arc<dyn McpManager> = Arc::new(InMemoryMcpManager::new(processes.clone()));
-    let previews = Arc::new(LivePreviewManager::new(processes.clone()));
     let settings = Arc::new(
         SettingsStore::open(&data_dir.join("warsha.db"))
             .await
             .expect("settings open"),
     );
+    let pipeline = Arc::new(PipelineEngine::new(
+        store.clone(),
+        providers.clone(),
+        settings.clone(),
+    ));
 
     // Agent loop with tools and router
     let agent_tools = FilesystemToolExecutor::new(data_dir.join("workspace"));
@@ -1077,8 +1117,16 @@ async fn daemon_state(data_dir: &Path, provider_mode: RealOrMockProvider) -> Arc
     ));
 
     let routines = Arc::new(RwLock::new(RoutineRegistry::new()));
-    let routine_runner: Arc<dyn RoutineRunner + Send + Sync> = Arc::new(MockRoutineRunner::new());
+    let routine_runner: Arc<dyn RoutineRunner + Send + Sync> =
+        Arc::new(UnavailableRoutineRunner::new());
     let routine_scheduler = Arc::new(RoutineScheduler::new(routines.clone(), routine_runner));
+
+    let identity = DeviceIdentity::generate("arabic e2e daemon".to_string()).expect("device id");
+    let processes: Arc<dyn ProcessManager> = InMemoryProcessManager::shared();
+    let mcp: Arc<dyn McpManager> = Arc::new(InMemoryMcpManager::new(processes.clone()));
+    let previews = Arc::new(LivePreviewManager::new(processes.clone()));
+
+    let local_device = identity.device_id;
 
     Arc::new(DaemonState {
         config: DaemonConfig {
@@ -1092,11 +1140,13 @@ async fn daemon_state(data_dir: &Path, provider_mode: RealOrMockProvider) -> Arc
         backends: BackendFactory::all_available(),
         github: None,
         devices: Arc::new(DeviceRegistry::new(identity)),
-        event_tx,
         backend_kits: Arc::new(RwLock::new(HashMap::new())),
         crash_reports: Arc::new(RwLock::new(InMemoryCrashReportStore::new())),
         store_reviews: Arc::new(RwLock::new(InMemoryStoreReviewStore::new())),
         agent_loop,
+        mcp_permissions: Arc::new(warsha_pipeline::StaticPermissions::new()),
+        run_worktrees: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        agent_sessions: Arc::new(warsha_pipeline::RunAgentSessions::new()),
         processes,
         mcp,
         previews,
@@ -1113,6 +1163,18 @@ async fn daemon_state(data_dir: &Path, provider_mode: RealOrMockProvider) -> Arc
         secrets: Arc::new(InMemorySecretStore::new()),
         routines,
         routine_scheduler,
+        sessions: Arc::new(warshad::Sessions::new("e2e-arabic-token", local_device)),
+        rates: Arc::new(warshad::RateGovernor::default()),
+        role_routings: Arc::new(RwLock::new(HashMap::new())),
+        // The offline factory. This test's provider is chosen by `RealOrMockProvider`
+        // and registered on its own router; nothing here goes through `providers.add`.
+        provider_factory: Arc::new(warshad::MockProviderFactory::new()),
+        // Hand-built state: no listener has bound a pairing origin, so a pairing
+        // link would be refused rather than invented — exactly as documented.
+        pairing_origin: std::sync::OnceLock::new(),
+        // A hand-built state has no background pump draining the store bus, so this
+        // sequencer simply starts empty; direct RPC calls read the store, not this.
+        events: std::sync::Arc::new(warshad::EventSequencer::new()),
     })
 }
 
@@ -1238,12 +1300,20 @@ impl CommandRun {
 
 async fn run_cargo(project_dir: &Path, args: &[&str]) -> Result<CommandRun, String> {
     let program = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    // The Windows linker stages `lnk*.tmp` in the system temp directory, which on
+    // some machines is protected and rejects even creating them (`Access is denied`)
+    // — the same failure `fresh_tempdir` works around. Pin TMP/TEMP inside the project.
+    let scratch_tmp = project_dir.join(".tmp");
+    std::fs::create_dir_all(&scratch_tmp)
+        .map_err(|error| format!("could not make {}: {error}", scratch_tmp.display()))?;
     let output = tokio::process::Command::new(&program)
         .current_dir(project_dir)
         .arg("--offline")
         .args(args)
         .env("CARGO_TARGET_DIR", project_dir.join("target"))
         .env("CARGO_NET_OFFLINE", "true")
+        .env("TMP", &scratch_tmp)
+        .env("TEMP", &scratch_tmp)
         .stdin(std::process::Stdio::null())
         .output()
         .await

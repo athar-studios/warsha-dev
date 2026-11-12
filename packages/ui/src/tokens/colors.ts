@@ -31,7 +31,15 @@ export const colorTokens = {
   /** Primary text. */
   text: { light: '#111827', dark: '#f5f5f5' },
   /** Secondary text: captions, hints, metadata. */
-  textMuted: { light: '#6b7280', dark: '#a3a3a3' },
+  /**
+   * Secondary copy — the quietest colour a word may be painted in.
+   *
+   * B4 moved the light value one step down the same grey ramp (`#6b7280` → `#4b5563`) after axe measured
+   * `text-muted` on a recessed bench plate at 4.39:1: the compounds paint an unselected control-group
+   * label, a stream line and a terminal hint on that plate, so §9's "worst allowed text colour" had to
+   * clear 4.5:1 *there*, not only on `surface`. The dark value already cleared it on both.
+   */
+  textMuted: { light: '#4b5563', dark: '#a3a3a3' },
   /** Hairline borders and dividers. */
   border: { light: '#e5e7eb', dark: '#2e2e2e' },
   /** Borders that must be seen: inputs, dashed empty states, focused rings. */
@@ -53,6 +61,20 @@ export const colorTokens = {
   error: { light: '#b42318', dark: '#f85149' },
   /** Disabled text, empty-state glyphs, the quietest readable foreground. */
   muted: { light: '#9ca3af', dark: '#737373' },
+  /**
+   * The overlay behind a dialog or the gate bell: `bg` at 55% alpha (DS v2 §4.2), so the bench frosts
+   * on the day shift and dims on the night shift. Non-text; `contrast.test.ts` composites it over `bg`.
+   */
+  scrim: { light: '#fafafa8c', dark: '#0e0e0e8c' },
+  /**
+   * Status tints: the status colour over `surface` at 6% light / 10% dark (DS v2 §4.2), stored as
+   * opaque hex so the contrast gate can measure them. Ink on its own tint clears 4.5:1 in both themes.
+   */
+  successTint: { light: '#f1f7f3', dark: '#1b271d' },
+  warningTint: { light: '#fbf5f0', dark: '#2a2418' },
+  errorTint: { light: '#fbf2f1', dark: '#2e1d1c' },
+  /** A lamp surface: only where `signal-wash` would go, when an opaque fill is required (§4.2). */
+  accentTint: { light: '#fffdf0', dark: '#2e2a16' },
 } as const;
 
 /** The name of a colour token. */

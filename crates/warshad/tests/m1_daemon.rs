@@ -8,10 +8,39 @@
 use reqwest::Client;
 use reqwest::StatusCode;
 use serde_json::json;
-use tempfile::tempdir;
+use std::path::PathBuf;
+use tempfile::TempDir;
 use warshad::{start_daemon, DaemonConfig, DaemonError};
 
 const TEST_TOKEN: &str = "test-auth-token-12345";
+
+/// A fresh temp directory for one daemon's data dir.
+///
+/// Prefers cargo's `CARGO_TARGET_TMPDIR`, then a `tmp` sibling of the test
+/// binary's `deps` directory (the target dir is writable wherever the build
+/// ran), and only then the system temp dir — which on some Windows machines is
+/// protected and rejects even creating a tempdir (`Access is denied`).
+fn fresh_tempdir() -> TempDir {
+    if let Some(base) = std::env::var_os("CARGO_TARGET_TMPDIR") {
+        let base = PathBuf::from(base);
+        if base.is_dir() {
+            if let Ok(dir) = TempDir::new_in(&base) {
+                return dir;
+            }
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(deps) = exe.parent() {
+            let base = deps.join("tmp");
+            if std::fs::create_dir_all(&base).is_ok() {
+                if let Ok(dir) = TempDir::new_in(&base) {
+                    return dir;
+                }
+            }
+        }
+    }
+    TempDir::new().expect("tempdir for the daemon data dir")
+}
 
 /// Build a test client with the given auth token.
 fn client_with_token(token: &str) -> Client {
@@ -83,7 +112,7 @@ async fn http_get(client: &Client, http_port: u16, path: &str) -> reqwest::Respo
 
 #[tokio::test]
 async fn restart_survives_with_state_intact() {
-    let dir = tempdir().expect("tempdir");
+    let dir = fresh_tempdir();
     let data_dir = dir.path().to_path_buf();
     let db_path = data_dir.join("warsha.db");
 
@@ -94,6 +123,9 @@ async fn restart_survives_with_state_intact() {
         ws_port: 0,
         auth_token: TEST_TOKEN.to_string(),
         allowed_origins: vec!["http://localhost:5173".to_string()],
+        // The daemon's own ceilings and command policy: a test that wants to see a
+        // refusal names its own.
+        ..DaemonConfig::default()
     };
 
     // First daemon instance
@@ -176,7 +208,7 @@ async fn restart_survives_with_state_intact() {
 
 #[tokio::test]
 async fn unauthenticated_calls_are_rejected() {
-    let dir = tempdir().expect("tempdir");
+    let dir = fresh_tempdir();
     let config = DaemonConfig {
         data_dir: dir.path().to_path_buf(),
         socket_path: dir.path().join("warshad.sock"),
@@ -184,6 +216,9 @@ async fn unauthenticated_calls_are_rejected() {
         ws_port: 0,
         auth_token: TEST_TOKEN.to_string(),
         allowed_origins: vec!["http://localhost:5173".to_string()],
+        // The daemon's own ceilings and command policy: a test that wants to see a
+        // refusal names its own.
+        ..DaemonConfig::default()
     };
 
     let handle = start_daemon(config).await.expect("start_daemon");
@@ -195,15 +230,16 @@ async fn unauthenticated_calls_are_rejected() {
     let health = http_get(&no_auth, http_port, "/health").await;
     assert_eq!(health.status(), StatusCode::OK);
 
-    // 2. GET /events without auth -> 200 with error body (observed current middleware behaviour)
-    // Note: the axum middleware returns 200 + JSON {"error":"unauthorized"} rather than 401.
-    // This is a pre-existing behaviour; the middleware rejects the request by returning an
-    // error body instead of upgrading to WebSocket. A stronger rejection would be 401.
+    // 2. GET /events without auth -> 401.
+    // The middleware used to answer 200 + `{"error":"unauthorized"}` — a refusal a
+    // client could only find by reading the body, and one that any proxy or retry
+    // policy would treat as a success. It now answers the status the refusal means
+    // (security audit H-01/H-04: the credential is checked and answered honestly).
     let events = http_get(&no_auth, http_port, "/events").await;
     assert_eq!(
         events.status(),
-        StatusCode::OK,
-        "/events without auth returns 200 (observed)"
+        StatusCode::UNAUTHORIZED,
+        "/events without auth must answer 401"
     );
     let body = events
         .json::<serde_json::Value>()
@@ -267,7 +303,7 @@ async fn unauthenticated_calls_are_rejected() {
 
 #[tokio::test]
 async fn second_instance_is_locked_out() {
-    let dir = tempdir().expect("tempdir");
+    let dir = fresh_tempdir();
     let data_dir = dir.path().to_path_buf();
 
     let config = DaemonConfig {
@@ -277,6 +313,9 @@ async fn second_instance_is_locked_out() {
         ws_port: 0,
         auth_token: TEST_TOKEN.to_string(),
         allowed_origins: vec!["http://localhost:5173".to_string()],
+        // The daemon's own ceilings and command policy: a test that wants to see a
+        // refusal names its own.
+        ..DaemonConfig::default()
     };
 
     // First instance

@@ -3,7 +3,7 @@
 use clap::Parser;
 use std::path::Path;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use warsha_cli::{Cli, CliApp, DaemonConfig};
+use warsha_cli::{no_token_message, Cli, CliApp, CliLang, DaemonConfig};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -17,20 +17,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cli = Cli::parse();
 
-    // Load auth token from config.toml or CLI override
+    // Load auth token and device id from config.toml or CLI overrides
     let token = load_token(&cli)?;
+    let device_id = load_device_id(&cli);
 
     // Handle daemon subcommand specially (runs in-process)
     if matches!(cli.command, warsha_cli::Commands::Daemon(_)) {
-        let app = CliApp::new(cli.url.clone(), token, cli.json)?;
+        let app =
+            CliApp::new(cli.url.clone(), token, cli.json)?.with_device_id(device_id.clone())?;
         app.run(cli).await?;
         return Ok(());
     }
 
     // For all other commands, connect to daemon
-    let app = CliApp::new(cli.url.clone(), token, cli.json)?;
+    let app = CliApp::new(cli.url.clone(), token, cli.json)?.with_device_id(device_id)?;
     app.run(cli).await?;
     Ok(())
+}
+
+/// The CLI-only device id: `--device-id`, else the `device_id` key in `config.toml`.
+fn load_device_id(cli: &Cli) -> Option<String> {
+    let config_path = cli.config.clone().unwrap_or_else(|| {
+        dirs::config_dir()
+            .map(|d| d.join("warsha").join("config.toml"))
+            .unwrap_or_else(|| Path::new(".").join("warsha").join("config.toml"))
+    });
+    warsha_cli::resolve_device_id(cli.device_id.as_deref(), &config_path)
 }
 
 fn load_token(cli: &Cli) -> Result<String, Box<dyn std::error::Error>> {
@@ -55,9 +67,6 @@ fn load_token(cli: &Cli) -> Result<String, Box<dyn std::error::Error>> {
     }
 
     // No token found
-    Err(format!(
-        "No auth token found. Run 'warsha init' first or provide --token. Config path: {}",
-        config_path.display()
-    )
-    .into())
+    let lang = CliLang::from_process_locale(cli.json);
+    Err(no_token_message(lang, &config_path.display().to_string()).into())
 }

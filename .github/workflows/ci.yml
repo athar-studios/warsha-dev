@@ -2,9 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -13,7 +14,9 @@ env:
 
 jobs:
   # ============================================================
-  # Rust: fmt, clippy, test, cargo-deny, gitleaks
+  # Rust: fmt, clippy, test, cargo-deny
+  # (the secret scan is its own job, `secret-scan`, below — it needs full git
+  # history and one pinned binary, not three OS legs running the same scan)
   # ============================================================
   rust:
     name: Rust (${{ matrix.os }})
@@ -50,24 +53,218 @@ jobs:
         run: |
           brew install sqlite3 pkg-config
 
+      # --------------------------------------------------------------------
+      # cargo-deny: pinned prebuilt binary + a plain shell step, on every OS.
+      #
+      # EmbarkStudios/cargo-deny-action@v1 is a Docker container action (its
+      # action.yml is `runs: using: "docker", image: "Dockerfile"`), and BOTH
+      # run-41752421903 failures were properties of that container, not of our
+      # dependencies:
+      #   - macOS: "Container action is only supported on Linux" — the leg never
+      #     reached cargo-deny at all.
+      #   - ubuntu: "failed to parse lock file at: /github/workspace/Cargo.lock",
+      #     and the same from `cargo metadata` — the image's own cargo predates
+      #     lock format `version = 4` (Cargo.lock:3), which needs cargo >= 1.78.
+      #     Our repo's lock is v4 because it is written by cargo 1.99.
+      # A normal step uses the runner's own modern cargo for the metadata fetch,
+      # so all three legs behave identically and any failure left is about our
+      # graph. There is no continue-on-error here, and none was added: a finding
+      # fails the leg.
+      #
+      # Mechanism: prebuilt release asset rather than `cargo install cargo-deny
+      # --locked`. The install would compile cargo-deny's whole dependency graph
+      # from source on all three legs on every cache miss (minutes each, and on
+      # Windows it additionally needs a working MSVC link step), whereas the
+      # assets are the exact bytes the maintainers published and are
+      # checksum-verifiable. Pinned to 0.20.2 and asserted after extraction, so
+      # the pin is provable and not just a tag name.
+      #
+      # Each sha256 below is the release's own published
+      # cargo-deny-0.20.2-<triple>.tar.gz.sha256 sidecar, re-verified on
+      # 2026-11-04 by downloading all five assets and hashing them (the Windows
+      # sidecar is uppercase hex; the values stored here are lowercase so the
+      # comparison needs no case folding). `uname` drives the triple so the same
+      # step covers x86_64 and arm64 on each OS, and an unsupported triple fails
+      # loudly instead of silently skipping the gate.
+      - name: Install cargo-deny 0.20.2 (pinned, checksum-verified)
+        shell: bash
+        env:
+          CARGO_DENY_VERSION: 0.20.2
+        run: |
+          set -euo pipefail
+          case "$(uname -s)" in
+            Linux) os_tag="unknown-linux-musl" ;;
+            Darwin) os_tag="apple-darwin" ;;
+            MINGW*|MSYS*|CYGWIN*) os_tag="pc-windows-msvc" ;;
+            *)
+              echo "::error::cargo-deny: unsupported kernel '$(uname -s)'"
+              exit 1
+              ;;
+          esac
+          case "$(uname -m)" in
+            x86_64|amd64) arch_tag="x86_64" ;;
+            arm64|aarch64) arch_tag="aarch64" ;;
+            *)
+              echo "::error::cargo-deny: unsupported architecture '$(uname -m)'"
+              exit 1
+              ;;
+          esac
+          target="${arch_tag}-${os_tag}"
+          case "${target}" in
+            x86_64-unknown-linux-musl)
+              expected_sha="9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f"
+              ;;
+            aarch64-unknown-linux-musl)
+              expected_sha="995c82be0defc7a025cae49a2aa2644ce8245c9a3318fc4103907c6a285e8c7d"
+              ;;
+            x86_64-apple-darwin)
+              expected_sha="248da7f581724e470071990c088ffc55c811981715f4cbdb258621fb79f8b7a6"
+              ;;
+            aarch64-apple-darwin)
+              expected_sha="fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3"
+              ;;
+            x86_64-pc-windows-msvc)
+              expected_sha="975a22143262fd27476d19ee00c7af67978426e40e1dee94eed6bbade1cf87dc"
+              ;;
+            *)
+              echo "::error::cargo-deny ${CARGO_DENY_VERSION} publishes no prebuilt asset for ${target}"
+              exit 1
+              ;;
+          esac
+          asset="cargo-deny-${CARGO_DENY_VERSION}-${target}.tar.gz"
+          archive="${RUNNER_TEMP}/${asset}"
+          curl -sSfL --retry 3 -o "${archive}" \
+            "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/${asset}"
+          # sha256sum on Linux and on Git-for-Windows (MSYS coreutils); macOS
+          # ships no sha256sum but does ship shasum. Anything else fails the leg.
+          if command -v sha256sum >/dev/null 2>&1; then
+            checksum_verify=(sha256sum --check)
+          elif command -v shasum >/dev/null 2>&1; then
+            checksum_verify=(shasum -a 256 --check)
+          else
+            echo "::error::cargo-deny: neither sha256sum nor shasum found on ${target}"
+            exit 1
+          fi
+          # Let the tool compare the digest itself, exactly as the green
+          # `Secret scan (gitleaks)` leg does. Parsing stdout is not an option on
+          # Windows: RUNNER_TEMP is a backslash path (`D:\a\_temp`) and BOTH
+          # sha256sum and shasum escape an output line whose file name contains a
+          # backslash, prefixing the DIGEST with `\`. Reproduced locally:
+          #   sha256sum 'd\f.txt' | cut -d' ' -f1
+          #   -> \eb3a5fb11d4b50febbbb25d373c55fe6bdcc760640a18ce3c01e3f92ab4ef7be
+          # That is run 41924821106's `got \975a2..., expected 975a2...` — the two
+          # digests were equal, so the string compare could never succeed.
+          printf '%s  %s\n' "${expected_sha}" "${archive}" | "${checksum_verify[@]}" || {
+            echo "::error::${asset} checksum mismatch against pinned ${expected_sha} for ${target}"
+            exit 1
+          }
+          bindir="${HOME}/.cargo-deny-bin"
+          rm -rf "${bindir}"
+          mkdir -p "${bindir}"
+          # Each asset wraps one top-level directory, so strip it: the unix
+          # assets carry `cargo-deny`, the Windows one carries `cargo-deny.exe`.
+          tar -xzf "${archive}" -C "${bindir}" --strip-components=1
+          chmod +x "${bindir}/cargo-deny"*
+          if [ -x "${bindir}/cargo-deny" ]; then
+            deny_bin="${bindir}/cargo-deny"
+          else
+            deny_bin="${bindir}/cargo-deny.exe"
+          fi
+          # Prove the pinned artifact is what actually runs before trusting it.
+          case "$("${deny_bin}" --version)" in
+            *"${CARGO_DENY_VERSION}"*) ;;
+            *)
+              echo "::error::expected cargo-deny ${CARGO_DENY_VERSION}, got: $("${deny_bin}" --version)"
+              exit 1
+              ;;
+          esac
+          echo "cargo-deny ${CARGO_DENY_VERSION} installed for ${target} from a checksum-verified asset"
+          echo "${bindir}" >> "${GITHUB_PATH}"
+
+      # `--all-features` is kept because it is what the old action passed by
+      # default (its `arguments` input defaults to it), so the fetched graph is
+      # unchanged; it also matches deny.toml's evidence, which was collected with
+      # and without it and is identical either way (579 packages, 17 license terms).
+      - name: Run cargo-deny
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo deny --manifest-path Cargo.toml --all-features check
+
       - name: Check formatting
         run: cargo fmt --all --check
 
       - name: Run clippy
-        run: cargo clippy -D warnings --workspace --all-targets
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Run tests
         run: cargo test --workspace --all-targets
 
-      - name: Run cargo-deny
-        uses: EmbarkStudios/cargo-deny-action@v1
+  # ============================================================
+  # Secret scan: gitleaks, pinned binary, the repo's own config, hard-fail
+  # ============================================================
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # fetch-depth: 0 is part of the gate, not a nicety: gitleaks' default scan
+      # walks commit history (`30 commits scanned` locally), so a shallow checkout
+      # would quietly shrink the scanned set to the tip while still printing
+      # "no leaks found" and exiting 0.
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
         with:
-          command: check
+          fetch-depth: 0
 
-      - name: Run gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        with:
-          config: .gitleaks.toml
+      # Pinned binary, not gitleaks/gitleaks-action@v2. The action requires a
+      # GITLEAKS_LICENSE env var for org repositories and this org has not set that
+      # secret, so the action step fails on the runner before any scan runs. The
+      # documented alternative stays available to the owner: once GITLEAKS_LICENSE is
+      # set, `uses: gitleaks/gitleaks-action@v2` with `config: .gitleaks.toml` can
+      # replace the two steps below. Nothing here weakens the scan — same version,
+      # same config, same history, and it still exits non-zero on a finding.
+      #
+      # 8.30.1 is the exact version .gitleaks.toml was repaired and re-validated
+      # against. The sha256 below is the linux_x64 asset of the v8.30.1 release,
+      # taken from the release's own gitleaks_8.30.1_checksums.txt; the download fails
+      # the step if the asset does not match it, so the pin is not just a tag name.
+      - name: Install gitleaks 8.30.1 (pinned, checksum-verified)
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          set -euo pipefail
+          curl -sSfL --retry 3 -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum --check --status
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          test "$(/tmp/gitleaks version)" = "${GITLEAKS_VERSION}"
+
+      # The config is named explicitly AND asserted first, because the default ruleset
+      # is not equivalent: measured on 8.30.1, a planted `sk-` + 48-alphanumeric key in
+      # a scratch dir exits 1 (leak) with --config .gitleaks.toml and exits 0 ("no leaks
+      # found") with no config at all — the repo's warsha-* rule ids exist precisely to
+      # escape [extend] useDefault shadowing, alongside the RE2-anchored allowlist paths
+      # and generic-secret's secretGroup=2. `--config` with a path that does not exist
+      # is fatal rather than ignored (measured: FTL "unable to load gitleaks config",
+      # exit 1), and a malformed rule fails at config load, so no config trouble can
+      # quietly downgrade this scan to defaults. `test -s` makes a moved or emptied
+      # .gitleaks.toml fail before the scanner even starts.
+      #
+      # Nothing here can pass by doing nothing: `--exit-code 1` is stated explicitly,
+      # `set -euo pipefail` aborts on any non-zero, there is no continue-on-error, and a
+      # finding fails this job — which the summary job requires.
+      - name: Scan for secrets (fails on any finding)
+        run: |
+          set -euo pipefail
+          test -s .gitleaks.toml
+          /tmp/gitleaks detect \
+            --source . \
+            --config .gitleaks.toml \
+            --no-banner \
+            --redact \
+            --exit-code 1
 
   # ============================================================
   # TypeScript: lint, typecheck, test, build
@@ -80,10 +277,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ONE source of truth for the pnpm version: package.json's
+      # `"packageManager": "pnpm@9.0.0"` (package.json:41). pnpm/action-setup@v4
+      # reads that field when the `version` input is absent, and REFUSES to run
+      # when both are given and differ ("Multiple versions of pnpm specified") —
+      # which is what killed this job at Setup pnpm in run 41752421903, taking
+      # lint, typecheck, the e2e/arch/policy/wire checks, visual and build with it.
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
           run_install: false
 
       - name: Setup Node.js
@@ -104,6 +306,19 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      # apps/desktop/e2e/harness.ts — the 1609-line stub daemon every desktop visual, layout and a11y
+      # case drives, and the RPC_METHODS table the wire-contract step below reads — sits outside
+      # apps/desktop/tsconfig.json's `include`, so the typecheck above never opened it. It goes through
+      # its own tsconfig.e2e.json rather than a widened `include`, because tsconfig.json is the app BUILD
+      # config (`build: tsc && vite build`) and e2e/ in it would typecheck the Playwright specs on every
+      # release build and pull @playwright/test and axe-core types into the app's program. desktop's
+      # `typecheck` script runs both configs, so `pnpm typecheck` covers it too; this step names it here
+      # because #51 is exactly a verification no CI job ran. It cannot pass vacuously: harness.ts is in
+      # that config's `files`, so a moved or renamed harness is TS6053 rather than an empty program.
+      # Covers the e2e type half only — desktop's `lint` is still `eslint src`.
+      - name: Typecheck the e2e harness
+        run: pnpm --dir apps/desktop exec tsc --noEmit -p tsconfig.e2e.json
+
       # docs/ARCH_RULES.md, enforced by scripts/check-arch.mjs. Runs before Test because a
       # boundary breach should fail fast, and runs its own fixture self-test first so a silently
       # broken rule can never report a clean tree.
@@ -112,16 +327,61 @@ jobs:
           node scripts/check-arch.mjs --self-test
           node scripts/check-arch.mjs
 
+      # ENGINEERING_POLICY.md, enforced by scripts/check-engineering-policy.mjs (AGENTS.md mandates this
+      # validator for every policy/process change and calls it `pnpm policy`): the policy doc's own
+      # lifecycle sections and phase headings, the operating terms (worktree isolation, machine-readable
+      # gates, bounded repair, the run/v1 state schema), its provenance statement, AGENTS.md's reference
+      # to the doc and to this command, and the scripts.policy entry. Self-test first, the same contract
+      # as the two steps around it: these checks are substring matches over two markdown files, so a
+      # validator that silently matched nothing would otherwise certify the policy as intact.
+      - name: Engineering policy
+        run: |
+          node scripts/check-engineering-policy.mjs --self-test
+          node scripts/check-engineering-policy.mjs
+
+      # docs/ARCH_RULES.md R7, enforced by scripts/check-wire-contract.mjs: the daemon's registered
+      # methods, auth.rs's policy table, the names @warsha/client can put on the wire and the
+      # e2e harness stub table must be one contract, not four. This exists because 836 visual
+      # cases passed while nine stubbed RPC names answered -32601 on a real daemon and the app
+      # could not create its first project (DECISIONS.md 2026-11-03, #25/#40). Self-test first,
+      # same contract as the step above: a parser that silently matches nothing must never be
+      # able to report this tree clean. The #25/#40 drift is CLOSED, not deferred: the script ships
+      # REQUIRE_NO_KNOWN_DRIFT = true with both deferral sets (KNOWN_UNREGISTERED_METHODS,
+      # KNOWN_PARAM_DRIFT_METHODS) empty, so that flag escalates instead of suppressing — every client
+      # name, every harness stub and every params object is checked strictly today, and a known-drift
+      # shape replanted would fail this step. The two sets remain only as the documented one-edit escape
+      # hatch, and `--report-only-known` prints nothing while they are empty.
+      - name: Wire contract
+        run: |
+          node scripts/check-wire-contract.mjs --self-test
+          node scripts/check-wire-contract.mjs
+
       - name: Test
         run: pnpm -r test
 
       # The visual suite starts both dev servers itself (playwright.config.ts webServer), screenshots
-      # all 56 desktop cases plus the remote smoke check against the baselines committed beside them,
-      # and fails on any layout invariant or pixel diff. The browsers are the same Linux chromium the
-      # baselines were generated with, so the comparison is exact.
+      # all 512 desktop cases — the 308 in screens.visual.spec.ts (23 screens and wizard states × the
+      # widths §10 gives each of them × ar/en × light/dark) plus the 204 §7-state cases in states.spec.ts
+      # (17 states × 3 widths × ar/en × light/dark) — and the 84 remote PWA cases, each against the
+      # baseline committed beside it, and fails on any layout invariant or pixel diff. The browsers are
+      # the same Linux chromium the baselines were generated with, so the comparison is exact.
       - name: Install Playwright browsers
         run: pnpm exec playwright install --with-deps chromium
 
+      # The baselines beside apps/desktop/e2e/*.spec.ts-snapshots were captured on a Linux host that has
+      # IBM Plex installed, and the token stacks lead with it while the app bundles no font bytes. On a
+      # bare ubuntu-latest image every case would fall through to a substitute face and fail on metrics
+      # instead of on a design change. This puts the same nine pinned OFL faces on the runner and refuses
+      # to continue unless fc-match resolves them from those files, so the pixel compare below is
+      # measuring the design rather than a fallback. See bridge-io/audit/visual.md §1 and finding #10.
+      - name: Install capture fonts
+        run: bash scripts/ci/install-capture-fonts.sh
+
+      # The AA mode is part of the same reproducibility contract as the faces: the baselines carry
+      # LCD-subpixel text, and playwright.config.ts launches chromium with FONTCONFIG_FILE pointed at
+      # scripts/ci/capture-fontconfig.conf, which pins antialias/rgba/hinting/hintstyle/lcdfilter after
+      # the host's own fontconfig chain. Without that pin this job would render grayscale AA and every
+      # light-theme case would fail on text AA alone (DECISIONS.md 2026-11-03, B4 gates lane need (a)).
       - name: Visual regression
         run: pnpm visual
 
@@ -146,6 +406,46 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # The two Build steps below invoke tools this job never installed. That is
+      # what run 41752421903 proved for the JS/TS leg: `Build (TypeScript)` died
+      # with exit 127, "command not found", because no pnpm/node setup step
+      # existed in this job, so `pnpm install --frozen-lockfile` resolved to
+      # nothing. The `Build (Rust)` step carried the same defect in principle, but
+      # in that run the workspace still compiled, so it passed and the rust leg
+      # instead failed at `Perform CodeQL Analysis`; run 41924821106 reached
+      # `Build (Rust)` at all only once the setup steps below existed.
+      #
+      # That earlier rust-leg failure was NOT a toolchain or YAML problem, and it
+      # is still there: `Initialize CodeQL` succeeds, then the result upload is
+      # rejected with "Advanced Security must be enabled for this repository to
+      # use code scanning" and the job status becomes `configuration error`. Same
+      # message in both language legs. It is an owner-level repository setting,
+      # so fixing the Rust compile errors will not by itself turn CodeQL green.
+      #
+      # Approach taken: keep the explicit build (no `Autobuild repo`) and give
+      # each leg the same setup the TypeScript job uses — same actions, same
+      # order, same packageManager-only version source. Autobuild would have used
+      # corepack and hidden which pnpm/node the trap is analysed against; the
+      # explicit steps pin it to node 20 + pnpm@9.0.0 exactly as the job that
+      # lints, typechecks and builds this same tree does. pnpm setup stays BEFORE
+      # setup-node, because setup-node's `cache: 'pnpm'` needs pnpm resolvable.
+      - name: Setup pnpm (javascript-typescript)
+        if: matrix.language == 'javascript-typescript'
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node.js (javascript-typescript)
+        if: matrix.language == 'javascript-typescript'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Install Rust toolchain (rust)
+        if: matrix.language == 'rust'
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
@@ -160,7 +460,18 @@ jobs:
         if: matrix.language == 'javascript-typescript'
         run: |
           pnpm install --frozen-lockfile
-          pnpm build
+          # Scope down instead of installing mdBook here. Run 41924821106 died in
+          # this step with `docs build: sh: 1: mdbook: not found` / ENOENT: `pnpm
+          # build` is `pnpm -r run build`, the `docs` project builds the mdBook
+          # site, and only the `TypeScript` leg installs mdbook. Adding the install
+          # here would make a JavaScript/TypeScript analysis compile mdBook's whole
+          # Rust dependency graph to emit HTML that cannot add one trap to the
+          # database, so the site is excluded instead. `@warsha/docs` is the only
+          # project dropped — the six TypeScript packages still build, and the
+          # `TypeScript` leg keeps the unfiltered `pnpm build`, so nothing got
+          # weaker. Excluding by name, rather than listing the six, means a new TS
+          # package is traced by default instead of silently escaping CodeQL.
+          pnpm -r --filter '!@warsha/docs' run build
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
@@ -177,8 +488,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # `uses: rhysd/actionlint@v1` was here and could never run: that repository
+      # publishes no action.yml, so there is no action metadata for the runner to
+      # resolve (verified: HTTP 404 for raw action.yml on both `main` and the `v1` ref).
+      # The job failed at setup, which the summary job correctly turned red — the fix is
+      # the documented container form, not an action reference. docs/usage.md, "Use
+      # actionlint on GitHub Actions", shows `uses: docker://rhysd/actionlint:<tag>`
+      # directly after actions/checkout, and its "Docker image" section documents
+      # versioned tags ("actionlint:1.7.12") — so the tag below is pinned to the exact
+      # version installed on this dev host. The image also ships shellcheck and pyflakes,
+      # which this host lacks, so the container lints the run: blocks too.
+      #
+      # Registry: Docker Hub, not ghcr.io. The docs never mention ghcr and an anonymous
+      # ghcr pull of rhysd/actionlint from this host answers DENIED (403) — unprovable.
+      # The Docker Hub tag is measured real: hub.docker.com/v2/repositories/rhysd/
+      # actionlint/tags/1.7.12 returns linux/amd64 + linux/arm64 manifests, and
+      # ubuntu-latest is amd64. Pinning a tag the pull cannot resolve would only install
+      # a second way for this job to be unable to run.
+      #
+      # A container step's non-zero exit fails the job; continue-on-error is stated as
+      # false explicitly rather than left to the default, because a lint job that cannot
+      # run must never read as a pass.
       - name: Run actionlint
-        uses: rhysd/actionlint@v1
+        continue-on-error: false
+        uses: docker://rhysd/actionlint:1.7.12
 
   # ============================================================
   # Summary
@@ -186,7 +519,7 @@ jobs:
   summary:
     name: Summary
     runs-on: ubuntu-latest
-    needs: [rust, typescript, codeql, actionlint]
+    needs: [rust, typescript, codeql, actionlint, secret-scan]
     if: always()
     steps:
       - name: Check all jobs passed
@@ -195,4 +528,5 @@ jobs:
           if [[ "${{ needs.typescript.result }}" != "success" ]]; then echo "TypeScript failed"; exit 1; fi
           if [[ "${{ needs.codeql.result }}" != "success" ]]; then echo "CodeQL failed"; exit 1; fi
           if [[ "${{ needs.actionlint.result }}" != "success" ]]; then echo "Actionlint failed"; exit 1; fi
+          if [[ "${{ needs.secret-scan.result }}" != "success" ]]; then echo "Secret scan failed"; exit 1; fi
           echo "All checks passed!"

@@ -18,6 +18,7 @@ use sqlx::{Row, SqlitePool};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use thiserror::Error;
+use tokio::sync::broadcast;
 use tracing::info;
 use ulid::Ulid;
 use uuid::Uuid;
@@ -29,7 +30,8 @@ use warsha_core::{
 mod persistence;
 
 pub use persistence::{
-    SqliteStore, StoredBackendKit, StoredPairing, StoredPreference, StoredProvider, StoredRunMode,
+    SqliteStore, StoredBackendKit, StoredCustomModel, StoredHarness, StoredIntegration,
+    StoredPairing, StoredPlugin, StoredPreference, StoredProvider, StoredRunMode, StoredSkill,
 };
 
 /// Errors raised by the persistence layer.
@@ -56,6 +58,13 @@ pub enum StoreError {
     /// Run lookup miss.
     #[error("run not found: {0}")]
     RunNotFound(RunId),
+    /// Optimistic concurrency conflict: the run was modified concurrently.
+    #[error("version conflict on run {run_id}: expected version {expected}, actual {actual}")]
+    VersionConflict {
+        run_id: RunId,
+        expected: u64,
+        actual: u64,
+    },
     /// Gate lookup miss.
     #[error("gate not found: {0}")]
     GateNotFound(Ulid),
@@ -164,10 +173,23 @@ pub struct CostRecord {
 }
 
 /// Thin wrapper around a SQLite connection pool.
+///
+/// The store also owns the live event bus: every [`Store::append_event`] that
+/// commits publishes the same [`Event`] on it. Producers reach the stream
+/// through the write, never beside it, so no caller can persist an event and
+/// forget to broadcast it.
 pub struct Store {
     pool: SqlitePool,
     db_path: PathBuf,
+    event_tx: broadcast::Sender<Event>,
 }
+
+/// How many events a subscriber may fall behind before the bus drops its oldest.
+///
+/// One burst of a full run's stage output is well under this; the number bounds
+/// what a slow socket costs the daemon in buffered events, not what a run may
+/// produce.
+const EVENT_BUS_CAPACITY: usize = 1024;
 
 impl Store {
     /// Open (creating if necessary) the default database beneath the user's config dir.
@@ -199,15 +221,73 @@ impl Store {
             .foreign_keys(true);
         let pool = SqlitePoolOptions::new().connect_with(options).await?;
         Self::run_migrations(&pool).await?;
-        Ok(Self { pool, db_path })
+        // The bus outlives every subscriber: the receiver here is deliberately
+        // dropped, so `send` reports "no receivers" while nobody is watching —
+        // which is the normal case, not an error.
+        let (event_tx, _rx) = broadcast::channel(EVENT_BUS_CAPACITY);
+        Ok(Self {
+            pool,
+            db_path,
+            event_tx,
+        })
     }
 
     async fn run_migrations(pool: &SqlitePool) -> Result<()> {
-        sqlx::migrate!("./migrations")
+        let mut migrator = sqlx::migrate!("./migrations");
+        // Version 5 (`005_pairing_expiry.sql`) is the settings schema's migration:
+        // `pairing_devices`, the table it alters, is created and owned by
+        // `persistence::SqliteStore`, not by these migrations. Applying it here would
+        // fail on a fresh database (no table) and on a daemon database where the
+        // settings store already added the column (duplicate column), so this
+        // migrator deliberately leaves it to `SqliteStore::migrate`.
+        migrator
+            .migrations
+            .to_mut()
+            .retain(|migration| migration.version != 5);
+        migrator
             .run(pool)
             .await
             .map_err(|e| StoreError::Migration(e.to_string()))?;
         Ok(())
+    }
+
+    /// Upsert one MCP permission row (`server`, `tool`, `role`).
+    ///
+    /// The permission string is validated again by the table's CHECK constraint;
+    /// the daemon rejects anything but `allow`/`ask`/`deny` before this call.
+    pub async fn set_mcp_permission(
+        &self,
+        server: &str,
+        tool: &str,
+        role: &str,
+        permission: &str,
+        updated_at: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO mcp_permissions (server, tool, role, permission, updated_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(server, tool, role)
+             DO UPDATE SET permission = excluded.permission, updated_at = excluded.updated_at",
+        )
+        .bind(server)
+        .bind(tool)
+        .bind(role)
+        .bind(permission)
+        .bind(updated_at)
+        .execute(self.pool())
+        .await?;
+        Ok(())
+    }
+
+    /// Every stored MCP permission row, in key order.
+    pub async fn load_mcp_permissions(&self) -> Result<Vec<(String, String, String, String)>> {
+        let rows = sqlx::query_as::<_, (String, String, String, String)>(
+            "SELECT server, tool, role, permission FROM mcp_permissions
+             ORDER BY server, tool, role",
+        )
+        .fetch_all(self.pool())
+        .await?;
+        Ok(rows)
     }
 
     /// Borrow the underlying pool.
@@ -218,6 +298,14 @@ impl Store {
     /// Path of the database file backing this store.
     pub fn db_path(&self) -> &PathBuf {
         &self.db_path
+    }
+
+    /// Attach to the live event bus: every event this store commits after the
+    /// call arrives on the returned receiver. A fresh receiver starts empty;
+    /// events committed before the call are read with [`Store::get_events`],
+    /// not replayed here.
+    pub fn subscribe_events(&self) -> broadcast::Receiver<Event> {
+        self.event_tx.subscribe()
     }
 
     // ---------------------------------------------------------------- projects
@@ -290,8 +378,8 @@ impl Store {
     pub async fn create_run(&self, run: &Run) -> Result<()> {
         sqlx::query(
             "INSERT INTO runs (id, project_id, current_stage, gate_states, artifacts, \
-             created_at, updated_at, status, budget_cents, spent_cents) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             created_at, updated_at, status, budget_cents, spent_cents, version) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
         )
         .bind(run.id.0.to_string())
         .bind(run.project_id.0.as_bytes().to_vec())
@@ -310,22 +398,40 @@ impl Store {
 
     /// Fetch a run by id.
     pub async fn get_run(&self, id: RunId) -> Result<Run> {
+        let (run, _version) = self.get_run_versioned(id).await?;
+        Ok(run)
+    }
+
+    /// Fetch a run by id along with its current optimistic concurrency version.
+    pub async fn get_run_versioned(&self, id: RunId) -> Result<(Run, u64)> {
         let row = sqlx::query(
             "SELECT id, project_id, current_stage, gate_states, artifacts, created_at, \
-             updated_at, status, budget_cents, spent_cents FROM runs WHERE id = ?",
+             updated_at, status, budget_cents, spent_cents, version FROM runs WHERE id = ?",
         )
         .bind(id.0.to_string())
         .fetch_optional(&self.pool)
         .await?
         .ok_or(StoreError::RunNotFound(id))?;
-        run_from_row(&row)
+        let run = run_from_row(&row)?;
+        let version = column_int(&row, "version")?.unsigned_abs();
+        Ok((run, version))
     }
 
-    /// Update a run's mutable fields.
+    /// Fetch a run's current optimistic concurrency version.
+    pub async fn get_run_version(&self, id: RunId) -> Result<u64> {
+        let row = sqlx::query("SELECT version FROM runs WHERE id = ?")
+            .bind(id.0.to_string())
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or(StoreError::RunNotFound(id))?;
+        Ok(column_int(&row, "version")?.unsigned_abs())
+    }
+
+    /// Update a run's mutable fields, bumping its version.
     pub async fn update_run(&self, run: &Run) -> Result<()> {
-        sqlx::query(
+        let outcome = sqlx::query(
             "UPDATE runs SET current_stage = ?, gate_states = ?, artifacts = ?, updated_at = ?, \
-             status = ?, budget_cents = ?, spent_cents = ? WHERE id = ?",
+             status = ?, budget_cents = ?, spent_cents = ?, version = version + 1 WHERE id = ?",
         )
         .bind(serde_json::to_string(&run.current_stage)?)
         .bind(serde_json::to_string(&run.gate_states)?)
@@ -337,14 +443,52 @@ impl Store {
         .bind(run.id.0.to_string())
         .execute(&self.pool)
         .await?;
+        if outcome.rows_affected() == 0 {
+            return Err(StoreError::RunNotFound(run.id));
+        }
         Ok(())
+    }
+
+    /// Update a run using optimistic concurrency compare-and-swap (CAS).
+    ///
+    /// If the stored version matches `expected_version`, applies the update,
+    /// increments the version by 1, and returns the new version.
+    /// If the version has moved, returns [`StoreError::VersionConflict`].
+    pub async fn update_run_cas(&self, run: &Run, expected_version: u64) -> Result<u64> {
+        let outcome = sqlx::query(
+            "UPDATE runs SET current_stage = ?, gate_states = ?, artifacts = ?, updated_at = ?, \
+             status = ?, budget_cents = ?, spent_cents = ?, version = version + 1 \
+             WHERE id = ? AND version = ?",
+        )
+        .bind(serde_json::to_string(&run.current_stage)?)
+        .bind(serde_json::to_string(&run.gate_states)?)
+        .bind(serde_json::to_string(&run.artifacts)?)
+        .bind(run.updated_at.to_rfc3339())
+        .bind(serde_json::to_string(&run.status)?)
+        .bind(run.budget_cents.map(|v| v as i64))
+        .bind(run.spent_cents as i64)
+        .bind(run.id.0.to_string())
+        .bind(expected_version as i64)
+        .execute(&self.pool)
+        .await?;
+
+        if outcome.rows_affected() == 0 {
+            let actual = self.get_run_version(run.id).await?;
+            return Err(StoreError::VersionConflict {
+                run_id: run.id,
+                expected: expected_version,
+                actual,
+            });
+        }
+
+        Ok(expected_version + 1)
     }
 
     /// List runs belonging to a project, newest first.
     pub async fn list_runs(&self, project_id: ProjectId) -> Result<Vec<Run>> {
         let rows = sqlx::query(
             "SELECT id, project_id, current_stage, gate_states, artifacts, created_at, \
-             updated_at, status, budget_cents, spent_cents FROM runs \
+             updated_at, status, budget_cents, spent_cents, version FROM runs \
              WHERE project_id = ? ORDER BY created_at DESC",
         )
         .bind(project_id.0.as_bytes().to_vec())
@@ -353,9 +497,68 @@ impl Store {
         rows.iter().map(run_from_row).collect()
     }
 
+    /// List all runs across all projects, newest first.
+    pub async fn list_all_runs(&self) -> Result<Vec<Run>> {
+        let rows = sqlx::query(
+            "SELECT id, project_id, current_stage, gate_states, artifacts, created_at, \
+             updated_at, status, budget_cents, spent_cents, version FROM runs \
+             ORDER BY created_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(run_from_row).collect()
+    }
+
+    /// Recover runs left in `Running` state after an unclean restart/interruption:
+    /// marks them [`RunStatus::Paused`], increments their version via CAS,
+    /// and appends an `EventKind::Error` event with `{"action": "run_interrupted"}`.
+    pub async fn recover_interrupted_runs(&self) -> Result<Vec<Run>> {
+        let rows = sqlx::query(
+            "SELECT id, project_id, current_stage, gate_states, artifacts, created_at, \
+             updated_at, status, budget_cents, spent_cents, version FROM runs \
+             WHERE status = '\"running\"'",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut recovered = Vec::new();
+        for row in rows {
+            let mut run = run_from_row(&row)?;
+            let version = column_int(&row, "version")?.unsigned_abs();
+            run.status = RunStatus::Paused;
+            run.updated_at = Utc::now();
+            self.update_run_cas(&run, version).await?;
+
+            let event = Event {
+                id: Ulid::new(),
+                run_id: run.id,
+                stage: run.current_stage,
+                role: None,
+                kind: EventKind::Error,
+                payload: serde_json::json!({ "action": "run_interrupted" }),
+                cost_cents: None,
+                tokens: None,
+                created_at: Utc::now(),
+                device_id: None,
+            };
+            self.append_event(&event).await?;
+            recovered.push(run);
+        }
+        Ok(recovered)
+    }
+
     // ----------------------------------------------------------------- events
 
-    /// Append an event to a run's append-only log.
+    /// Append an event to a run's append-only log, and publish it on the live
+    /// event bus once the row is durable.
+    ///
+    /// The publish is the point of this method, not an addition to it: every
+    /// producer in the workspace writes through here, so a committed event is
+    /// a broadcast event. The clone is the same `Event` the store holds —
+    /// subscribers see exactly what a later `get_events` will read back.
+    /// A `send` that finds no receiver, or a subscriber that has lagged, is a
+    /// normal case and never fails the write; the payload is not logged, since
+    /// it can carry an idea or an artifact body.
     pub async fn append_event(&self, event: &Event) -> Result<()> {
         let role = match event.role {
             Some(role) => Some(serde_json::to_string(&role)?),
@@ -381,6 +584,7 @@ impl Store {
         .bind(event.device_id.map(|d| d.0.as_bytes().to_vec()))
         .execute(&self.pool)
         .await?;
+        let _ = self.event_tx.send(event.clone());
         Ok(())
     }
 
@@ -803,6 +1007,35 @@ fn cost_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<CostRecord> {
 mod tests {
     use super::*;
     use chrono::Utc;
+    use tempfile::TempDir;
+
+    /// A fresh temp directory for one test's workspace.
+    ///
+    /// Prefers cargo's `CARGO_TARGET_TMPDIR`, then a `tmp` sibling of the test
+    /// binary's `deps` directory (the target dir is writable wherever the build
+    /// ran), and only then the system temp dir — which on some Windows machines is
+    /// protected and rejects even creating a tempdir (`Access is denied`).
+    fn fresh_tempdir() -> TempDir {
+        if let Some(base) = std::env::var_os("CARGO_TARGET_TMPDIR") {
+            let base = PathBuf::from(base);
+            if base.is_dir() {
+                if let Ok(dir) = TempDir::new_in(&base) {
+                    return dir;
+                }
+            }
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(deps) = exe.parent() {
+                let base = deps.join("tmp");
+                if std::fs::create_dir_all(&base).is_ok() {
+                    if let Ok(dir) = TempDir::new_in(&base) {
+                        return dir;
+                    }
+                }
+            }
+        }
+        TempDir::new().expect("tempdir for the test workspace")
+    }
 
     fn sample_project() -> Project {
         let now = Utc::now();
@@ -819,7 +1052,7 @@ mod tests {
     }
 
     async fn temp_store() -> Store {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = fresh_tempdir();
         let path = dir.path().join("warsha.db");
         let store = Store::open_at(path).await.unwrap();
         std::mem::forget(dir);
@@ -830,6 +1063,79 @@ mod tests {
     async fn creates_database_and_migrates() {
         let store = temp_store().await;
         assert!(store.db_path().exists());
+    }
+
+    /// Regression guard: migration SQL must stay LF-only. A CRLF checkout
+    /// (Windows `core.autocrlf`) changes the bytes sqlx hashes, breaking
+    /// checksum validation against databases migrated from LF files.
+    #[test]
+    fn migration_sql_files_contain_no_cr_bytes() {
+        for (name, bytes) in [
+            (
+                "001_initial.sql",
+                &include_bytes!("../migrations/001_initial.sql")[..],
+            ),
+            (
+                "002_m1_gates_artifacts_costs.sql",
+                &include_bytes!("../migrations/002_m1_gates_artifacts_costs.sql")[..],
+            ),
+            (
+                "003_run_version.sql",
+                &include_bytes!("../migrations/003_run_version.sql")[..],
+            ),
+            (
+                "005_pairing_expiry.sql",
+                &include_bytes!("../migrations/005_pairing_expiry.sql")[..],
+            ),
+        ] {
+            assert!(
+                !bytes.contains(&b'\r'),
+                "{name} contains CR (0x0D) bytes; migrations must be LF-only \
+                 (see root .gitattributes: *.sql text eol=lf)"
+            );
+        }
+    }
+
+    /// Checksum-stability proxy: the compile-time embedded migrator must
+    /// expose exactly versions 1, 2, 3, 4 and 5, with no CR in any embedded SQL.
+    ///
+    /// 5 is embedded (its checksum is pinned) but not applied by this store: see
+    /// `settings_owned_migration_is_left_to_the_settings_schema`.
+    #[test]
+    fn embedded_migrator_versions_are_lf_only() {
+        let migrator = sqlx::migrate!("./migrations");
+        let versions: Vec<i64> = migrator.iter().map(|m| m.version).collect();
+        assert_eq!(versions, vec![1, 2, 3, 4, 5]);
+        for migration in migrator.iter() {
+            assert!(
+                !migration.sql.contains('\r'),
+                "embedded migration {} contains CR bytes",
+                migration.version
+            );
+        }
+    }
+
+    /// The async store does not own `pairing_devices`: it applies 001–004 only, and
+    /// version 5 is the settings schema's (see `run_migrations`). A future change
+    /// that stops filtering would fail here instead of at a daemon start.
+    #[tokio::test]
+    async fn settings_owned_migration_is_left_to_the_settings_schema() {
+        let store = temp_store().await;
+        let applied: Vec<i64> =
+            sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
+                .fetch_all(store.pool())
+                .await
+                .expect("the migration ledger is readable");
+        assert_eq!(applied, vec![1, 2, 3, 4]);
+        let pairing_table: Option<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE name = 'pairing_devices'")
+                .fetch_optional(store.pool())
+                .await
+                .expect("the schema is readable");
+        assert_eq!(
+            pairing_table, None,
+            "the async migrator created a table the settings schema owns"
+        );
     }
 
     #[tokio::test]
@@ -957,6 +1263,56 @@ mod tests {
         assert_eq!(events[0].device_id, None);
         assert_eq!(events[1].kind, EventKind::GateDecision);
         assert_eq!(events[1].device_id, Some(device));
+    }
+
+    /// The live bus is the append, not a caller's chore: an event committed by
+    /// `append_event` arrives on a pre-existing subscriber as the same
+    /// [`Event`] the store read back, and an append with nobody watching is
+    /// still a clean write.
+    #[tokio::test]
+    async fn appending_an_event_publishes_it_on_the_stores_bus() {
+        let store = temp_store().await;
+        let project = sample_project();
+        store.create_project(&project).await.unwrap();
+        let run = sample_run(project.id);
+        store.create_run(&run).await.unwrap();
+
+        // Nobody subscribed yet: the write must not fail for want of a listener.
+        let unwatched = Event {
+            id: Ulid::new(),
+            run_id: run.id,
+            stage: Stage::Idea,
+            role: None,
+            kind: EventKind::StageStarted,
+            payload: serde_json::json!({ "note": "no listener" }),
+            cost_cents: None,
+            tokens: None,
+            created_at: Utc::now(),
+            device_id: None,
+        };
+        store.append_event(&unwatched).await.unwrap();
+
+        let mut rx = store.subscribe_events();
+        let watched = Event {
+            id: Ulid::new(),
+            created_at: unwatched.created_at + chrono::TimeDelta::seconds(1),
+            ..unwatched.clone()
+        };
+        store.append_event(&watched).await.unwrap();
+
+        let published = rx.recv().await.unwrap();
+        assert_eq!(published.id, watched.id);
+        assert_eq!(published.run_id, watched.run_id);
+        assert_eq!(published.kind, EventKind::StageStarted);
+        assert_eq!(published.payload, watched.payload);
+
+        let stored = store.get_events(run.id).await.unwrap();
+        assert_eq!(stored.len(), 2);
+        assert_eq!(
+            stored[1].id, published.id,
+            "the bus and the store agree about what an event is"
+        );
+        assert_eq!(stored[1].payload, published.payload);
     }
 
     #[tokio::test]
@@ -1251,5 +1607,200 @@ mod tests {
         assert!(store.list_artifacts(run.id).await.unwrap().is_empty());
         assert!(store.list_costs(run.id).await.unwrap().is_empty());
         assert_eq!(store.total_cost_cents(run.id).await.unwrap(), 0);
+    }
+
+    #[cfg(test)]
+    mod cas {
+        use super::*;
+
+        #[tokio::test]
+        async fn concurrent_update_with_stale_version_is_rejected() {
+            let store = temp_store().await;
+            let project = sample_project();
+            store.create_project(&project).await.unwrap();
+
+            let run = sample_run(project.id);
+            store.create_run(&run).await.unwrap();
+
+            // Both workers read the run at version 1.
+            let (mut run_w1, v_w1) = store.get_run_versioned(run.id).await.unwrap();
+            let (mut run_w2, v_w2) = store.get_run_versioned(run.id).await.unwrap();
+            assert_eq!(v_w1, 1);
+            assert_eq!(v_w2, 1);
+
+            // Worker 1 commits first with CAS expected version 1.
+            run_w1.current_stage = Stage::Research;
+            let new_v = store.update_run_cas(&run_w1, v_w1).await.unwrap();
+            assert_eq!(new_v, 2);
+
+            // Worker 2 attempts to commit with stale version 1 -> rejected with VersionConflict.
+            run_w2.current_stage = Stage::Design;
+            let err = store
+                .update_run_cas(&run_w2, v_w2)
+                .await
+                .expect_err("stale CAS update must fail");
+
+            match err {
+                StoreError::VersionConflict {
+                    run_id,
+                    expected,
+                    actual,
+                } => {
+                    assert_eq!(run_id, run.id);
+                    assert_eq!(expected, 1);
+                    assert_eq!(actual, 2);
+                }
+                other => panic!("expected VersionConflict, got {other:?}"),
+            }
+
+            // Stored state remains Worker 1's commit (Research), not overwritten by Worker 2.
+            let (stored, stored_v) = store.get_run_versioned(run.id).await.unwrap();
+            assert_eq!(stored.current_stage, Stage::Research);
+            assert_eq!(stored_v, 2);
+
+            // Worker 2 re-reads versioned state and retries with expected version 2 -> succeeds.
+            run_w2.current_stage = Stage::Design;
+            let retry_v = store.update_run_cas(&run_w2, stored_v).await.unwrap();
+            assert_eq!(retry_v, 3);
+
+            let (final_run, final_v) = store.get_run_versioned(run.id).await.unwrap();
+            assert_eq!(final_run.current_stage, Stage::Design);
+            assert_eq!(final_v, 3);
+        }
+
+        #[tokio::test]
+        async fn sequential_cas_updates_increment_version() {
+            let store = temp_store().await;
+            let project = sample_project();
+            store.create_project(&project).await.unwrap();
+
+            let mut run = sample_run(project.id);
+            store.create_run(&run).await.unwrap();
+            assert_eq!(store.get_run_version(run.id).await.unwrap(), 1);
+
+            run.current_stage = Stage::Research;
+            let v2 = store.update_run_cas(&run, 1).await.unwrap();
+            assert_eq!(v2, 2);
+            assert_eq!(store.get_run_version(run.id).await.unwrap(), 2);
+
+            run.current_stage = Stage::PrdSpec;
+            let v3 = store.update_run_cas(&run, 2).await.unwrap();
+            assert_eq!(v3, 3);
+            assert_eq!(store.get_run_version(run.id).await.unwrap(), 3);
+
+            // A direct update_run also increments version to 4.
+            run.current_stage = Stage::Design;
+            store.update_run(&run).await.unwrap();
+            assert_eq!(store.get_run_version(run.id).await.unwrap(), 4);
+
+            // A stale expected version (3) now fails because version is 4.
+            let err = store
+                .update_run_cas(&run, 3)
+                .await
+                .expect_err("expected version 3 should conflict with version 4");
+            assert!(matches!(
+                err,
+                StoreError::VersionConflict {
+                    expected: 3,
+                    actual: 4,
+                    ..
+                }
+            ));
+        }
+
+        #[tokio::test]
+        async fn reloading_run_version_reflects_version_bump() {
+            let store = temp_store().await;
+            let project = sample_project();
+            store.create_project(&project).await.unwrap();
+
+            let run = sample_run(project.id);
+            store.create_run(&run).await.unwrap();
+
+            let v = store.get_run_version(run.id).await.unwrap();
+            assert_eq!(v, 1);
+
+            let (loaded_run, loaded_v) = store.get_run_versioned(run.id).await.unwrap();
+            assert_eq!(loaded_v, 1);
+            assert_eq!(loaded_run.id, run.id);
+        }
+
+        #[tokio::test]
+        async fn recovering_interrupted_runs_bumps_version() {
+            let store = temp_store().await;
+            let project = sample_project();
+            store.create_project(&project).await.unwrap();
+
+            let run = sample_run(project.id);
+            store.create_run(&run).await.unwrap();
+            assert_eq!(run.status, RunStatus::Running);
+            assert_eq!(store.get_run_version(run.id).await.unwrap(), 1);
+
+            let recovered = store.recover_interrupted_runs().await.unwrap();
+            assert_eq!(recovered.len(), 1);
+            assert_eq!(recovered[0].id, run.id);
+            assert_eq!(recovered[0].status, RunStatus::Paused);
+
+            // Version was bumped by the CAS update during recovery.
+            let (stored, version) = store.get_run_versioned(run.id).await.unwrap();
+            assert_eq!(stored.status, RunStatus::Paused);
+            assert_eq!(version, 2);
+
+            // Interrupted event was recorded on the run's log.
+            let events = store.get_events(run.id).await.unwrap();
+            assert!(events
+                .iter()
+                .any(|e| e.payload["action"] == "run_interrupted"));
+        }
+    }
+
+    /// K6: upsert overwrites, the CHECK rejects an unknown permission, and all
+    /// three accepted values round-trip in key order.
+    #[tokio::test]
+    async fn mcp_permissions_upsert_check_and_round_trip() {
+        let temp = fresh_tempdir();
+        let store = Store::open_at(temp.path().join("permissions.db"))
+            .await
+            .expect("the test store opens");
+        store
+            .set_mcp_permission("srv", "tool", "agent", "allow", "2026-01-01T00:00:00Z")
+            .await
+            .expect("allow writes");
+        store
+            .set_mcp_permission("srv", "tool", "agent", "deny", "2026-01-02T00:00:00Z")
+            .await
+            .expect("the upsert writes");
+        store
+            .set_mcp_permission("srv", "other", "reviewer", "ask", "2026-01-03T00:00:00Z")
+            .await
+            .expect("ask writes");
+
+        let rows = store.load_mcp_permissions().await.expect("the rows load");
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "srv".to_string(),
+                    "other".to_string(),
+                    "reviewer".to_string(),
+                    "ask".to_string()
+                ),
+                (
+                    "srv".to_string(),
+                    "tool".to_string(),
+                    "agent".to_string(),
+                    "deny".to_string()
+                ),
+            ],
+            "the upsert did not overwrite or the rows did not round-trip"
+        );
+
+        let refused = store
+            .set_mcp_permission("srv", "tool", "agent", "permit", "2026-01-04T00:00:00Z")
+            .await;
+        assert!(
+            refused.is_err(),
+            "the CHECK constraint accepted an unknown permission"
+        );
     }
 }

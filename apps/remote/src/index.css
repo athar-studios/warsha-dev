@@ -1,35 +1,46 @@
-/* Warsha Remote — Global styles
+/* Warsha Remote — the phone's bench: global styles and layout on Design System v3 tokens.
  *
- * The design tokens live in @warsha/ui (`packages/ui/src/tokens/tokens.css`) and are imported once,
- * here, so every `var(--warsha-*)` reference below — and in the screens — resolves. No colour or
- * font is invented in this file: light is the default, and `data-theme="dark"` on <html> restyles
- * the whole app.
+ * The design tokens live in @warsha/ui/v3 (`packages/ui/src/v3/tokens/tokens.css`) and are imported once,
+ * here (and in main.tsx). Every value uses v3 `--w-*` tokens so flipping `data-theme="dark"` on `<html>`
+ * restyles the whole app without touching this file.
+ *
+ * Layout uses logical properties only (`inline-size`, `padding-inline`, `inset-inline-start`,
+ * `border-block-end`, `margin-inline`), so Arabic mirrors without a second rule (§11). There is no
+ * gradient, no glow and no decorative shadow anywhere in this file.
+ *
+ * Media-query breakpoints use CSS picas (`1pc = 16px` exact): `22.4375pc` (359px), `48pc` (768px),
+ * `64pc` (1024px), `90pc` (1440px).
  */
-@import '@warsha/ui/tokens/tokens.css';
+@import '@warsha/ui/v3/tokens/tokens.css';
 
 * {
   box-sizing: border-box;
 }
 
-html, body, #root {
+html,
+body,
+#root {
   height: 100%;
   margin: 0;
   padding: 0;
 }
 
 body {
-  /* Arabic-first stack: IBM Plex Sans Arabic leads for both directions, so the `[dir="rtl"]` family
-   * override this file used to carry is gone — one stack covers Arabic and Latin copy. */
-  font-family: var(--warsha-font-sans);
-  background-color: var(--warsha-color-bg);
-  color: var(--warsha-color-text);
-  line-height: var(--warsha-line-height-base);
+  font-family: var(--w-font-sans);
+  background-color: var(--w-bg);
+  color: var(--w-text);
+  line-height: var(--w-line-height-md);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* §11: RTL body copy reads at the relaxed leading. */
+html[dir='rtl'] body {
+  line-height: var(--w-line-height-lg);
+}
+
 a {
-  color: var(--warsha-color-accent-strong);
+  color: var(--w-primary-text);
   text-decoration: none;
 }
 
@@ -41,17 +52,428 @@ button {
   font-family: inherit;
 }
 
-input, textarea, select {
+input,
+textarea,
+select {
   font-family: inherit;
-  font-size: var(--warsha-font-size-md);
+  font-size: var(--w-font-size-md);
 }
 
+/* Focus ring and scroll margins so sticky bands never obscure keyboard focus. */
 :focus-visible {
-  outline: 2px solid var(--warsha-color-accent-strong);
-  outline-offset: 2px;
+  outline: var(--w-border-width-strong) solid var(--w-focus);
+  outline-offset: var(--w-border-width-strong);
+  scroll-margin-block-start: calc(
+    var(--w-space-10) * 2 + var(--w-control-height) + var(--w-space-4)
+  );
+  scroll-margin-block-end: calc(var(--w-control-height) * 2 + var(--w-space-6));
+}
+
+html {
+  overflow-anchor: none;
 }
 
 ::selection {
-  background-color: var(--warsha-color-surface-muted);
-  color: var(--warsha-color-accent-strong);
+  background-color: var(--w-sunken);
+  color: var(--w-primary-text);
+}
+
+.warsha-control {
+  min-block-size: var(--w-control-height);
+}
+
+/* ======================================================================================== the bench */
+
+.app {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  min-block-size: 100vh;
+  min-block-size: 100dvh;
+  background-color: var(--w-bg);
+}
+
+.app-topbar {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: var(--w-layer-dropdown);
+  display: flex;
+  align-items: center;
+  gap: var(--w-space-3);
+  flex-wrap: wrap;
+  row-gap: var(--w-space-2);
+  min-block-size: var(--w-space-10);
+  padding-inline: var(--w-space-3);
+  padding-block: var(--w-space-2);
+  background-color: var(--w-surface);
+  border-block-end: var(--w-border-width) solid var(--w-line);
+}
+
+.app-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--w-space-2);
+  min-inline-size: 0;
+  color: var(--w-text);
+  font-weight: var(--w-font-weight-bold);
+  font-size: var(--w-font-size-lg);
+}
+
+.app-brand-mark {
+  flex: none;
+  inline-size: var(--w-space-6);
+  block-size: var(--w-space-6);
+}
+
+.app-brand-role {
+  color: var(--w-text-muted);
+  font-size: var(--w-font-size-xs);
+  font-weight: var(--w-font-weight-medium);
+  white-space: nowrap;
+}
+
+.app-identity {
+  display: none;
+  align-items: center;
+  gap: var(--w-space-2);
+  min-inline-size: 0;
+  flex: 1 1 auto;
+  font-family: var(--w-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--w-font-size-xs);
+  color: var(--w-text);
+  overflow-wrap: anywhere;
+}
+
+.app-language {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--w-space-1);
+  margin-inline-start: auto;
+  padding: var(--w-space-1);
+  background-color: var(--w-sunken);
+  border: var(--w-border-width) solid var(--w-line-strong);
+  border-radius: var(--w-radius-md);
+}
+
+.app-language-option:hover {
+  background-color: var(--w-surface);
+}
+
+.app-strip {
+  border-block-end: var(--w-border-width) solid var(--w-line);
+}
+
+.app-strip-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--w-space-3);
+  padding-inline: var(--w-space-3);
+  min-block-size: var(--w-control-height);
+  background-color: var(--w-sunken);
+  color: var(--w-text);
+  font-size: var(--w-font-size-xs);
+  overflow-x: auto;
+  min-inline-size: 0;
+}
+
+.app-strip-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--w-space-1);
+  min-inline-size: 0;
+  flex: none;
+}
+
+.app-strip-item[data-hide-narrow='true'] {
+  display: none;
+}
+
+.app-strip-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--w-space-2);
+  min-inline-size: 0;
+}
+
+.app-body {
+  display: flex;
+  flex-direction: column;
+  min-inline-size: 0;
+  min-block-size: 0;
+  overflow-y: auto;
+}
+
+.app-main {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  overflow-x: hidden;
+  padding-inline: var(--w-space-3);
+  padding-block: var(--w-space-4);
+}
+
+/* --------------------------------------------------------------------------- the skip link (§9) */
+.app-skip {
+  position: absolute;
+  inset-inline-start: var(--w-space-2);
+  inset-block-start: var(--w-space-2);
+  z-index: var(--w-layer-toast);
+  padding-inline: var(--w-space-3);
+  padding-block: var(--w-space-2);
+  background-color: var(--w-surface);
+  color: var(--w-text);
+  border: var(--w-border-width) solid var(--w-line-strong);
+  border-radius: var(--w-radius-md);
+  clip-path: inset(50%);
+  block-size: var(--w-border-width-strong);
+  overflow: hidden;
+}
+
+.app-skip:focus-visible {
+  clip-path: none;
+  block-size: auto;
+  inline-size: auto;
+}
+
+/* ------------------------------------------------------------------------ the navigation (§4, §10) */
+.app-nav {
+  position: sticky;
+  inset-block-end: 0;
+  z-index: var(--w-layer-sticky);
+  background-color: var(--w-sunken);
+  border-block-start: var(--w-border-width) solid var(--w-line);
+  padding-block-end: env(safe-area-inset-bottom);
+}
+
+.app-nav-list {
+  display: flex;
+  align-items: stretch;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  inline-size: 100%;
+  max-inline-size: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.app-nav-list > li {
+  flex: 1 0 auto;
+  display: flex;
+}
+
+.app-nav-item {
+  inline-size: 100%;
+  color: var(--w-text);
+  border-block-start: var(--w-border-width-strong) solid transparent;
+  white-space: nowrap;
+}
+
+.app-nav-item[aria-current='page'] {
+  border-block-start-color: var(--w-primary-text);
+  background-color: var(--w-surface);
+  font-weight: var(--w-font-weight-bold);
+}
+
+.app-nav-item:hover {
+  background-color: var(--w-surface);
+}
+
+.app-nav-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-inline-size: var(--w-space-5);
+  block-size: var(--w-space-5);
+  padding-inline: var(--w-space-1);
+  border-radius: var(--w-radius-full);
+  background-color: var(--w-primary);
+  color: var(--w-on-primary);
+  font-family: var(--w-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--w-font-size-xs);
+  font-weight: var(--w-font-weight-bold);
+  flex: none;
+}
+
+/* ===================================================================================== the screens */
+
+.remote-screen {
+  display: grid;
+  gap: var(--w-space-4);
+  min-inline-size: 0;
+}
+
+.remote-title {
+  display: grid;
+  gap: var(--w-space-1);
+  min-inline-size: 0;
+}
+
+.remote-link,
+.remote-action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--w-space-2);
+  min-block-size: var(--w-control-height);
+  padding-inline: var(--w-space-3);
+  color: var(--w-primary-text);
+  border-radius: var(--w-radius-md);
+  font-weight: var(--w-font-weight-medium);
+}
+
+.remote-link:hover,
+.remote-action:hover {
+  background-color: var(--w-sunken);
+  text-decoration: underline;
+}
+
+.remote-back {
+  justify-self: start;
+  padding-inline-start: 0;
+}
+
+.remote-copy {
+  max-inline-size: var(--w-content-narrow);
+  min-inline-size: 0;
+}
+
+.remote-form {
+  display: grid;
+  gap: var(--w-space-2);
+  margin-block-start: var(--w-space-3);
+  min-inline-size: 0;
+}
+
+.remote-two-column {
+  display: grid;
+  gap: var(--w-space-4);
+  min-inline-size: 0;
+}
+
+.remote-detail {
+  display: grid;
+  gap: var(--w-space-3);
+  min-inline-size: 0;
+}
+
+.remote-tabs {
+  border: var(--w-border-width) solid var(--w-line);
+  border-radius: var(--w-radius-md);
+}
+
+.remote-panel-body {
+  display: grid;
+  gap: var(--w-space-4);
+  min-inline-size: 0;
+}
+
+.remote-stream {
+  max-block-size: min(48vh, calc(var(--w-space-10) * 6));
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-inline-size: 0;
+}
+
+.app-main,
+.remote-screen,
+.remote-stream {
+  scrollbar-gutter: stable;
+}
+
+/* ================================================================================== breakpoints */
+
+/* <= 359px (22.4375pc) */
+@media (max-width: 22.4375pc) {
+  .app-topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .app-language {
+    margin-inline-start: 0;
+  }
+
+  .app-nav-item {
+    font-size: var(--w-font-size-xs);
+  }
+}
+
+/* >= 768px (48pc) */
+@media (min-width: 48pc) {
+  .app-identity {
+    display: inline-flex;
+  }
+
+  .app-strip-item[data-hide-narrow='true'] {
+    display: inline-flex;
+  }
+
+  .app-body {
+    flex-direction: row;
+    align-items: stretch;
+  }
+
+  .app-nav {
+    order: -1;
+    position: static;
+    inline-size: var(--w-nav-width);
+    flex: none;
+    border-block-start: none;
+    border-inline-end: var(--w-border-width) solid var(--w-line);
+  }
+
+  .app-nav-list {
+    flex-direction: column;
+    align-items: stretch;
+    overflow-x: visible;
+  }
+
+  .app-nav-list > li {
+    flex: none;
+  }
+
+  .app-nav-item {
+    justify-content: flex-start;
+    text-align: start;
+    border-block-start: none;
+    border-inline-start: var(--w-border-width-strong) solid transparent;
+    padding-inline: var(--w-space-4);
+  }
+
+  .app-nav-item[aria-current='page'] {
+    border-inline-start-color: var(--w-primary-text);
+  }
+
+  .app-nav-badge {
+    margin-inline-start: auto;
+  }
+
+  .app-main {
+    padding-inline: var(--w-space-4);
+  }
+
+  .remote-two-column {
+    grid-template-columns: var(--w-nav-width) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+/* >= 1024px (64pc) */
+@media (min-width: 64pc) {
+  .app-nav {
+    inline-size: var(--w-rail-width);
+  }
+
+  .remote-two-column {
+    grid-template-columns: var(--w-rail-width) minmax(0, 1fr);
+  }
+}
+
+/* >= 1440px (90pc) */
+@media (min-width: 90pc) {
+  .app-main {
+    max-inline-size: var(--w-content);
+    margin-inline: auto;
+    inline-size: 100%;
+  }
 }

@@ -15,7 +15,7 @@ members = [
 exclude = []
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.1"
 edition = "2021"
 license = "PolyForm-Noncommercial-1.0.0"
 authors = ["Warsha Contributors"]
@@ -57,7 +57,6 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
 
 # CLI
 clap = { version = "4.5", features = ["derive", "env", "string"] }
-indicatif = "0.17"
 
 # Keychain
 keyring = "1.2"
@@ -66,7 +65,7 @@ keyring = "1.2"
 gix = "0.70"
 octocrab = "0.30"
 
-# Utilities
+async-trait = "0.1"
 uuid = { version = "1.8", features = ["v4", "v7", "serde", "fast-rng"] }
 chrono = { version = "0.4", features = ["serde"] }
 ulid = { version = "1.0", features = ["serde"] }

@@ -4,16 +4,53 @@ on:
   push:
     tags:
       - 'v*'
+  # Manual dispatch exists so the release target below can be set explicitly;
+  # it adds no publish path of its own (the tag push path is unchanged).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v* tag to build or promote (required on dispatch)
+        required: true
+      publish:
+        description: Promote the verified draft to a public release
+        type: boolean
+        default: false
+      signing_scope:
+        description: Whether this release must ship signatures/updater metadata
+        type: choice
+        options:
+          - signed
+          - unsigned
+        default: signed
+      release_repo:
+        description: >-
+          owner/repo that the generated winget/Homebrew/Scoop manifests point
+          at (installer URLs, homepages). Only meaningful when the tag exists
+          on that repo.
+        required: false
+        default: 'athar-studios/warsha'
 
 permissions:
-  contents: write
-  packages: write
-  id-token: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
   RUST_BACKTRACE: 1
+  # Single release target for all package-manager manifests (was six hardcoded
+  # https://github.com/Warsha/Warsha literals — that repo returns HTTP 404, see
+  # DECISIONS.md 2026-11-03, "#10 release repo").
+  #
+  # Deliberately NOT derived from github.repository: this repository is the dev
+  # checkout (athar-studios/warsha-dev), while the product repo the Tauri
+  # updater endpoint already targets is athar-studios/warsha
+  # (apps/desktop/src-tauri/tauri.conf.json:74). Deriving from the running repo
+  # would silently retarget every generated installer manifest at the dev fork.
+  # The workflow_dispatch input allows an explicit override per run; the env
+  # default applies to tag-triggered runs, where github.event.inputs is empty.
+  # Whether athar-studios/warsha is the final release home is an OPEN OWNER
+  # DECISION, recorded per the 2026-11-03 #10 entry.
+  RELEASE_REPO: ${{ github.event.inputs.release_repo || 'athar-studios/warsha' }}
 
 jobs:
   # ============================================================
@@ -31,28 +68,52 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Verify release version matches repository versions
+        env:
+          TAG_INPUT: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="${TAG_INPUT:-${GITHUB_REF#refs/tags/}}"
+          node scripts/check-versions.mjs --expect "${TAG#v}"
 
       - name: Extract version from tag
         id: version
+        env:
+          TAG_INPUT: ${{ inputs.tag }}
         run: |
-          TAG=${GITHUB_REF#refs/tags/}
-          VERSION=${TAG#v}
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          TAG="${TAG_INPUT:-${GITHUB_REF#refs/tags/}}"
+          VERSION="${TAG#v}"
+          # Quoted "${GITHUB_OUTPUT}" (SC2086) and one redirect for both writes
+          # (SC2129): an unquoted output path word-splits on a runner whose temp
+          # path contains a space, which silently drops the job outputs the three
+          # downstream jobs read via needs.prepare.outputs.
+          {
+            echo "tag=${TAG}"
+            echo "version=${VERSION}"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Generate release notes
         id: notes
         run: |
           # Generate changelog from commits since last tag
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          PREV_TAG=$(git describe --tags --abbrev=0 'HEAD^' 2>/dev/null || echo "")
           if [ -n "$PREV_TAG" ]; then
-            NOTES=$(git log $PREV_TAG..HEAD --pretty=format:"- %s (%an)" --reverse)
+            # "$PREV_TAG..HEAD" quoted (SC2086): a tag name is a single ref, but
+            # an unquoted expansion here also globs, so a tag containing `*` or
+            # `?` would be rewritten by pathname expansion before git saw it.
+            NOTES=$(git log "$PREV_TAG..HEAD" --pretty=format:"- %s (%an)" --reverse)
           else
             NOTES=$(git log --pretty=format:"- %s (%an)" --reverse)
           fi
-          echo "notes<<EOF" >> $GITHUB_OUTPUT
-          echo "$NOTES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          # The three GITHUB_OUTPUT writes are grouped under one redirect
+          # (SC2129) and the path is quoted (SC2086), same reason as the step above.
+          {
+            echo "notes<<EOF"
+            echo "$NOTES"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
 
   # ============================================================
   # Rust: Build CLI and daemon
@@ -104,9 +165,16 @@ jobs:
         run: |
           brew install sqlite3 pkg-config
 
+      # The matrix already carries `target` (the triple is also what
+      # dtolnay/rust-toolchain@stable is asked to install above), and every step
+      # downstream reads from target/<triple>/release/ — "Strip binaries (Linux/macOS)"
+      # and both "Upload … binary" steps. Without --target, cargo wrote to plain
+      # target/release/ on the host triple and each OS leg died on the missing path,
+      # so the build was aligned to the matrix's existing shape rather than rewriting
+      # the three downstream paths.
       - name: Build CLI and daemon
         run: |
-          cargo build --release --workspace --bin warsha --bin warshad
+          cargo build --release --workspace --bin warsha --bin warshad --target ${{ matrix.target }}
 
       - name: Strip binaries (Linux/macOS)
         if: runner.os != 'Windows'
@@ -114,18 +182,39 @@ jobs:
           strip target/${{ matrix.target }}/release/warsha${{ matrix.binary_suffix }}
           strip target/${{ matrix.target }}/release/warshad${{ matrix.binary_suffix }}
 
+      # Artifact NAMES (warsha-<os> / warshad-<os>) are already unique per leg, but
+      # every consumer downloads with merge-multiple: true (the artifacts job's
+      # "Download all artifacts", the release job's three pattern downloads). A
+      # merge-multiple download lays each artifact at its stored path, and the stored
+      # path here was the bare basename warsha / warshad / warsha.exe — so the three
+      # OS legs clobbered each other in the merged directory and exactly one OS's
+      # binary survived, green. Staging the payload under its target triple makes
+      # every consumer's merge collision-free without touching any download step.
+      # shell: bash because the Windows leg's default shell is pwsh.
+      - name: Stage binaries with target-specific names
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/warsha${{ matrix.binary_suffix }}" \
+             "dist/warsha-${{ matrix.target }}${{ matrix.binary_suffix }}"
+          cp "target/${{ matrix.target }}/release/warshad${{ matrix.binary_suffix }}" \
+             "dist/warshad-${{ matrix.target }}${{ matrix.binary_suffix }}"
+
       - name: Upload CLI binary
         uses: actions/upload-artifact@v4
         with:
           name: warsha-${{ matrix.os }}
-          path: target/${{ matrix.target }}/release/warsha${{ matrix.binary_suffix }}
+          path: dist/warsha-${{ matrix.target }}${{ matrix.binary_suffix }}
+          if-no-files-found: error
           retention-days: 1
 
       - name: Upload daemon binary
         uses: actions/upload-artifact@v4
         with:
           name: warshad-${{ matrix.os }}
-          path: target/${{ matrix.target }}/release/warshad${{ matrix.binary_suffix }}
+          path: dist/warshad-${{ matrix.target }}${{ matrix.binary_suffix }}
+          if-no-files-found: error
           retention-days: 1
 
   # ============================================================
@@ -160,10 +249,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # package.json's `"packageManager": "pnpm@9.0.0"` is the single source of
+      # truth for the pnpm version; `version: 9` here used to contradict it and
+      # makes pnpm/action-setup@v4 abort with "Multiple versions of pnpm
+      # specified" (the failure that killed ci.yml's TypeScript job in run
+      # 41752421903). pnpm setup stays BEFORE setup-node, because setup-node's
+      # `cache: 'pnpm'` needs pnpm already resolvable on PATH.
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
           run_install: false
 
       - name: Setup Node.js
@@ -202,7 +296,7 @@ jobs:
         working-directory: ./apps/desktop
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_KEY_PASSWORD }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -211,11 +305,17 @@ jobs:
         run: |
           pnpm tauri build --target ${{ matrix.tauri_target }}
 
+      # Renamed from warsha-desktop-<os>: the release job's CLI pattern `warsha-*`
+      # also matched that name, so the "CLI binaries" step silently downloaded the
+      # desktop bundles too. `desktop-installers-<os>` is disjoint from warsha-*/
+      # warshad-*. if-no-files-found defaults to warn — an empty bundle dir used to
+      # upload a zero-file artifact and stay green.
       - name: Upload desktop artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: warsha-desktop-${{ matrix.os }}
+          name: desktop-installers-${{ matrix.os }}
           path: apps/desktop/src-tauri/target/${{ matrix.tauri_target }}/release/bundle/**/*
+          if-no-files-found: error
           retention-days: 1
 
   # ============================================================
@@ -226,6 +326,16 @@ jobs:
     needs: [prepare, rust-build, desktop-build]
     runs-on: ubuntu-latest
     steps:
+      # This job had no checkout at all, which is what made the two "SBOM" steps below
+      # unfailable theatre: cargo-deny and any cargo-based SBOM generator read
+      # Cargo.toml / Cargo.lock, and in an un-checkouted workspace neither exists. The
+      # Rust toolchain step is here for the same reason — `cargo install` had no cargo.
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -235,31 +345,191 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f -name "*" | sort
 
-      - name: Generate SHA256 checksums
+      # cargo-deny is the advisory/ban/license gate; it never produced an SBOM, and
+      # the name this step used to carry ("Generate SBOM (CycloneDX)") plus its inline
+      # comment claiming "cargo-deny can generate SPDX" were both false.
+      #
+      # EmbarkStudios/cargo-deny-action@v1 is removed here for the same reason it is
+      # removed from ci.yml's Rust legs: it is a Docker container action
+      # (`runs: using: "docker"`), and its image's cargo cannot parse this repo's
+      # Cargo.lock (`version = 4`, needs cargo >= 1.78) — run 41752421903 showed
+      # "failed to parse lock file at: /github/workspace/Cargo.lock" from both
+      # cargo-deny and `cargo metadata` inside that container. As a normal step this
+      # job uses its own runner cargo. Full rationale, and the per-triple sha256
+      # provenance, is on ci.yml's "Install cargo-deny" step; this is the identical
+      # script so there is one mechanism, not two. No continue-on-error: a finding
+      # fails the release, which is the point.
+      #
+      # deny.toml now exists at the repository root, so this no longer runs
+      # cargo-deny's built-in default policy (whose [licenses] allow list is empty and
+      # therefore denies every license). Its allow list is the license set measured
+      # from this workspace's own dependency graph; see that file's header.
+      - name: Install cargo-deny 0.20.2 (pinned, checksum-verified)
+        shell: bash
+        env:
+          CARGO_DENY_VERSION: 0.20.2
         run: |
+          set -euo pipefail
+          case "$(uname -s)" in
+            Linux) os_tag="unknown-linux-musl" ;;
+            Darwin) os_tag="apple-darwin" ;;
+            MINGW*|MSYS*|CYGWIN*) os_tag="pc-windows-msvc" ;;
+            *)
+              echo "::error::cargo-deny: unsupported kernel '$(uname -s)'"
+              exit 1
+              ;;
+          esac
+          case "$(uname -m)" in
+            x86_64|amd64) arch_tag="x86_64" ;;
+            arm64|aarch64) arch_tag="aarch64" ;;
+            *)
+              echo "::error::cargo-deny: unsupported architecture '$(uname -m)'"
+              exit 1
+              ;;
+          esac
+          target="${arch_tag}-${os_tag}"
+          case "${target}" in
+            x86_64-unknown-linux-musl)
+              expected_sha="9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f"
+              ;;
+            aarch64-unknown-linux-musl)
+              expected_sha="995c82be0defc7a025cae49a2aa2644ce8245c9a3318fc4103907c6a285e8c7d"
+              ;;
+            x86_64-apple-darwin)
+              expected_sha="248da7f581724e470071990c088ffc55c811981715f4cbdb258621fb79f8b7a6"
+              ;;
+            aarch64-apple-darwin)
+              expected_sha="fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3"
+              ;;
+            x86_64-pc-windows-msvc)
+              expected_sha="975a22143262fd27476d19ee00c7af67978426e40e1dee94eed6bbade1cf87dc"
+              ;;
+            *)
+              echo "::error::cargo-deny ${CARGO_DENY_VERSION} publishes no prebuilt asset for ${target}"
+              exit 1
+              ;;
+          esac
+          asset="cargo-deny-${CARGO_DENY_VERSION}-${target}.tar.gz"
+          archive="${RUNNER_TEMP}/${asset}"
+          curl -sSfL --retry 3 -o "${archive}" \
+            "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/${asset}"
+          # sha256sum on Linux and on Git-for-Windows (MSYS coreutils); macOS
+          # ships no sha256sum but does ship shasum. Anything else fails the job.
+          if command -v sha256sum >/dev/null 2>&1; then
+            checksum_verify=(sha256sum --check)
+          elif command -v shasum >/dev/null 2>&1; then
+            checksum_verify=(shasum -a 256 --check)
+          else
+            echo "::error::cargo-deny: neither sha256sum nor shasum found on ${target}"
+            exit 1
+          fi
+          # Kept identical to the same block in ci.yml: the tool compares the
+          # digest, so nothing is parsed out of its stdout. A string compare dies on
+          # any Windows runner, where RUNNER_TEMP holds a backslash path and both
+          # tools escape the digest line (run 41924821106: `got \975a2..., expected
+          # 975a2...`). This job is ubuntu-latest today, so the defect is latent
+          # here — it activates the moment this step moves onto a Windows matrix leg.
+          printf '%s  %s\n' "${expected_sha}" "${archive}" | "${checksum_verify[@]}" || {
+            echo "::error::${asset} checksum mismatch against pinned ${expected_sha} for ${target}"
+            exit 1
+          }
+          bindir="${HOME}/.cargo-deny-bin"
+          rm -rf "${bindir}"
+          mkdir -p "${bindir}"
+          # Each asset wraps one top-level directory, so strip it: the unix
+          # assets carry `cargo-deny`, the Windows one carries `cargo-deny.exe`.
+          tar -xzf "${archive}" -C "${bindir}" --strip-components=1
+          chmod +x "${bindir}/cargo-deny"*
+          if [ -x "${bindir}/cargo-deny" ]; then
+            deny_bin="${bindir}/cargo-deny"
+          else
+            deny_bin="${bindir}/cargo-deny.exe"
+          fi
+          # Prove the pinned artifact is what actually runs before trusting it.
+          case "$("${deny_bin}" --version)" in
+            *"${CARGO_DENY_VERSION}"*) ;;
+            *)
+              echo "::error::expected cargo-deny ${CARGO_DENY_VERSION}, got: $("${deny_bin}" --version)"
+              exit 1
+              ;;
+          esac
+          echo "cargo-deny ${CARGO_DENY_VERSION} installed for ${target} from a checksum-verified asset"
+          echo "${bindir}" >> "${GITHUB_PATH}"
+
+      - name: Run cargo-deny
+        shell: bash
+        run: |
+          set -euo pipefail
+          # --all-features is kept because it is the old action's default argument,
+          # so the checked graph is unchanged.
+          cargo deny --manifest-path Cargo.toml --all-features check
+
+      # Real CycloneDX generation. Tool check, not a guess: the crate `cyclonedx-bom`
+      # (0.8.1) is a LIBRARY — its published Cargo.toml declares [lib] and no [[bin]] —
+      # so `cargo install cyclonedx-bom` installs no executable and the old
+      # `|| true` / `|| echo` pair turned that into a green step with no SBOM. The
+      # binary-producing crate of the same OWFP project is `cargo-cyclonedx` (0.5.9),
+      # whose Cargo.toml has [[bin]] name = "cargo-cyclonedx", i.e. the cargo
+      # subcommand `cargo cyclonedx`. It writes one <package>.cdx.xml beside each
+      # workspace member manifest (its generator iterates cargo metadata's
+      # workspace_members) at the spec's default CycloneDX 1.3. The two shipped release
+      # binaries are warsha (crates/warsha-cli) and warshad (crates/warshad), so those
+      # two BOMs are the release assets; `test -s` makes an empty or missing BOM an
+      # error rather than a skipped artifact.
+      #
+      # RUSTFLAGS is cleared for this step only: the workflow-level "-D warnings" is
+      # right for our code, but applied to a third-party tool's whole dependency graph
+      # it turns any upstream warning into a failed install, which would fail the
+      # release for a reason that has nothing to do with what we ship.
+      - name: Generate CycloneDX SBOMs (cargo-cyclonedx)
+        env:
+          RUSTFLAGS: ""
+        run: |
+          set -euo pipefail
+          cargo install cargo-cyclonedx --locked --version 0.5.9
+          cargo cyclonedx --manifest-path Cargo.toml --format xml --all
+          test -s crates/warsha-cli/warsha-cli.cdx.xml
+          test -s crates/warshad/warshad.cdx.xml
+          cp crates/warsha-cli/warsha-cli.cdx.xml artifacts/sbom-cli.cdx.xml
+          cp crates/warshad/warshad.cdx.xml artifacts/sbom-daemon.cdx.xml
+
+      - name: Generate SHA256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
           cd artifacts
-          sha256sum $(find . -type f ! -name "*.sha256" | sort) > checksums.sha256
+          # The artifact list is collected ONCE into an array, NUL-delimited. This
+          # replaces `sha256sum $(find . -type f ...)` — SC2046: the unquoted command
+          # substitution word-splits and globs, so a single path containing a space
+          # was hashed as two nonexistent arguments, and a path containing `*` was
+          # rewritten by pathname expansion, either way still exiting 0.
+          files=()
+          while IFS= read -r -d '' f; do
+            files+=("$f")
+          done < <(find . -type f ! -name '*.sha256' -print0 | sort -z)
+          # The guard now checks the SAME recursive set the checksums are built from.
+          # It previously looked only at -maxdepth 1, so an artifacts/ tree holding
+          # only nested files passed the guard while the (different) recursive glob
+          # decided what actually got hashed.
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::no artifacts to checksum under $(pwd)"
+            exit 1
+          fi
+          sha256sum "${files[@]}" > checksums.sha256
+          test -s checksums.sha256
           cat checksums.sha256
 
-      - name: Generate SBOM (CycloneDX)
-        uses: EmbarkStudios/cargo-deny-action@v1
-        with:
-          command: check
-          # cargo-deny can generate SPDX, but we'll use cyclonedx-bom for CycloneDX
-        continue-on-error: true
-
-      - name: Generate SBOM with cyclonedx
-        run: |
-          cargo install cyclonedx-bom --locked || true
-          cyclonedx-bom -o artifacts/sbom.xml || echo "SBOM generation skipped"
-
-      - name: Upload checksums and SBOM
+      # if-no-files-found defaults to "warn", which is how this job stayed green while
+      # publishing nothing. Now a missing checksum file or a missing SBOM fails the job.
+      - name: Upload checksums and SBOMs
         uses: actions/upload-artifact@v4
         with:
           name: release-artifacts
           path: |
             artifacts/checksums.sha256
-            artifacts/sbom.xml
+            artifacts/sbom-cli.cdx.xml
+            artifacts/sbom-daemon.cdx.xml
+          if-no-files-found: error
           retention-days: 30
 
   # ============================================================
@@ -269,6 +539,8 @@ jobs:
     name: Create Draft Release
     needs: [prepare, rust-build, desktop-build, artifacts]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Download CLI binaries
         uses: actions/download-artifact@v4
@@ -287,25 +559,49 @@ jobs:
       - name: Download desktop artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: warsha-desktop-*
-          path: release
+          pattern: desktop-installers-*
+          path: release/desktop
           merge-multiple: true
 
-      - name: Download checksums and SBOM
+      - name: Download checksums and SBOMs
         uses: actions/download-artifact@v4
         with:
           name: release-artifacts
           path: release
 
+      # Before: `mv release/warsha*` is a prefix glob — it matched warshad* too, so
+      # the daemon binaries landed in release/cli/, release/daemon/ was always empty,
+      # and `2>/dev/null || true` on all three lines made every miss (including an
+      # entirely empty release/) invisible. Now: unmasked under set -euo pipefail,
+      # target-triple globs that cannot cross-match (warsha-x86_64-* never matches
+      # warshad-x86_64-*), a per-folder count assertion so a missing OS leg fails
+      # loudly, and a flatten of the nested bundle/<fmt>/ paths the merge-multiple
+      # desktop download preserves (the old find sweep is gone).
       - name: Organize release files
         run: |
-          mkdir -p release/cli release/daemon release/desktop
-          mv release/warsha* release/cli/ 2>/dev/null || true
-          mv release/warshad* release/daemon/ 2>/dev/null || true
-          find release -name "*.deb" -o -name "*.AppImage" -o -name "*.dmg" -o -name "*.msi" -o -name "*.exe" | xargs -I {} mv {} release/desktop/ 2>/dev/null || true
+          set -euo pipefail
+          mkdir -p release/cli release/daemon
+          mv release/warsha-x86_64-* release/cli/
+          mv release/warshad-x86_64-* release/daemon/
+          test "$(find release/cli -maxdepth 1 -type f | wc -l)" -eq 3
+          test "$(find release/daemon -maxdepth 1 -type f | wc -l)" -eq 3
+          find release/desktop -mindepth 2 -type f -exec mv -t release/desktop/ {} +
+          test -n "$(find release/desktop -type f -print -quit)"
+
+      # A rerun must never overwrite a release's assets: any release for this tag
+      # (draft or public) fails the job before the upload step can run.
+      - name: Reject an existing release for this tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view "${{ needs.prepare.outputs.tag }}" >/dev/null 2>&1; then
+            echo "::error::a release for ${{ needs.prepare.outputs.tag }} already exists; refusing to overwrite it"
+            exit 1
+          fi
 
       - name: Create draft release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
           name: Warsha ${{ needs.prepare.outputs.version }}
@@ -317,10 +613,57 @@ jobs:
             release/daemon/*
             release/desktop/*
             release/checksums.sha256
-            release/sbom.xml
+            release/sbom-cli.cdx.xml
+            release/sbom-daemon.cdx.xml
           generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ============================================================
+  # Promote the verified draft to a public release (separate, gated step)
+  # ============================================================
+  promote:
+    name: Promote Verified Draft
+    needs: [prepare, release]
+    # A tag push only creates the draft. Promotion requires an explicit dispatch
+    # with publish=true, and the `release` environment can require an approval.
+    if: ${{ inputs.publish == true }}
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout the tag (for the verifier)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Download the draft's assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh release download "${{ needs.prepare.outputs.tag }}" --dir dist
+
+      # Fail closed: a missing asset, a checksum mismatch, a tag/version mismatch
+      # or missing signing material leaves the draft unpublished.
+      - name: Verify the draft's assets
+        run: |
+          set -euo pipefail
+          node scripts/verify-release-artifacts.mjs \
+            --dir dist \
+            --tag "${{ needs.prepare.outputs.tag }}" \
+            --version "${{ needs.prepare.outputs.version }}" \
+            --scope "${{ inputs.signing_scope }}" \
+            --release-exists no
+
+      - name: Publish the verified release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release edit "${{ needs.prepare.outputs.tag }}" --draft=false --prerelease=false
 
   # ============================================================
   # Package Manager Manifests (prepare only)
@@ -335,7 +678,7 @@ jobs:
 
       - name: Create winget manifest
         run: |
-          VERSION=${{ needs.prepare.outputs.version }}
+          VERSION="${{ needs.prepare.outputs.version }}"
           mkdir -p manifests/winget
           cat > manifests/winget/warsha.yaml <<EOF
           PackageIdentifier: Warsha.Warsha
@@ -349,7 +692,7 @@ jobs:
           Installers:
             - Architecture: x64
               InstallerType: msi
-              InstallerUrl: https://github.com/Warsha/Warsha/releases/download/v$VERSION/Warsha_${VERSION}_x64_en-US.msi
+              InstallerUrl: https://github.com/${{ env.RELEASE_REPO }}/releases/download/v$VERSION/Warsha_${VERSION}_x64_en-US.msi
               InstallerSha256: PLACEHOLDER_SHA256
               ProductCode: "{PLACEHOLDER}"
           ManifestType: singleton
@@ -358,13 +701,20 @@ jobs:
 
       - name: Create Homebrew formula
         run: |
-          VERSION=${{ needs.prepare.outputs.version }}
+          VERSION="${{ needs.prepare.outputs.version }}"
           mkdir -p manifests/homebrew
+          # The heredoc is unquoted so $VERSION and the RELEASE_REPO expression
+          # expand; `version "$VERSION"` is emitted because the `url` line below
+          # interpolates `#{version}` — without an explicit version (or a URL Homebrew
+          # can parse it from) `#{version}` has nothing to resolve to. This also
+          # resolves shellcheck's SC2034: VERSION was assigned here and never used,
+          # so the step generated a formula that could not state its own version.
           cat > manifests/homebrew/warsha.rb <<EOF
           class Warsha < Formula
             desc "Arabic-first AI software factory"
-            homepage "https://github.com/Warsha/Warsha"
-            url "https://github.com/Warsha/Warsha/archive/refs/tags/v#{version}.tar.gz"
+            version "$VERSION"
+            homepage "https://github.com/${{ env.RELEASE_REPO }}"
+            url "https://github.com/${{ env.RELEASE_REPO }}/archive/refs/tags/v#{version}.tar.gz"
             sha256 "PLACEHOLDER_SHA256"
             license "PolyForm-Noncommercial-1.0.0"
 
@@ -383,17 +733,17 @@ jobs:
 
       - name: Create Scoop manifest
         run: |
-          VERSION=${{ needs.prepare.outputs.version }}
+          VERSION="${{ needs.prepare.outputs.version }}"
           mkdir -p manifests/scoop
           cat > manifests/scoop/warsha.json <<EOF
           {
             "version": "$VERSION",
             "description": "Arabic-first AI software factory",
-            "homepage": "https://github.com/Warsha/Warsha",
+            "homepage": "https://github.com/${{ env.RELEASE_REPO }}",
             "license": "PolyForm-Noncommercial-1.0.0",
             "architecture": {
               "64bit": {
-                "url": "https://github.com/Warsha/Warsha/releases/download/v$VERSION/warsha-windows.exe",
+                "url": "https://github.com/${{ env.RELEASE_REPO }}/releases/download/v$VERSION/warsha-windows.exe",
                 "hash": "PLACEHOLDER_SHA256"
               }
             },
@@ -402,7 +752,7 @@ jobs:
             "autoupdate": {
               "architecture": {
                 "64bit": {
-                  "url": "https://github.com/Warsha/Warsha/releases/download/v$version/warsha-windows.exe"
+                  "url": "https://github.com/${{ env.RELEASE_REPO }}/releases/download/v$version/warsha-windows.exe"
                 }
               }
             }
@@ -427,24 +777,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Order matters and used to be backwards: actions/setup-node's
+      # `cache: 'pnpm'` resolves the pnpm executable to locate its store, so it
+      # must run AFTER pnpm/action-setup, not before. Same single source of truth
+      # for the version as every other job — no `version:` input, package.json's
+      # `"packageManager": "pnpm@9.0.0"` decides.
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: 'pnpm'
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
       - name: Install mdBook
         run: cargo install mdbook mdbook-mermaid --locked
 
+      # docs is a member of pnpm-workspace.yaml (root pnpm-lock.yaml covers it) and
+      # apps/desktop runs the identical command unmasked — this install is not
+      # optional-by-design, so the mask (and the stderr silencer that hid *why* it
+      # failed) is gone: a lockfile mismatch now fails the step instead of being
+      # shrugged off before mdbook build.
       - name: Build docs
         working-directory: ./docs
         run: |
-          pnpm install --frozen-lockfile 2>/dev/null || true
+          pnpm install --frozen-lockfile
           mdbook build
 
       - name: Upload docs

@@ -1,4 +1,22 @@
 //! Warsha Core — Domain types for projects, runs, stages, gates, artifacts, events
+//!
+//! Wave 2 adds the Harness, Skill, Plugin/MCP and settings-extension domains;
+//! they live in focused modules and are re-exported here.
+
+pub mod config;
+pub mod harness;
+pub mod plugin;
+pub mod redaction;
+pub mod skill;
+
+pub use config::{
+    CustomModelRecord, FileContent, FileEntry, IntegrationConfig, IntegrationStatus,
+    IntegrationTestResult,
+};
+pub use harness::{bundled_harnesses, HarnessDefinition, HarnessRules, HarnessStage};
+pub use plugin::{bundled_plugins, PluginDefinition, PluginToolDefinition};
+pub use redaction::{mask_query_secrets, mask_secrets, REDACTED};
+pub use skill::{bundled_skills, SkillDefinition};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -154,11 +172,13 @@ impl std::fmt::Display for DeviceId {
 pub enum Role {
     Intake,
     Researcher,
+    #[serde(alias = "pm")]
     PM,
     Designer,
     Architect,
     Coder,
     Reviewer,
+    #[serde(alias = "qa")]
     QA,
     Security,
     Release,
@@ -303,6 +323,20 @@ pub enum ProviderKind {
     GeminiCLI,
     CursorCLI,
     OpenHands,
+}
+
+impl ProviderKind {
+    /// Whether a provider of this kind is called with an API key.
+    ///
+    /// The two local kinds are the exception: they are servers on the owner's own
+    /// machine, and the adapter that speaks to one (`OllamaProvider::new` in
+    /// `warsha-providers`) takes the credentials reference and ignores it — there is
+    /// no secret of theirs to file in the keychain. Every other kind here is a hosted
+    /// endpoint that is authenticated with a key, so a caller that has no key cannot
+    /// call it.
+    pub fn needs_api_key(self) -> bool {
+        !matches!(self, ProviderKind::Ollama | ProviderKind::LMStudio)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

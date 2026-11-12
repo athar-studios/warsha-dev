@@ -1,5 +1,36 @@
 # PLAN.md — Warsha Milestones Checklist
 
+## Program — Warsha completion (2026-11-09, owner master prompt)
+
+The umbrella program is `bridge-io/policy/2026-11-09-completion-program/PROGRAM_PLAN.md` (planner: Claude Opus 5.5;
+orchestrator: Qoder Software Dev Team / Project manager). Owner decisions OD-P1…OD-P7 (§6) are in force as written:
+merge each fully verified run into `dev` + non-force push of `main` after C-final (OD-P1), installers + owner-PC install
+at R0/R4, versions 0.3.0 / 0.3.1 / 0.4.0 / 0.5.0 / 1.0.0-rc-draft (OD-P6). Nothing tagged, published or force-pushed.
+Definition of Done = PROGRAM_PLAN §5 matrix (design, code, function, system, security, release truth) + FIN1–FIN3 cleanup.
+
+- [ ] **R0** finish run `2026-11-09-ui-v3` (0.3.0 pushed and installed) · **R0.T** gate tools promoted into `scripts/`
+- [ ] **R1** SEC — dependency & supply-chain security (0.3.1): S1a–S1d, S2, S3
+- [ ] **R2** EXT — MCP (approval at call site, pinned launches, scoped secrets, Streamable HTTP, Warsha as MCP server), Plugins/connections, Skills real, WebMCP (off by default), backend kit through MCP (0.4.0): X0–X11
+- [ ] **R3** SH — self-hosting (0.5.0): SH1 attach repo + worktree, SH2 = P7 command policy, SH3 coding-CLI backend, SH4 Gate C branch, SH5 pilot
+- [ ] **R4** FIN — cleanup + full verification matrix + owner-PC install + `FINAL_REPORT.md` (1.0.0-rc, draft only): FIN1–FIN5
+
+### Amendment 2026-11-10 — plan of record v2 (principal review)
+
+Source: `bridge-io/policy/2026-11-10-principal-review/REVIEW.md` (scorecard, Day-0 critique, truth-vs-claims matrix,
+§5 plan with file targets); orchestrator prompt: `HANDOVER.md` in the same directory. Decisions OD-R1…OD-R6 are in
+REVIEW §5.7 and `DECISIONS.md` 2026-11-10; the owner may strike any. R0 continues unchanged under its frozen gates.
+
+**Caution on the labels below.** The "✅ DONE" headers on every label below mean "types and unit tests exist", not "works end to end" — REVIEW §3 has the per-feature status; packet K8 re-labels them.
+
+New order: R0 UI v3 ∥ **KEEL** (0.3.1) → **ENGINE** (0.4.0) → extensions (0.5.0) → FIN (1.0.0-rc, draft only).
+
+- [ ] **P0 · KEEL** (with S1–S3, target 0.3.1, `crates/` from `128b59c`): **K1** gate decisions only at the run's current gate, bound to an artifact hash · **K2** run-state integrity (per-run lock, versioned updates, real cancel, `runs.resume`, change-request loop, restart recovery) · **K3** no silent fakes (`FakeProvider` fallback, `MockRoutineRunner`, scout mocks, constant `health`) · **K4** `RunCommand` policy (allow-list, cleared env, timeout, kill) · **K5** MCP spawn hardening (pinned packs, scoped secrets, `plugins.*` through the allow-list, errors surfaced) · **K6** MCP permission at the call site · **K7** remove the crypto stubs · **K8** status truth in PLAN/README · **K9** the three non-test `unwrap()` and the CLI stubs
+- [ ] Checkpoint KEEL: independent security review of K4 + K5 + K6, no open high finding; K1 + K2 merged before any release that ships "request changes" / "reject"
+- [ ] **P1 · ENGINE** (target 0.4.0): **H1** split `warshad/src/lib.rs` · **E1** background run executor (cancel, streaming, budget pre-check, real discovery, project language) · **E2** model-driven agent loop with tool calling, per run · **E3** repo attach + per-run worktree, files written by tools · **E4** coding-CLI backend · **E5** Gate C with diff, tests and preview · **E6** skills scoped per role, lock file · **E7** one SQLite stack · **E8** pilot
+- [ ] **P1 · UI v3** Waves B, C, D as planned, with the four amendments of REVIEW §5.5 · **FNT** bundle IBM Plex before RU3 (owner decision 2026-11-10: OD-U2 = A; Google Fonts links removed) · **T1** mode-switch root cause + soak test · **T2** Windows smoke capture proving the owner sees the baselined glyphs · **T3** mobile smoke test
+- [ ] **P2** (target 0.5.0): X3 Streamable HTTP · X1b/X4 approvals inbox + Connections page · X5 registry client · X7 plugin bundles · X8 `warsha mcp serve` · X9 WebMCP (off by default) · D1 micro-interactions · D2 sound cues (off by default) · D3 Arabic type-scale repair · RC1 remote channel truth
+- [ ] **FIN1–FIN5** (1.0.0-rc, draft only) · after 1.0: X10, X11, eco mode, post-launch collector, hosted relay
+
 ## M0 – Repo scaffold + CI ✅ DONE (validated 2026-10-28T22:38:39, all 14 checks green)
 - [x] Cargo + pnpm workspaces from §4 exist
 - [x] LICENSE (PolyForm Noncommercial 1.0.0)
@@ -34,7 +65,7 @@
 
 ## M4 – CLI (`warsha`) ✅ DONE (validated 2026-10-29T11:43:54, all 14 checks green)
 - [x] Commands: `init`, `new "<idea>"`, `run`, `status`, `logs -f`, `gates`, `approve <gate>`, `reject <gate> --reason`, `providers add|list|test|remove`, `roles set`, `budget set`, `doctor`, `pair`, `devices list|revoke`
-- [x] Uses `--json` output for scripting, and human output follows the locale
+- [x] Uses `--json` output for scripting — its text is pinned to English, a machine contract — and human output follows the process locale: every message `warsha` writes in prose (confirmations, refusals, its own error sentences) has two inline wordings chosen by `CliLang` (`LC_ALL` then `LANG`, `ar*` → Arabic). Left English, by name: clap-generated `--help`, values rendered through Rust `Debug` (stage/status enum names), and error text owned by other crates
 - [x] AC: snapshot tests for the CLI output. `warsha doctor` reports missing tools, so the whole M3 E2E can be driven from the CLI
 
 ## M5 – Desktop app (Tauri 2) ✅ DONE (validated 2026-10-29T12:52:29, all 14 checks green)
@@ -99,7 +130,7 @@
 ## M8 – i18n ar/en + RTL ✅ DONE (validated 2026-10-29T13:12:45, all 14 checks green)
 - [x] All UI strings sit in the catalogs, with full RTL layout (logical CSS properties) and a language switch
 - [x] Agents can write artifacts in the user's chosen language
-- [x] AC: a lint fails on hardcoded UI strings, there are visual snapshot tests in both directions, and the CLI messages are localized
+- [x] AC: a lint fails on hardcoded UI strings, there are visual snapshot tests in both directions, and every human message the CLI itself writes is localized — one ar/en inline-wording pair per message behind `CliLang` in `crates/warsha-cli/src/lib.rs`, pinned by tests in both languages; clap `--help` and the `--json` machine contract are English by design
 
 ### M8b – Simple mode UI spec (docs/UI.md) (inspired by LingCode's public site; ideas only) ✅ DONE (validated 2026-10-29T19:44:00, exit=0, all check groups green; see PROGRESS.md for the exact commands and the one host limit)
 - [x] `docs/UI.md` documents the Simple mode layout, mirrored for RTL: sidebar (New chat, search, projects, today's chats, plan badge) | chat | live preview
@@ -317,7 +348,7 @@
 - [x] Taste-learning preference store
   - [x] `crates/warsha-pipeline/src/preferences.rs`: an event-sourced taste store — signals (approve/reject/change-request/edit) → weighted preferences per project and per owner, with decay and an explainable summary
     - `PreferenceSignal`/`SignalKind` (four kinds, `direction`/`phrase`), `Preference { key, score, evidence_count, last_updated }`, `PreferenceStore` trait (`record_signal`/`list_preferences`/`explain`), `InMemoryPreferenceStore` (append-only, duplicate-id and invalid-signal refusals, `owner_preferences`, settable monotonic clock), `decay_factor` with `DECAY_HALF_LIFE_SECS` = 30 days, `explain` → `"dark mode — Approved 3 times, Rejected once (score 2.00)"`. 13 unit tests
-  - [x] Persisted through the store layer — ✅ DONE (M20 tenth batch, 2026-10-31)
+  - [x] Persisted through the store layer — ✅ DONE (M20 tenth batch, 2026-10-31; store-layer unit tests exist; no separately recorded gate count — the types/unit-tests caveat applies)
     - `crates/warsha-store/src/persistence.rs` (new): `SqliteStore` (one `rusqlite::Connection`, WAL, idempotent migration) with the `preferences` table (`project_id`, `key`, `score`, `evidence_count`, `last_updated`, PK `(project_id, key)`). `InMemoryPreferenceStore::save_to_store` writes every derived preference; `load_from_store(store, project_id)` reads a project's back, highest score first
     - One new dependency, `rusqlite 0.32` (`bundled`) in `crates/warsha-store/Cargo.toml`, pinned to the `libsqlite3-sys 0.30.1` that `sqlx` already links so the workspace keeps exactly one native SQLite. This supersedes the "no new dependency" note of the seventh batch, which was a scope limit, not the plan
     - ⛔ What the table does not carry: the signal log and the owner dimension. A reloaded preference keeps the score it was saved with (it is not decayed again on read), so `explain` still needs the in-memory signals
@@ -336,7 +367,7 @@
     - `crates/warsha-pipeline/src/scale_standards.rs`: `ScaleStandard { id, category, description, check }`, `ScaleCategory` (Database/Api/Observability/Security), `SCALE_STANDARDS` (a `static LazyLock<[ScaleStandard; 8]>` — a `const` cannot own a `String`), `ScaleStandards::all`/`by_category`/`get`/`checklist`. 4 unit tests. `docs/src/scale-standards.md` is the long form: the eight rules, the rationale per rule, the checks and the prompt path
   - [ ] Encoded as reviewable checks in the Coder/Reviewer role prompts and the spec template, plus an eval case
     - ✅ The render is `ScaleStandards::checklist()` (`[<id>] <rule> — <check>`, one line per standard), which is what a prompt would embed and a gate report would quote. ⛔ The prompt files (`crates/warsha-pipeline/src/prompts/**`), the spec template and `evals.rs` are outside this batch's file scope, so no role prompt and no eval case cite the standards yet
-- [x] Local / self-hosted / hosted run modes with phone pairing — ✅ DONE (2026-10-30, every check green; config, pairing store, badge and chapter only — no socket reads the config, see the seventh batch below)
+- [x] Local / self-hosted / hosted run modes with phone pairing — ✅ DONE (2026-10-30, every check green; no numeric count recorded; config, pairing store, badge and chapter only — no socket reads the config, see the seventh batch below)
   - [x] Three modes in config: Local (loopback only), SelfHosted (LAN + explicit bind), Hosted (relay-backed, E2E only)
     - `crates/warsha-pipeline/src/run_modes.rs` (new) + `lib.rs` `mod`/`pub use`: `RunMode` (`Local`/`SelfHosted`/`Hosted`, serde `snake_case`, `all`/`as_str`/`label`, `Local` is `Default`) and `RunModeConfig { mode, bind_host, allowed_hosts, relay_url }` with `for_mode`/`validate`/`is_loopback_only`/`requires_pairing` and `with_bind_host`/`with_allowed_hosts`/`with_relay_url`. `for_mode(Local)` is valid as returned; `for_mode(SelfHosted)` (`0.0.0.0`, empty allow-list) and `for_mode(Hosted)` (loopback, no relay) are refused by `validate()` until the caller supplies the allow-list or the relay URL — the safe default is the one that refuses to start
   - [x] Mode gates the API surface: Local binds `127.0.0.1` and refuses non-loopback peers; SelfHosted requires an explicit host allow-list; Hosted never exposes the API directly
@@ -362,7 +393,7 @@
 - [x] `MentionPicker` + `SlashCommandPicker` in the Simple mode composer — **wired** in the eighth batch below (`apps/desktop/src/screens/SimpleMode.tsx`). It was left open here because that file was outside this batch's allowed scope; the two components and their tests already existed
 - AC: every component above renders in the shell or the run view, and `tsc`/`eslint`/`vitest`/`vite build` stay green ✅ — covered by 7 new tests in `apps/desktop/src/App.test.tsx` (desktop suite 137 → 144). The composer pickers closed in the eighth batch, so the mount half of "replacing every previously stubbed wiring" is met
 
-### M20 (third batch) – First daemon RPC wiring batch ✅ DONE (validated 2026-10-31: `cargo fmt`/`clippy`/`test` and `actionlint` in WSL Ubuntu, client `tsc`/`eslint`/`vitest` on the Windows host; no bridge run)
+### M20 (third batch) – First daemon RPC wiring batch ✅ DONE (validated 2026-10-31: `cargo fmt`/`clippy`/`test` and `actionlint` in WSL Ubuntu, client `tsc`/`eslint`/`vitest` on the Windows host; no numeric count recorded; no bridge run)
 - [x] Backend kit export to a file — `crates/warsha-pipeline/src/backend_kit.rs`
   - `BackendKit::export_to_dir(&self, dir: &str) -> Result<String, BackendKitError>` writes the SQL dump from `export()` to `{dir}/schema.sql`, creates the directory, and returns the path; `SCHEMA_FILE_NAME`, `BackendKitError::InvalidExportPath` and `BackendKitError::Io`. `export()` itself still writes nothing
   - Unit tests: the dump is written and read back byte-for-byte (content + directory creation), and a blank directory is refused
@@ -519,21 +550,21 @@
 - [x] `ARCH_AUDIT.md`: per-file audit against R1–R5 plus the refactors made — delivered 2026-10-30; nothing was refactored by the audit itself (0 violations to fix), the M20 first-batch refactors are re-verified in it
 - [ ] Type-aware ESLint: re-enable `plugin:@typescript-eslint/recommended-type-checked` (deferred in the flat config — see DECISIONS.md 2026-10-31; ~280 existing app-screen violations, all needing component-logic rewrites)
 - [ ] Wire `App.tsx`'s `handleCreateProject` (currently an unused handler kept behind one narrow lint opt-out)
-- [ ] Tokens the twelfth batch could not reach: the two app stylesheets (`.css` is outside the R6 scan), app radii/widths/heights, and off-scale values (`10px`, `13px`, `18px`, `40px`, `0.8125rem`, `0.8rem`). Also missing tokens the apps had to work around: a scrim/overlay colour (modal backdrops use `--warsha-color-muted`) and pale status tints (pill backgrounds use `--warsha-color-surface-muted`, with the text colour carrying the state)
-- [x] Migrate `apps/desktop/src/**` and `apps/remote/src/**` inline literals to the token vocabulary, then extend R6 to scan them — ✅ DONE (M20 twelfth batch, 2026-10-31)
+- [ ] *(2026-11-08: partly stale — the listed off-scale literals `10px/13px/18px/40px/0.8125rem/0.8rem` have 0 hits since `68dc78d`; what remains, plus the scrim/tint gap, is planned in **Run 2026-11-08** below and `docs/designs/DESIGN_SYSTEM_V2.md` §4.)* Tokens the twelfth batch could not reach: the two app stylesheets (`.css` is outside the R6 scan), app radii/widths/heights, and off-scale values (`10px`, `13px`, `18px`, `40px`, `0.8125rem`, `0.8rem`). Also missing tokens the apps had to work around: a scrim/overlay colour (modal backdrops use `--warsha-color-muted`) and pale status tints (pill backgrounds use `--warsha-color-surface-muted`, with the text colour carrying the state)
+- [x] Migrate `apps/desktop/src/**` and `apps/remote/src/**` inline literals to the token vocabulary, then extend R6 to scan them — ✅ DONE (M20 twelfth batch, 2026-10-31; no separately recorded gate count — the types/unit-tests caveat applies)
   - `apps/desktop/src/theme.tsx` (new): `ThemePreference` (`light`/`dark`/`system`), `ResolvedTheme`, `THEME_STORAGE_KEY = 'warsha.theme'`, `resolveTheme`, `readThemePreference`, `systemPrefersDark`, `applyTheme`, `applyStoredTheme`, `ThemeProvider` + `useTheme`. The provider reads `localStorage` and `prefers-color-scheme`, writes `document.documentElement.dataset.theme` (`light`/`dark` only — never `system`), persists the owner's choice and re-evaluates on the media query's `change` event, so `system` keeps following the OS. `main.tsx` calls `applyStoredTheme()` before the first render, so a dark app does not flash light
   - `apps/desktop/src/components/ThemeToggle.tsx` (new): the top-bar switch — `role="group"` of three buttons with `aria-pressed`, labelled through `t()` with the `localized` fallback (ar + en), token-styled, logical properties only
   - Both apps now render from `var(--warsha-*)`: 36 files, ~900 literal values — 388 hex colours (64 distinct), 22 `white`, 12 `rgba()` scrims/shadows, 377 on-scale spacing values, 81 type-scale font sizes, 19 inline mono stacks, plus one `line-height`. Values off the scales stay pixels; radii, widths and heights are untouched. `apps/remote/src/index.css` imports `tokens.css` (it never did, so its tokens had no values)
   - `packages/ui/src/tokens/tokenDrift.test.ts`: R6 gained an app scan over `apps/desktop/src/**` and `apps/remote/src/**` (`.ts`/`.tsx`, tests excluded) — `var(--warsha-…)` is allowed there, colour literals, on-scale spacing, on-scale font sizes and inline font stacks are offences, off-scale values are left alone by design. 12 → 17 tests, both fixtures self-tested
   - `docs/ARCH_RULES.md` R6 documents the app scope, the messages and the four things the scan cannot see
 
-### M20 (seventeenth batch) – Provider RPCs: the wizard's key is really stored, really tested, really removed ✅ DONE (validation pending)
+### M20 (seventeenth batch) – Provider RPCs: the wizard's key is really stored, really tested, really removed ⚠️ UNVERIFIED (validation pending — no measured gate log as of 2026-11-11; the types/unit-tests caveat applies)
 - [x] The wire: `warshad::ProviderConfig { id, kind, api_base, models }` → `ProviderRecord { name, kind, enabled, api_base }`; `providers.add(name, kind, key, api_base) -> ProviderRecord`, `providers.list() -> Vec<ProviderRecord>`, `providers.test(name) -> HealthCheck`, `providers.remove(name) -> ProviderRecord`. Callers send the four fields as a JSON object — the exact payload `Onboarding.tsx` and `packages/client` already send — so the wizard, its tests, the three `onboarding.spec.ts` e2e tests and the 112 screenshot baselines are untouched. `packages/client`'s `ProviderConfig` gained the `api_base` the reply really carries; `warsha-cli`'s `cmd_providers` moved to the new wire and now requires `--key`
 - [x] `providers.add` persists: `warsha-store`'s `StoredProvider` + `save_provider`/`load_provider`/`load_providers`/`delete_provider` over a new `configured_providers` table in the `SqliteStore` schema (not `providers` — `warsha-store/migrations/001_initial.sql` already creates that name in the same `warsha.db`), reached from `warshad/src/settings.rs` on `spawn_blocking` like the other settings rows
 - [x] The key goes to the OS keychain: `warsha-providers::secrets::{SecretStore, KeychainSecretStore, InMemorySecretStore}` (service `warsha-provider`, account = provider name, over the existing `store_key`/`load_key`/`delete_key` seam), `DaemonState.secrets`, `start_daemon_with_secrets` for tests, keychain-first ordering on add and on remove, and a canary-key scan of the whole data directory in the integration test. Never SQLite, never a log, never an error message
 - [x] `providers.test` really tests: `ProviderSetupWizard::test_connection` for the inputs, a new `probe_endpoint` (`GET <base>/models`, bearer, 8 s) for the endpoint, `OneClickProvider::from_tag`/`default_base_url`/`default_model` for URL and model resolution; `2xx` healthy, `401`/`403` "the endpoint refused the API key", unreachable/timeout "the endpoint could not be reached". A refusal is a JSON-RPC error carrying the `HealthCheck` in `data`, because the wizard reads a resolved promise as passed
 - [x] 5 new integration tests in `crates/warshad/tests/provider_persistence.rs` over HTTP with the client's object params: add → restart on the same data directory → still listed and testable; the canary key in no file of the data directory; wrong key / unreachable endpoint / good key as three different answers; a key lost from the keychain; remove takes the row and the entry. No test reaches a real model API — two loopback stubs and one closed port
-- [ ] Still open after this batch: the real OS keychain is not exercised end-to-end (no D-Bus secret service in WSL/CI, so the integration test injects `InMemorySecretStore`); `providers.budget`/`providers.budget.status` still have no daemon method; a provider stores no model, so `custom` is addable but not testable; `enabled` is always `true`; `packages/client`'s `testProvider` still returns `Promise<void>`
+- [ ] Still open after this batch: the real OS keychain is not exercised end-to-end (no D-Bus secret service in WSL/CI, so the integration test injects `InMemorySecretStore`); ~~`providers.budget`/`providers.budget.status` still have no daemon method~~ — **decided against, not deferred**: the daemon keeps no per-provider ceiling (`budget.set` is per project at `crates/warshad/src/lib.rs:801-802`, `roles.set` carries `budget_cents_per_run` at `:1029-1034`), so the two client methods were deleted rather than implemented or aliased and no screen may present a per-provider number the daemon never kept (DECISIONS.md 2026-11-03); a provider stores no model, so `custom` is addable but not testable; `enabled` is always `true`; `packages/client`'s `testProvider` still returns `Promise<void>`
 
 ### M20 (nineteenth batch) – The desktop app is a real, installable Windows app ✅ DONE (validated 2026-10-31: MSVC release build + `tauri build` produced the MSI and the NSIS installer, `warsha-desktop.exe --self-check` green on the built binary; the 21-check WSL gate green — see PROGRESS.md for the exact commands and the two host limits)
 - [x] `apps/desktop/src-tauri` compiles: `Cargo.toml` is its own workspace with a `[lib]`/`[[bin]]` pair and the plugin crates and the phantom `warsha_client` dependency are gone; `tauri.conf.json` moved into the crate (that is the only place `tauri-build` reads it from), `bundle.deb` became `bundle.linux.deb`, and the v1 `plugins.*.allowlist` blocks were replaced by `src-tauri/capabilities/default.json` (`core:default`), which is what v2 reads
@@ -544,7 +575,95 @@
 - [x] Installers produced: `apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/Warsha_0.1.0_x64_en-US.msi` (8,085,504 bytes) and `...\bundle\nsis\Warsha_0.1.0_x64-setup.exe` (5,721,668 bytes)
 - [ ] Still open after this batch: the installers are unsigned (SmartScreen warns), the updater plugin is configured but not a dependency, the webview has no live event stream (`/events` authenticates from a header a browser cannot set), the ports are fixed rather than discovered, and the bundle identifier `dev.warsha.app` still ends in `.app` (Tauri warns about the macOS bundle-extension clash)
 
+## Run 2026-11-08 — Design System v2 + post-Qoder remediation (W1–W7) ✅ ACCEPTED by the owner — merged to `dev`, OD1/OD2/OD6 resolved and implemented. See `verdict.json` and `PROGRESS.md`
 
+Run id `2026-11-08-design-and-remediation`, evidence `bridge-io/policy/2026-11-08-design-and-remediation/`
+(`state.json` = `warsha-run/v1`, resumable without chat). Spec: `docs/designs/DESIGN_SYSTEM_V2.md`.
+Integration branch `run/2026-11-08/integration`; packet branches `run/2026-11-08/wN-<slug>`;
+worktrees `C:/Users/Dragonfly/Downloads/warsha-wt/wN`. Workers never edit `PLAN.md`/`PROGRESS.md`/
+`DECISIONS.md` — each writes `packets/WN/report.md` in the evidence dir and the integrator folds it in.
+W3 and W5 are **pixel-neutral**: 793 desktop + 91 remote Playwright cases green with zero snapshot writes.
+
+Measured baselines at `f7b8583`: vitest ui 151 · client 112 · i18n 52 · desktop 443 · remote 221;
+`warsha-pipeline` 341 tests (workspace 725); Playwright `--list` desktop 793 (a11y 188, states 252,
+visual 308, flows 30, layout 12, onboarding 3), remote 91 (bench.visual 84, flows 7).
+
+- [x] **G0** — verifier runs `pnpm exec playwright test --project=desktop` and `--project=remote` on the Linux capture host at the planner commit; records passed/failed per spec (settles a11y 180-vs-188)
+- [x] **W1** (Wave A) README truth — `crates/warsha-{remote,git,pipeline}/README.md`, `packages/crypto/README.md`, `apps/{remote,desktop}/README.md`, `templates/README.md`, `README.md`, `README.ar.md`
+- [x] **W3** (Wave A) Design System v2 in `packages/ui` — §4 tokens (scrim, 4 tints, lines, elevation/layers, half-steps, layout sizes, tracking, breakpoints), R6.7–R6.10 + app-length ratchet, pixel-neutral compound fixes, 3 new compound tests, `packages/ui/README.md`; `@warsha/ui` ≥ 170 tests
+- [x] **W4** (Wave A) wire + client + harness — stale `REQUIRE_NO_KNOWN_DRIFT` comments, 14 `WarshaClient` wrappers (routines ×5, backend get/set, preview ×3, runmode ×2, preferences ×2), harness `RPC_METHODS` 44 → 75, wire check W9 (client ⊆ harness); client ≥ 140 tests
+- [x] **W6** (Wave A) pipeline hardening — quote-aware `split_command`, quoted `probe_line_for`, `ReadBeforeWriteGuard` in `FilesystemToolExecutor`, `@file` mentions attached in `AgentLoop`; pipeline ≥ 350 tests
+- [x] **W7** (Wave A) Android — build remote, `assembleRelease` (preBuild syncs `assets/public`), `apksigner verify`, SHA-256 + size in `apps/mobile/README.md`
+- [x] **C1** — owner merges accepted W3 + W4 (and W1/W6/W7 when ready) into the integration branch (`--no-ff`)
+- [x] **W2** (Wave B) canonical docs — `docs/{ARCHITECTURE,ARCH_RULES,DEPLOY,DEVELOPERS,VERIFY}.md`, `docs/src/{architecture,SUMMARY}.md` + 5 shims, `docs/designs/SITEMAP.md`, `_agents/skills/warsha_elephant/SKILL.md`, `SECURITY.md`
+- [x] **W5** (Wave B) — merged at C2d (`77a02c1`). OD4 was resolved without an owner decision: the quiet band reads its width from `sizeTokens`, so the frozen e2e assertion and the R6.9 ratchet both hold with `states.spec.ts` byte-identical. G5.10 = 793/0 on the capture host; desktop 464. apps adoption + wiring — Routines + BackendKitPanel live, `real-acceptance.cjs:36` → 8765, DS v2 §4 migration table, scrim in HandoffDialog/GateBell; desktop ≥ 451 tests; ratchet passes at `WARSHA_R6_APP_LENGTH_BUDGET=0`
+- [x] **C2 / INT-2** — W2 merged at C2a/C2b/C2c; W5 at C2d; `APP_LENGTH_BUDGET` set to 0 at `e914ad3` (`@warsha/ui` 181 passed at the constant 0). — merge W2 + W5; set `APP_LENGTH_BUDGET = 0` in `packages/ui/src/tokens/tokenDrift.test.ts` (planner-specified one-line tightening)
+- [x] **C3** — swept at the final tip `a643a53`: GC.1–GC.9 and GC.11 pass; GC.10 passes on desktop (**793/0, 0 snapshot writes**) and its remote half is blocked on OD1; GC.12 passes every W7 gate except `G7.6` (OD2) after the APK was rebuilt on the integrated tree (842,981 B, `apksigner` Verifies, v2, RSA-4096, G7.5 grep exit 0). `acceptance.json` carries a verdict for all 108 gates. **Owner acceptance and the `dev` merge remain.** — full gate sweep on the integration branch (Windows + Linux capture host; W7 gates re-run on the integrated tree) → owner acceptance → merge to `dev`
+
+- [x] **Post-acceptance delivery** — at `13a3b60`: the owner accepted the run at seq 59 and authorised the
+  fast-forward merge, so `dev` moved `642ae95` → `282bcd6` with a clean tree and no conflicts. The three
+  resolutions were implemented (OD1: `runs.subscribe` harness gap then exactly 8 baselines refreshed;
+  OD2: value-anchored `G7.6`; OD6: read-before-write wired into `warshad` with creation exempt). Rust and
+  web preflight are green on the release commit (`release/preflight-rust.out`, `release/preflight-web.out`),
+  the three release artifacts were built and verified, and the **local draft bundle** is staged at
+  `dist/release/v0.2.0/` (Windows NSIS + MSI, signed APK, Docker image tarball, two CycloneDX SBOMs,
+  `checksums.sha256`, release notes). The owner then authorised shipping: `main` fast-forwarded to
+  `4d76e69` and was pushed, tag `v0.2.0` was pushed, and
+  <https://github.com/athar-studios/warsha/releases/tag/v0.2.0> was published with all seven assets.
+  `dist/` stays gitignored. See `PROGRESS.md`.
+
+Phase B (visual wave, owner names the baseline set) and Phase C (IBM Plex vendoring, OFL-1.1 notice)
+are listed in `DESIGN_SYSTEM_V2.md` §9. Logged follow-ups outside this run: `warshad` `start_preview`
+should reuse `split_command`; remaining `TODO(M20 wiring)` sites (`RunView`, `AdvancedMode`,
+`SettingsScreen`, stale `ArtifactViewer`); the timing-fragile `sleep 30` process tests; harness stub
+shape drift (`postlaunch.*`, `backend.export`, `handoff.*`).
+
+## Run 2026-11-09 — UI v3: new design system «حِرفة», every page rebuilt, every control wired — IN PROGRESS (Wave A closing, state seq 49)
+
+Run id `2026-11-09-ui-v3`, evidence `bridge-io/policy/2026-11-09-ui-v3/` (`state.json` seq 49, 167 frozen gates,
+`HANDOVER.md` = the Qoder prompt, `PACKETS.md`, `OWNER_DECISIONS.md`). Spec: `docs/designs/DESIGN_SYSTEM_V3.md`,
+`docs/designs/UI_V3_PLAN.md`, visual reference `docs/designs/v3-preview.html`. Integration branch
+`run/2026-11-09-ui-v3/integration`; worktrees `C:/Users/Dragonfly/Downloads/warsha-wt/v3/<p>`. v3 is built beside v2
+(`?ui=v3`) and v2 stays the default — and its e2e suites stay green — until the cutover packet U7.
+
+- [x] **Owner** approves the spec (OD-U0 = yes) and answers OD-U1 (pre-authorised), OD-U2 (C), OD-U3 (yes), OD-B3 (0.3.0), OD-B4 (defer → R3/SH2), OD-B6 (no) — `state.json` `owner_decisions`, DECISIONS.md 2026-11-09
+- [x] **G0** + R0 (v0.2.1 drift on v2, fenced) — R0b 884/884/0, baselines committed `4c65ead` (OD-U1, `gates/R0b.counts.log`)
+- [ ] Wave A: **U0** DS foundation · **U2** v3 app infrastructure · **H1** harness truth + RPC log · **R1** Rust hygiene · **V1** release truth
+- [x] **C1** merges + RH1 — integration tip `d598ad6` (F2→R1→V1→U0→U2→H1, guards green after each; 48 baselines refreshed fenced `outside=0`; post-run 884/884; state seq 73)
+- [ ] Wave B: **U1** DS composites · **E0** e2e v3 support · (**P7** if OD-B4 = approve)
+- [ ] **C2** merges
+- [ ] Wave C: **U3** Simple pages (frame, onboarding, home, projects, project, inbox) · **U4** Workbench · **U5** Settings · **U6** Remote PWA on v3
+- [ ] **C3** merges + genesis baselines RU3/RU4/RU5 + RU6
+- [ ] **U7** cutover (only on OD-U3) → v3 is the only UI; v2 code, specs and 763 desktop baselines deleted
+- [ ] **C-final** — INT-REL, GC.1–GC.17 (incl. the action contract, Arabic-only, palette and simplicity gates), local draft bundle → ready for acceptance
+
+Not built because the daemon has no method for it (follow-ups): release preflight, web deploy, eco mode, project
+rename/archive, slash commands and `@` mentions, fast-mode tier, permission-mode chip, MCP console, raw process control.
+
+## Run 2026-11-09 — Phase B visual wave + build finalisation (P1–P7) — SUPERSEDED by "Run 2026-11-09 — UI v3" (not executed; P2/P3/P4/P7 continue there as H1/R1/V1/P7)
+
+Run id `2026-11-09-phase-b-visual-wave`, evidence `bridge-io/policy/2026-11-09-phase-b-visual-wave/`
+(`state.json` seq 2, phase `plan`, 94 frozen gates; `HANDOVER.md` is the orchestrator prompt; `PACKETS.md` the worker
+briefs; `OWNER_DECISIONS.md` the owner's answers). Base: `dev` at the planner commit. Integration branch
+`run/2026-11-09/integration`; packet branches `run/2026-11-09/<p>-<slug>`; worktrees
+`C:/Users/Dragonfly/Downloads/warsha-wt/pb/<p>`. Workers never edit this file, `PROGRESS.md` or `DECISIONS.md`, and never
+touch `*-snapshots/**`; baselines change only in the fenced refreshes R0–R4 (`tools/pw-gate.mjs`, `named/*.txt`).
+
+- [ ] **Owner answers** `OWNER_DECISIONS.md` (OD-B1 refresh mode, OD-B3 release version, OD-B4 agent command policy, OD-B5 fonts, OD-B6 hygiene)
+- [ ] **G0** — unit/cargo/check counts on Windows, full Playwright JSON on the Linux x86_64 capture host at the planner commit; **R0** only if every failure is inside `named/R0.txt` (v0.2.1 drift: onboarding-*, providers, settings-providers)
+- [ ] **P1** (Wave A) `packages/ui` — status tints in `Chip`, no accent fill / no opacity in ModelPicker + SettingsScopeSentence, new `SettingsLayout` compound
+- [ ] **P2** (Wave A) e2e harness truth — daemon-true `postlaunch.*`, `backend.export`, `handoff.*`, `runs.subscribe` run; 4 Wave-2 screens in `SCREENS`; stub-vs-decoder contract test; wire check W10 (remote harness)
+- [ ] **P3** (Wave A) Rust hygiene — no non-test `unwrap`, no silently dropped RPC errors, preview policy on the `split_command` token, event-driven process tests
+- [ ] **P4** (Wave A) release truth — one version everywhere (0.2.1, APK versionCode 201), `scripts/check-versions.mjs`, Docker version label, stale-dist-proof APK sync, root keystore ignores, release.yml tag check + job-scoped permissions, mobile README truth
+- [ ] **C1** — merge P3 → P4 → P2 (+R1) → P1 (+R2)
+- [ ] **P5a** (Wave B) desktop structure — `Tabs` for the three hand-built tablists, `Composer` in SimpleMode, ModelPicker catalog strings, RunView preview + ArtifactViewer wired, startup `listRuns` failure handled
+- [ ] **P5b** (Wave B) settings — `SettingsLayout` on ten roots, SettingsScopeSentence catalog strings, opacity → `text-muted`, HandoffDialog on `layer-modal`
+- [ ] **P7** (Wave B, only if OD-B4 = approve) — agent `RunCommand` judged by the process allow-list
+- [ ] **C2** — merge P5a (+R3) → P5b (+R4) → P7
+- [ ] **P6** (Wave C) — English defaults removed from ModelPicker / SettingsScopeSentence (pixel-neutral) → **C3**
+- [ ] **C4** — INT-REL (owner's version), GC.1–GC.15, local draft bundle `dist/release/v<version>/`, `verdict.json`, records folded → ready for acceptance (owner merges, tags and publishes)
+
+Out of this run: Phase C fonts (OD-B5), Tauri updater and code signing (human-only), APK/Docker CI jobs.
 
 ## Definition of Done (v0.1.0 — M0–M9, per BUILD_PROMPT.md §8)
 - [ ] M0–M9 acceptance criteria all pass, CI is green on all three OSes, and there are no `TODO(security)` items left

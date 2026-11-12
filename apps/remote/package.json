@@ -1,12 +1,15 @@
 {
   "name": "warsha-remote",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "dev:lan": "vite --host",
+    "build": "tsc && vite build && node scripts/generate-service-worker.mjs",
     "preview": "vite preview",
+    "preview:lan": "vite preview --host",
+    "check:pwa": "node scripts/verify-pwa.mjs",
     "lint": "eslint src --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

@@ -20,14 +20,21 @@
 //! - **The environment survives a restart.** [`ManagedProcess`] keeps exactly the
 //!   six documented fields, so the environment a spawn was given is stored beside
 //!   the record and replayed by [`ProcessManager::restart`].
-//! - **stdout is a pipe the manager owns.** stdin is piped (the MCP transport's
-//!   frame sink), and stdout is piped and captured per process: the MCP
-//!   handshake reads a reply and the live preview reads the URL a dev server
-//!   prints. stderr stays inherited, so a program's diagnostics still reach the
-//!   daemon's console, and a captured stdout line is re-emitted as a `tracing`
-//!   event for the same reason. A bounded ring ([`MAX_CAPTURED_LINES`]) keeps
-//!   the newest lines, so a chatty server cannot grow the daemon's memory
-//!   without bound.
+//! - **The environment is cleared, not inherited.** Every child starts from
+//!   `env_clear()` and the fixed [`MINIMAL_CHILD_ENV`] floor; the only other
+//!   variables it sees are the ones the caller named, and a caller cannot
+//!   replace `PATH` or hand a loader variable to the program. A provider key or
+//!   bearer token in the daemon's environment therefore cannot reach a child by
+//!   inheritance (KEEL K5a).
+//! - **stdout and stderr are pipes the manager owns.** stdin is piped (the MCP
+//!   transport's frame sink), stdout is captured per process (the MCP handshake
+//!   reads a reply and the live preview reads the URL a dev server prints), and
+//!   stderr is captured too, **redacted** through
+//!   [`crate::guardrails::mask_secrets`] and re-emitted as a `tracing` event
+//!   instead of being inherited. A server cannot put a token on the daemon's
+//!   console by logging it. A bounded ring ([`MAX_CAPTURED_LINES`]) keeps the
+//!   newest lines of each stream, so a chatty server cannot grow the daemon's
+//!   memory without bound.
 //! - **Children are reaped on request, not on drop.** [`ProcessManager::kill_all`]
 //!   kills and waits for every live child, and the daemon's shutdown is what
 //!   calls it: an OS child cannot be awaited in `Drop`, so an exit path has to
@@ -42,9 +49,37 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdout, Command};
+use tokio::io::{AsyncRead, AsyncWriteExt};
+use tokio::process::{Child, ChildStderr, ChildStdout, Command};
 use tokio::sync::Mutex;
+
+use crate::command_policy::{child_path, MINIMAL_CHILD_ENV};
+
+/// Environment names a spawn may not hand to a child, whatever its caller asks.
+///
+/// These are the same loader/interpreter hooks the daemon's process policy
+/// refuses at the RPC seam; refusing them here as well means a caller that
+/// reaches the manager by another route still cannot turn an environment
+/// variable into code execution (KEEL K5a).
+const DENIED_CHILD_ENV_KEYS: &[&str] = &[
+    "PATH",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "NODE_OPTIONS",
+    "PYTHONPATH",
+    "PYTHONSTARTUP",
+    "PERL5OPT",
+    "RUBYOPT",
+    "GEM_PATH",
+    "CARGO",
+    "RUSTC_WRAPPER",
+    "RUSTC_WORKSPACE_WRAPPER",
+    "SHELL",
+    "BASH_ENV",
+    "ENV",
+];
 
 /// How many stdout lines the manager keeps per process.
 ///
@@ -52,6 +87,29 @@ use tokio::sync::Mutex;
 /// newest lines and drops the oldest, so a server that outlives the daemon's
 /// patience cannot grow its memory without bound.
 pub const MAX_CAPTURED_LINES: usize = 500;
+
+/// The wall-clock bound for one stdin write to a child.
+pub const STDIN_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The most bytes one captured line keeps before it is truncated.
+///
+/// [`BufReader::lines`] built a whole line before redacting, so a child that
+/// printed one 2 MiB line without a newline could grow the daemon's memory
+/// without bound (KEEL K5 independent review, finding 4). A line longer than
+/// this is cut and marked with [`TRUNCATION_MARKER`].
+pub const MAX_CAPTURED_LINE_BYTES: usize = 16 * 1024;
+
+/// The most bytes a stderr ring keeps; the oldest lines are dropped first.
+pub const MAX_CAPTURED_STDERR_BYTES: usize = 256 * 1024;
+
+/// The marker a line carries when it hit [`MAX_CAPTURED_LINE_BYTES`].
+pub const TRUNCATION_MARKER: &str = "…[truncated]";
+
+/// Values shorter than this are not treated as known secrets when masking env.
+///
+/// A resolved keychain secret is long; masking one-character values would
+/// mangle ordinary diagnostics without adding protection.
+const MIN_MASKED_ENV_VALUE_BYTES: usize = 8;
 
 /// How long [`LivePreviewManager::start`] waits for the dev server to print a URL.
 ///
@@ -209,6 +267,9 @@ pub enum ProcessError {
         #[source]
         source: std::io::Error,
     },
+    /// Writing to the child's stdin did not finish in time.
+    #[error("process `{0}` did not accept stdin within the deadline")]
+    StdinTimeout(String),
     /// The process was signalled but could not be killed.
     #[error("could not stop process `{id}`: {source}")]
     Stop {
@@ -242,6 +303,12 @@ pub enum ProcessError {
     /// A process needs a program to run.
     #[error("empty command: a process needs a program to run")]
     EmptyCommand,
+    /// A single- or double-quoted argument was never closed.
+    #[error("unterminated {quote} quote in command")]
+    UnterminatedQuote {
+        /// The quote character left open (`'` or `"`).
+        quote: char,
+    },
     /// A preview needs a project to belong to.
     #[error("empty project id: a preview needs a project")]
     EmptyProjectId,
@@ -286,6 +353,14 @@ pub trait ProcessManager: Send + Sync {
     /// the end is an empty list, not an error.
     async fn read_stdout(&self, id: &str, offset: usize) -> Result<Vec<String>, ProcessError>;
 
+    /// The stderr lines the process has printed, redacted, oldest first, from
+    /// `offset` on.
+    ///
+    /// Redaction happens when the line is captured, so the ring never held the
+    /// material a server printed and a caller cannot read it back by asking
+    /// again. The same offset rule as [`ProcessManager::read_stdout`] applies.
+    async fn read_stderr(&self, id: &str, offset: usize) -> Result<Vec<String>, ProcessError>;
+
     /// Kill and reap every child that is still alive, and report how many there were.
     ///
     /// This is the daemon's exit path: a child of the daemon outlives it unless
@@ -314,25 +389,47 @@ struct Entry {
     process: ManagedProcess,
     env: HashMap<String, String>,
     output: Arc<Mutex<VecDeque<String>>>,
+    errors: Arc<Mutex<VecDeque<String>>>,
+    /// The child's stdin behind its own lock, so a blocked writer never holds the
+    /// entry list (review finding: `write_stdin` held `entries` across the write).
+    stdin: Arc<Mutex<Option<tokio::process::ChildStdin>>>,
 }
 
 /// The [`Command`] every spawn and restart builds.
 ///
 /// stdin and stdout are pipes the manager owns: stdin is the MCP transport's
 /// frame sink, and stdout is captured ([`ProcessManager::read_stdout`]) so a
-/// reply can be read and a printed URL can be found. stderr is inherited, so a
-/// program that logs its failures to stderr still reaches the console the daemon
-/// was started from.
+/// reply can be read and a printed URL can be found. stderr is piped as well and
+/// captured *redacted* ([`ProcessManager::read_stderr`]), so a program's
+/// diagnostics still reach the daemon's console without carrying a credential
+/// a caller could read back (KEEL K5a).
+///
+/// The environment is built, not inherited: `env_clear()` first, then the fixed
+/// [`MINIMAL_CHILD_ENV`] floor, then the caller's named variables except the
+/// loader hooks in [`DENIED_CHILD_ENV_KEYS`]. A variable already in the floor
+/// (`PATH`) cannot be replaced.
 fn command_for(program: &str, args: &[String], env: &HashMap<String, String>) -> Command {
     let mut command = Command::new(program);
     command.args(args);
+    command.env_clear();
+    for (key, value) in MINIMAL_CHILD_ENV {
+        command.env(key, value);
+    }
+    // The trusted daemon PATH carries the allow-listed toolchains (`~/.cargo/bin`,
+    // nvm, volta). PATH is not a secret; a caller-supplied PATH stays denied by
+    // `DENIED_CHILD_ENV_KEYS` below (KEEL K5 review, finding 5).
+    command.env("PATH", child_path());
     for (key, value) in env {
+        let upper = key.trim().to_ascii_uppercase();
+        if DENIED_CHILD_ENV_KEYS.contains(&upper.as_str()) || upper.starts_with("DYLD_") {
+            continue;
+        }
         command.env(key, value);
     }
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit());
+        .stderr(Stdio::piped());
     command
 }
 
@@ -341,20 +438,221 @@ fn command_for(program: &str, args: &[String], env: &HashMap<String, String>) ->
 /// Each line is also re-emitted as a `tracing` event: stdout used to be
 /// inherited, so this is where a dev server's log still reaches the daemon's
 /// console now that the manager holds the pipe.
-fn capture_stdout(id: String, stdout: ChildStdout, output: Arc<Mutex<VecDeque<String>>>) {
+fn capture_stdout(
+    id: String,
+    stdout: ChildStdout,
+    output: Arc<Mutex<VecDeque<String>>>,
+    mask_values: Vec<String>,
+) {
+    capture_lines(id, stdout, output, false, mask_values);
+}
+
+/// Capture `stderr` into `errors`, redacted, until the pipe closes.
+///
+/// Redaction happens before the line is stored or logged: the shape-based
+/// [`crate::guardrails::mask_secrets`] pass runs first, then every known value
+/// the child received through its environment is replaced with `***`. Neither
+/// the ring a test reads nor the daemon's console can carry a token the server
+/// printed (KEEL K5a and K5 repair finding 2).
+fn capture_stderr(
+    id: String,
+    stderr: ChildStderr,
+    errors: Arc<Mutex<VecDeque<String>>>,
+    mask_values: Vec<String>,
+) {
+    capture_lines(id, stderr, errors, true, mask_values);
+}
+
+/// Drain one piped stream into its bounded ring, redacting when asked.
+fn capture_lines<R>(
+    id: String,
+    reader: R,
+    sink: Arc<Mutex<VecDeque<String>>>,
+    redact: bool,
+    mask_values: Vec<String>,
+) where
+    R: AsyncRead + Unpin + Send + 'static,
+{
     tokio::spawn(async move {
-        let mut lines = BufReader::new(stdout).lines();
-        // A closed pipe and a broken read are both the end of the transcript; the
-        // exit status is what says how the child ended.
-        while let Ok(Some(line)) = lines.next_line().await {
-            tracing::info!(process = %id, "{line}");
-            let mut captured = output.lock().await;
-            if captured.len() == MAX_CAPTURED_LINES {
-                captured.pop_front();
-            }
-            captured.push_back(line);
-        }
+        drain_bounded(&id, reader, &sink, redact, &mask_values).await;
     });
+}
+
+/// The known secret values a child received through its environment.
+///
+/// The values come from the environment the caller handed the child (for a
+/// plugin, the resolved keychain references), so they are exactly the material
+/// that must never come back through `read_stderr` or the daemon log. Very short
+/// values are skipped: masking them would mangle diagnostics without protecting
+/// a credential.
+fn mask_values_for(env: &HashMap<String, String>) -> Vec<String> {
+    let mut values: Vec<String> = env
+        .values()
+        .map(|value| value.trim().to_string())
+        .filter(|value| value.len() >= MIN_MASKED_ENV_VALUE_BYTES)
+        .collect();
+    values.sort();
+    values.dedup();
+    values
+}
+
+/// Append `segment` to `line`, stopping at [`MAX_CAPTURED_LINE_BYTES`].
+fn append_bounded(line: &mut Vec<u8>, segment: &[u8], truncated: &mut bool) {
+    if line.len() >= MAX_CAPTURED_LINE_BYTES {
+        *truncated = true;
+        return;
+    }
+    let room = MAX_CAPTURED_LINE_BYTES - line.len();
+    if segment.len() <= room {
+        line.extend_from_slice(segment);
+    } else {
+        line.extend_from_slice(&segment[..room]);
+        *truncated = true;
+    }
+}
+
+/// Store one captured line, enforcing the line-count and byte caps of the ring.
+async fn push_captured(
+    sink: &Arc<Mutex<VecDeque<String>>>,
+    text: String,
+    total_bytes: &mut usize,
+    max_ring_bytes: usize,
+) {
+    let mut captured = sink.lock().await;
+    *total_bytes += text.len();
+    captured.push_back(text);
+    while *total_bytes > max_ring_bytes || captured.len() > MAX_CAPTURED_LINES {
+        let Some(dropped) = captured.pop_front() else {
+            break;
+        };
+        *total_bytes = total_bytes.saturating_sub(dropped.len());
+    }
+}
+
+/// Finish `line`: redact, log and store it, then clear the accumulator.
+#[allow(clippy::too_many_arguments)]
+async fn emit_line(
+    id: &str,
+    sink: &Arc<Mutex<VecDeque<String>>>,
+    line: &mut Vec<u8>,
+    truncated: &mut bool,
+    redact: bool,
+    mask_values: &[String],
+    total_bytes: &mut usize,
+    max_ring_bytes: usize,
+) {
+    if line.is_empty() && !*truncated {
+        return;
+    }
+    let mut text = String::from_utf8_lossy(line).into_owned();
+    if *truncated {
+        text.push_str(TRUNCATION_MARKER);
+    }
+    if redact {
+        text = crate::guardrails::mask_secrets(&text);
+        for value in mask_values {
+            if !value.is_empty() {
+                text = text.replace(value, "***");
+            }
+        }
+        tracing::warn!(process = %id, "{text}");
+    } else {
+        // The ring keeps the raw protocol bytes because an MCP reply has to parse;
+        // the daemon log, however, must not carry a known secret a server printed on
+        // stdout. The ring remains owner-readable as before (tracked residual).
+        let mut logged = text.clone();
+        for value in mask_values {
+            if !value.is_empty() {
+                logged = logged.replace(value, "***");
+            }
+        }
+        tracing::info!(process = %id, "{logged}");
+    }
+    line.clear();
+    *truncated = false;
+    push_captured(sink, text, total_bytes, max_ring_bytes).await;
+}
+
+/// Read `reader` into `sink` with a per-line byte cap and a total ring byte cap.
+///
+/// This replaces `BufReader::lines()`, which built a whole line before masking:
+/// a single 2 MiB stderr line without a newline could grow the daemon's memory
+/// without bound (KEEL K5 review, finding 4). A line that reaches the cap is
+/// flushed immediately, so a no-newline stream stays bounded too.
+pub(crate) async fn drain_bounded<R>(
+    id: &str,
+    reader: R,
+    sink: &Arc<Mutex<VecDeque<String>>>,
+    redact: bool,
+    mask_values: &[String],
+) where
+    R: AsyncRead + Unpin,
+{
+    let mut reader = reader;
+    let mut chunk = [0u8; 8192];
+    let mut line: Vec<u8> = Vec::new();
+    let mut truncated = false;
+    let mut total_bytes = 0usize;
+    let max_ring_bytes = if redact {
+        MAX_CAPTURED_STDERR_BYTES
+    } else {
+        MAX_CAPTURED_LINE_BYTES * MAX_CAPTURED_LINES
+    };
+    loop {
+        let n = match tokio::io::AsyncReadExt::read(&mut reader, &mut chunk).await {
+            Ok(0) => break,
+            Ok(n) => n,
+            // A closed pipe and a broken read are both the end of the transcript;
+            // the exit status is what says how the child ended.
+            Err(_) => break,
+        };
+        let mut start = 0usize;
+        for i in 0..n {
+            if chunk[i] == b'\n' {
+                append_bounded(&mut line, &chunk[start..i], &mut truncated);
+                emit_line(
+                    id,
+                    sink,
+                    &mut line,
+                    &mut truncated,
+                    redact,
+                    mask_values,
+                    &mut total_bytes,
+                    max_ring_bytes,
+                )
+                .await;
+                start = i + 1;
+            }
+        }
+        append_bounded(&mut line, &chunk[start..n], &mut truncated);
+        if line.len() >= MAX_CAPTURED_LINE_BYTES {
+            // The line was cut at the cap and continues in the next segment; the
+            // marker is what tells a reader the text is not the whole line.
+            truncated = true;
+            emit_line(
+                id,
+                sink,
+                &mut line,
+                &mut truncated,
+                redact,
+                mask_values,
+                &mut total_bytes,
+                max_ring_bytes,
+            )
+            .await;
+        }
+    }
+    emit_line(
+        id,
+        sink,
+        &mut line,
+        &mut truncated,
+        redact,
+        mask_values,
+        &mut total_bytes,
+        max_ring_bytes,
+    )
+    .await;
 }
 
 /// Observe `process` once: settle a finished child, promote a live `Starting`.
@@ -450,8 +748,13 @@ impl ProcessManager for InMemoryProcessManager {
         // first line a caller reads cannot be lost to a late reader.
         let output = Arc::new(Mutex::new(VecDeque::new()));
         if let Some(stdout) = child.stdout.take() {
-            capture_stdout(id.clone(), stdout, output.clone());
+            capture_stdout(id.clone(), stdout, output.clone(), mask_values_for(env));
         }
+        let errors = Arc::new(Mutex::new(VecDeque::new()));
+        if let Some(stderr) = child.stderr.take() {
+            capture_stderr(id.clone(), stderr, errors.clone(), mask_values_for(env));
+        }
+        let stdin = child.stdin.take();
         let entry = Entry {
             process: ManagedProcess {
                 id: id.clone(),
@@ -464,6 +767,8 @@ impl ProcessManager for InMemoryProcessManager {
             },
             env: env.clone(),
             output,
+            errors,
+            stdin: Arc::new(Mutex::new(stdin)),
         };
         self.entries.lock().await.push(entry);
         Ok(id)
@@ -540,9 +845,26 @@ impl ProcessManager for InMemoryProcessManager {
         // banner is read from an empty log, because leaving the old lines behind
         // would let a preview report the URL of the server it replaced.
         entry.output = Arc::new(Mutex::new(VecDeque::new()));
+        entry.errors = Arc::new(Mutex::new(VecDeque::new()));
         if let Some(stdout) = child.stdout.take() {
-            capture_stdout(entry.process.id.clone(), stdout, entry.output.clone());
+            capture_stdout(
+                entry.process.id.clone(),
+                stdout,
+                entry.output.clone(),
+                mask_values_for(&entry.env),
+            );
         }
+        if let Some(stderr) = child.stderr.take() {
+            capture_stderr(
+                entry.process.id.clone(),
+                stderr,
+                entry.errors.clone(),
+                mask_values_for(&entry.env),
+            );
+        }
+        // The restarted child gets a fresh stdin handle; a writer still holding
+        // the old one writes to the dead child instead of the entry list.
+        entry.stdin = Arc::new(Mutex::new(child.stdin.take()));
         entry.process.child = Some(child);
         entry.process.status = ProcessStatus::Starting;
         entry.process.started_at = Some(now_epoch_secs());
@@ -557,6 +879,16 @@ impl ProcessManager for InMemoryProcessManager {
             .find(|entry| entry.process.id == id)
             .ok_or_else(|| ProcessError::NotFound(id.to_string()))?;
         let captured = entry.output.lock().await;
+        Ok(captured.iter().skip(offset).cloned().collect())
+    }
+
+    async fn read_stderr(&self, id: &str, offset: usize) -> Result<Vec<String>, ProcessError> {
+        let entries = self.entries.lock().await;
+        let entry = entries
+            .iter()
+            .find(|entry| entry.process.id == id)
+            .ok_or_else(|| ProcessError::NotFound(id.to_string()))?;
+        let captured = entry.errors.lock().await;
         Ok(captured.iter().skip(offset).cloned().collect())
     }
 
@@ -584,31 +916,46 @@ impl ProcessManager for InMemoryProcessManager {
     }
 
     async fn write_stdin(&self, id: &str, bytes: &[u8]) -> Result<(), ProcessError> {
-        let mut entries = self.entries.lock().await;
-        let entry = entries
-            .iter_mut()
-            .find(|entry| entry.process.id == id)
-            .ok_or_else(|| ProcessError::NotFound(id.to_string()))?;
-        refresh(&mut entry.process)?;
-        let Some(child) = entry.process.child.as_mut() else {
-            return Err(ProcessError::NotRunning(id.to_string()));
+        // Clone the per-entry stdin handle under the entry lock, then release it:
+        // a child that stops reading must not wedge `status`, `list`, `stop` or
+        // `kill_all` while its peer-controlled pipe is full.
+        let stdin = {
+            let entries = self.entries.lock().await;
+            entries
+                .iter()
+                .find(|entry| entry.process.id == id)
+                .map(|entry| entry.stdin.clone())
+                .ok_or_else(|| ProcessError::NotFound(id.to_string()))?
         };
-        let Some(stdin) = child.stdin.as_mut() else {
+        let mut guard = stdin.lock().await;
+        let Some(stdin) = guard.as_mut() else {
             return Err(ProcessError::StdInUnsupported(id.to_string()));
         };
-        stdin
-            .write_all(bytes)
-            .await
-            .map_err(|source| ProcessError::Write {
+        let write = async {
+            stdin.write_all(bytes).await?;
+            stdin.flush().await
+        };
+        match tokio::time::timeout(STDIN_WRITE_TIMEOUT, write).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(source)) => Err(ProcessError::Write {
                 id: id.to_string(),
                 source,
-            })?;
-        stdin.flush().await.map_err(|source| ProcessError::Write {
-            id: id.to_string(),
-            source,
-        })?;
-        Ok(())
+            }),
+            Err(_) => Err(ProcessError::StdinTimeout(id.to_string())),
+        }
     }
+}
+
+/// Split `"npm run dev"` into the program and its arguments.
+///
+/// Whitespace separates arguments, with no shell and no expansion. Quoting is
+/// honoured so a program or argument that contains a space survives as one
+/// token: `'…'` is literal, `"…"` groups with `\"` and `\\` escapes, and
+/// adjacent quoted/unquoted parts join (`a"b c"d` is the single token `ab cd`).
+/// An unterminated quote is [`ProcessError::UnterminatedQuote`]; empty or
+/// whitespace-only input is [`ProcessError::EmptyCommand`].
+pub fn split_command(command: &str) -> Result<(String, Vec<String>), ProcessError> {
+    LivePreviewManager::split_command(command)
 }
 
 /// One project's dev server, as the preview panel reads it.
@@ -695,13 +1042,72 @@ impl LivePreviewManager {
 
     /// Split `"npm run dev"` into the program and its arguments.
     ///
-    /// Whitespace only: no shell, no quoting, no expansion, so a command with a
-    /// pipe, a glob or a quoted argument is a script the caller writes rather than
-    /// a string that gets parsed differently on two hosts.
+    /// Whitespace separates arguments, with no shell and no expansion. Quoting is
+    /// honoured so a program or argument that contains a space survives as one
+    /// token: `'…'` is literal, `"…"` groups with `\"` and `\\` escapes, and
+    /// adjacent quoted/unquoted parts join (`a"b c"d` is the single token `ab cd`).
+    /// An unterminated quote is [`ProcessError::UnterminatedQuote`]; empty or
+    /// whitespace-only input is [`ProcessError::EmptyCommand`].
     pub fn split_command(command: &str) -> Result<(String, Vec<String>), ProcessError> {
-        let mut parts = command.split_whitespace();
-        let program = parts.next().ok_or(ProcessError::EmptyCommand)?;
-        Ok((program.to_string(), parts.map(str::to_string).collect()))
+        let mut tokens = Self::split_quoted(command)?.into_iter();
+        let program = tokens.next().ok_or(ProcessError::EmptyCommand)?;
+        Ok((program, tokens.collect()))
+    }
+
+    /// Tokenize a command line, honouring single and double quotes.
+    ///
+    /// Returns every argument in order; an empty or whitespace-only line yields no
+    /// tokens. Only an unclosed quote is an error here — the "no program" case is
+    /// left to [`LivePreviewManager::split_command`]. A backslash is an escape only
+    /// inside double quotes and only before `"` or `\`; elsewhere (including before
+    /// any other character in a Windows path) it is literal.
+    fn split_quoted(command: &str) -> Result<Vec<String>, ProcessError> {
+        let mut tokens = Vec::new();
+        let mut current = String::new();
+        // An empty quoted string (`""`) is a real, empty token; this flag tells a
+        // started token apart from no token at all.
+        let mut in_token = false;
+        let mut chars = command.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if ch.is_whitespace() {
+                if in_token {
+                    tokens.push(std::mem::take(&mut current));
+                    in_token = false;
+                }
+                continue;
+            }
+            in_token = true;
+            match ch {
+                '\'' => loop {
+                    match chars.next() {
+                        Some('\'') => break,
+                        Some(literal) => current.push(literal),
+                        None => return Err(ProcessError::UnterminatedQuote { quote: '\'' }),
+                    }
+                },
+                '"' => loop {
+                    match chars.next() {
+                        Some('"') => break,
+                        Some('\\') => match chars.peek().copied() {
+                            Some('"') | Some('\\') => {
+                                if let Some(escaped) = chars.next() {
+                                    current.push(escaped);
+                                }
+                            }
+                            _ => current.push('\\'),
+                        },
+                        Some(literal) => current.push(literal),
+                        None => return Err(ProcessError::UnterminatedQuote { quote: '"' }),
+                    }
+                },
+                literal => current.push(literal),
+            }
+        }
+        if in_token {
+            tokens.push(current);
+        }
+        Ok(tokens)
     }
 
     /// Start `command` as `project_id`'s dev server.
@@ -899,7 +1305,9 @@ mod tests {
             return;
         }
         println!("  ➜  Local:   {PROBE_URL}");
-        std::thread::sleep(Duration::from_secs(30));
+        loop {
+            std::thread::park();
+        }
     }
 
     /// The probe's `program args…` as one command line, which is what a preview takes.
@@ -915,13 +1323,18 @@ mod tests {
         if !std::env::args().any(|arg| arg == "--exact") {
             return;
         }
-        std::thread::sleep(Duration::from_secs(30));
+        loop {
+            std::thread::park();
+        }
     }
 
     /// The command line that spawns one probe of this test binary.
+    ///
+    /// The executable is quoted so a test binary under a path with spaces survives
+    /// [`LivePreviewManager::split_command`]'s quote-aware split.
     fn probe_line_for(test: &str) -> String {
         let exe = std::env::current_exe().expect("the test binary names itself");
-        format!("{} --exact {test} --ignored --nocapture", exe.display())
+        format!("\"{}\" --exact {test} --ignored --nocapture", exe.display())
     }
 
     /// Poll the manager until the process has printed at least one line.
@@ -939,23 +1352,19 @@ mod tests {
         panic!("process `{id}` printed nothing within four seconds");
     }
 
-    /// A command that outlives the test: `sleep` on Unix, a loopback ping on
-    /// Windows, quiet on both so the test log stays readable.
+    /// A command that outlives the test (Windows half): blocks on stdin like `cat`.
     #[cfg(windows)]
     fn long_running() -> (String, Vec<String>) {
         (
             "cmd".to_string(),
-            vec!["/C".to_string(), "ping -n 30 127.0.0.1 >nul".to_string()],
+            vec!["/C".to_string(), "more".to_string()],
         )
     }
 
     /// A command that outlives the test (Unix half).
     #[cfg(not(windows))]
     fn long_running() -> (String, Vec<String>) {
-        (
-            "sh".to_string(),
-            vec!["-c".to_string(), "sleep 30".to_string()],
-        )
+        ("sh".to_string(), vec!["-c".to_string(), "cat".to_string()])
     }
 
     /// A command that exits immediately with code 0.
@@ -1302,6 +1711,67 @@ mod tests {
     }
 
     #[test]
+    fn split_command_keeps_a_quoted_program_path_with_spaces() {
+        let (program, args) =
+            LivePreviewManager::split_command("\"C:/Program Files/x/node.exe\" run dev")
+                .expect("the quoted line splits");
+
+        assert_eq!(program, "C:/Program Files/x/node.exe");
+        assert_eq!(args, vec!["run".to_string(), "dev".to_string()]);
+    }
+
+    #[test]
+    fn split_command_single_quotes_are_literal() {
+        let (program, args) = LivePreviewManager::split_command("echo 'hello world' 'a\"b'")
+            .expect("the line splits");
+
+        assert_eq!(program, "echo");
+        // Inside single quotes nothing is an escape: the space and the double
+        // quote are both literal.
+        assert_eq!(args, vec!["hello world".to_string(), "a\"b".to_string()]);
+    }
+
+    #[test]
+    fn split_command_double_quote_escapes_and_adjacent_joining() {
+        // `\"` and `\\` are the only double-quote escapes.
+        let (program, args) =
+            LivePreviewManager::split_command("echo \"say \\\"hi\\\" now\" \"a\\\\b\"")
+                .expect("the line splits");
+        assert_eq!(program, "echo");
+        assert_eq!(args, vec!["say \"hi\" now".to_string(), "a\\b".to_string()]);
+
+        // Adjacent quoted and unquoted parts join into one token.
+        let (joined, rest) =
+            LivePreviewManager::split_command("a\"b c\"d").expect("the line splits");
+        assert_eq!(joined, "ab cd");
+        assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn split_command_windows_backslash_path_survives_double_quotes() {
+        // A backslash before any character but `"` or `\` stays literal, which is
+        // what lets a quoted Windows executable path keep its separators.
+        let (program, args) =
+            LivePreviewManager::split_command("\"C:\\Program Files\\x\\node.exe\" run dev")
+                .expect("the quoted line splits");
+
+        assert_eq!(program, "C:\\Program Files\\x\\node.exe");
+        assert_eq!(args, vec!["run".to_string(), "dev".to_string()]);
+    }
+
+    #[test]
+    fn split_command_unterminated_quote_is_an_error() {
+        assert!(matches!(
+            LivePreviewManager::split_command("echo \"unclosed"),
+            Err(ProcessError::UnterminatedQuote { quote: '"' })
+        ));
+        assert!(matches!(
+            LivePreviewManager::split_command("echo 'unclosed"),
+            Err(ProcessError::UnterminatedQuote { quote: '\'' })
+        ));
+    }
+
+    #[test]
     fn discover_url_reads_the_first_address_a_transcript_carries() {
         let banner = vec!["  ➜  Local:   http://localhost:5173/".to_string()];
         assert_eq!(
@@ -1471,5 +1941,447 @@ mod tests {
             .stop("project-1")
             .await
             .expect("stopping a stopped preview succeeds");
+    }
+}
+
+/// KEEL K5a — the spawn floor a child is started from.
+///
+/// These probes spawn *this test binary* as a child, selected by `--exact`, and
+/// the child does nothing unless the parent handed it a marker in the environment
+/// it was spawned with. That keeps the probes real — an OS process reading an
+/// environment built by [`command_for`] — without depending on a shell, a Python
+/// interpreter or any other program the host may not have.
+#[cfg(test)]
+mod spawn_hardening {
+    use super::*;
+
+    /// Child-mode markers; the parent passes each one in the spawn environment.
+    const ENV_DUMP_MARKER: &str = "WARSHA_K5_ENV_DUMP";
+    const STDERR_MARKER: &str = "WARSHA_K5_STDERR";
+    /// A variable that exists in the *parent* test process and must not be
+    /// inherited by the child.
+    const PARENT_MARKER: &str = "WARSHA_K5_PARENT_MARKER";
+    /// A credential-shaped string, so redaction has something to remove.
+    const PROBE_SECRET: &str = "sk-ABCDEFGH12345678";
+
+    fn probe_process(test: &str) -> (String, Vec<String>) {
+        let exe = std::env::current_exe().expect("the test binary names itself");
+        (
+            exe.display().to_string(),
+            vec![
+                "--exact".to_string(),
+                test.to_string(),
+                "--nocapture".to_string(),
+                "--test-threads".to_string(),
+                "1".to_string(),
+            ],
+        )
+    }
+
+    /// Prints three facts about the environment the manager built.
+    ///
+    /// Harmless in a full test run: without the marker the parent passes it
+    /// returns immediately.
+    #[test]
+    fn environment_dump_probe() {
+        if std::env::var_os(ENV_DUMP_MARKER).is_none() {
+            return;
+        }
+        use std::io::Write;
+        let path = std::env::var("PATH").unwrap_or_default();
+        let parent = std::env::var_os(PARENT_MARKER).is_some();
+        let home = std::env::var_os("HOME").is_some() || std::env::var_os("USERPROFILE").is_some();
+        let loader = std::env::var_os("LD_PRELOAD").is_some()
+            || std::env::var_os("DYLD_INSERT_LIBRARIES").is_some();
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        let _ = writeln!(out, "ENVDUMP PATH={path}");
+        let _ = writeln!(out, "ENVDUMP PARENT={parent}");
+        let _ = writeln!(out, "ENVDUMP HOME={home}");
+        let _ = writeln!(out, "ENVDUMP LOADER={loader}");
+        let _ = out.flush();
+    }
+
+    /// Writes a credential-shaped token to stderr.
+    #[test]
+    fn stderr_probe() {
+        if std::env::var_os(STDERR_MARKER).is_none() {
+            return;
+        }
+        use std::io::Write;
+        let stderr = std::io::stderr();
+        let mut out = stderr.lock();
+        let _ = writeln!(out, "probe failed with {PROBE_SECRET} while starting");
+        let _ = out.flush();
+    }
+
+    /// Poll until the child has printed a line with `prefix`, or fail after ~4 s.
+    async fn wait_for_stdout(manager: &dyn ProcessManager, id: &str, prefix: &str) -> Vec<String> {
+        for _ in 0..200 {
+            let lines = manager
+                .read_stdout(id, 0)
+                .await
+                .expect("the process is tracked");
+            if lines.iter().any(|line| line.starts_with(prefix)) {
+                return lines;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("process `{id}` printed no line starting `{prefix}`");
+    }
+
+    /// Poll until the child has printed something to stderr, or fail after ~4 s.
+    async fn wait_for_stderr(manager: &dyn ProcessManager, id: &str) -> Vec<String> {
+        for _ in 0..200 {
+            let lines = manager
+                .read_stderr(id, 0)
+                .await
+                .expect("the process is tracked");
+            if !lines.is_empty() {
+                return lines;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("process `{id}` printed nothing to stderr");
+    }
+
+    /// A variable the parent inherited never reaches the child, and the child's
+    /// `PATH` is the trusted daemon `PATH` rather than an inherited or
+    /// caller-supplied one (the accepted K4 policy; KEEL K5 review finding 5).
+    #[tokio::test]
+    async fn a_child_starts_from_a_cleared_environment_and_the_minimal_floor() {
+        std::env::set_var(PARENT_MARKER, "leaked");
+
+        struct Guard;
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                std::env::remove_var(PARENT_MARKER);
+            }
+        }
+        let _guard = Guard;
+
+        let manager = InMemoryProcessManager::new();
+        let (command, args) =
+            probe_process("process_spawn::spawn_hardening::environment_dump_probe");
+        let mut env = HashMap::new();
+        env.insert(ENV_DUMP_MARKER.to_string(), "1".to_string());
+        // A caller cannot replace the floor, and cannot smuggle a loader hook.
+        env.insert("PATH".to_string(), "/tmp/attacker-bin".to_string());
+        env.insert("LD_PRELOAD".to_string(), "/tmp/evil.so".to_string());
+
+        let id = manager
+            .spawn(&command, &args, &env)
+            .await
+            .expect("the probe starts");
+        let lines = wait_for_stdout(&manager, &id, "ENVDUMP LOADER=").await;
+        let trusted_path = child_path();
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ENVDUMP PARENT=false")),
+            "the daemon's own variables must not be inherited: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("ENVDUMP HOME=false")),
+            "the user profile must not be inherited: {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ENVDUMP LOADER=false")),
+            "a loader hook must never reach the child: {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains(&format!("ENVDUMP PATH={trusted_path}"))),
+            "the child's PATH must be the trusted daemon PATH, not the caller's: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|line| line.contains("/tmp/attacker-bin")),
+            "a caller-supplied PATH must be refused: {lines:?}"
+        );
+        manager.kill_all().await;
+    }
+
+    /// What a server prints to stderr is captured with its credentials masked;
+    /// the captured transcript cannot be read back as the secret.
+    #[tokio::test]
+    async fn a_childs_stderr_is_captured_redacted_and_never_inherited() {
+        let manager = InMemoryProcessManager::new();
+        let (command, args) = probe_process("process_spawn::spawn_hardening::stderr_probe");
+        let mut env = HashMap::new();
+        env.insert(STDERR_MARKER.to_string(), "1".to_string());
+
+        let id = manager
+            .spawn(&command, &args, &env)
+            .await
+            .expect("the probe starts");
+        let lines = wait_for_stderr(&manager, &id).await;
+        let transcript = lines.join("\n");
+
+        assert!(
+            transcript.contains(crate::guardrails::REDACTED),
+            "the token must be masked in the captured transcript: {transcript}"
+        );
+        assert!(
+            !transcript.contains(PROBE_SECRET),
+            "the captured transcript must never hold the secret: {transcript}"
+        );
+        manager.kill_all().await;
+    }
+}
+
+/// K5 repair gates: trusted PATH, byte-bounded capture, known-secret masking.
+#[cfg(test)]
+mod k5_repair {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    fn command_path(command: &Command) -> Option<String> {
+        command
+            .as_std()
+            .get_envs()
+            .find(|(key, _)| key.to_string_lossy() == "PATH")
+            .and_then(|(_, value)| value.map(|value| value.to_string_lossy().into_owned()))
+    }
+
+    #[test]
+    fn pm_path_uses_the_trusted_daemon_path() {
+        assert!(!child_path().is_empty());
+        let mut caller = HashMap::new();
+        caller.insert("PATH".to_string(), "/caller/override".to_string());
+        let command = command_for("probe", &[], &caller);
+        assert_eq!(command_path(&command), Some(child_path()));
+        assert_ne!(command_path(&command).as_deref(), Some("/caller/override"));
+    }
+
+    #[test]
+    fn pm_path_retains_default_minimal_env_keys() {
+        let command = command_for("probe", &[], &HashMap::new());
+        let envs: HashMap<String, Option<String>> = command
+            .as_std()
+            .get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.map(|s| s.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        assert!(envs.contains_key("PATH"));
+        assert!(envs.contains_key("LC_ALL"));
+    }
+
+    #[tokio::test]
+    async fn pm_path_spawns_cargo_via_process_manager() {
+        let manager = InMemoryProcessManager::new();
+        let id = manager
+            .spawn("cargo", &["--version".to_string()], &HashMap::new())
+            .await
+            .expect("ProcessManager spawns cargo via trusted child_path");
+        let mut lines = Vec::new();
+        for _ in 0..200 {
+            lines = manager
+                .read_stdout(&id, 0)
+                .await
+                .expect("process is tracked");
+            if lines.iter().any(|l| l.starts_with("cargo ")) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            lines.iter().any(|l| l.starts_with("cargo ")),
+            "cargo --version output missing: {lines:?}"
+        );
+        let _ = manager.stop(&id).await;
+    }
+
+    #[test]
+    fn mask_values_come_from_the_child_environment() {
+        let mut env = HashMap::new();
+        env.insert(
+            "SERVICE_TOKEN".to_string(),
+            "k5-sentinel-secret-value-123".to_string(),
+        );
+        env.insert("SHORT".to_string(), "abc".to_string());
+        assert_eq!(
+            mask_values_for(&env),
+            vec!["k5-sentinel-secret-value-123".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn stderr_bytes_stay_within_the_caps() {
+        let mut input = vec![b'a'; 2 * 1024 * 1024];
+        input.push(b'\n');
+        let sink = Arc::new(Mutex::new(VecDeque::new()));
+        drain_bounded("probe", &input[..], &sink, true, &[]).await;
+        let captured = sink.lock().await;
+        assert!(!captured.is_empty());
+        let mut total = 0usize;
+        for line in captured.iter() {
+            assert!(
+                line.len() <= MAX_CAPTURED_LINE_BYTES + TRUNCATION_MARKER.len(),
+                "a captured line grew past the byte cap: {} bytes",
+                line.len()
+            );
+            total += line.len();
+        }
+        assert!(
+            total <= MAX_CAPTURED_STDERR_BYTES,
+            "the ring held {total} bytes, past the cap"
+        );
+        assert!(captured
+            .iter()
+            .any(|line| line.ends_with(TRUNCATION_MARKER)));
+    }
+
+    #[tokio::test]
+    async fn stderr_bytes_no_newline_stream_bounded_by_single_line_cap() {
+        let input = vec![b'x'; MAX_CAPTURED_LINE_BYTES + 4096];
+        let sink = Arc::new(Mutex::new(VecDeque::new()));
+        drain_bounded("probe", &input[..], &sink, true, &[]).await;
+        let captured = sink.lock().await;
+        assert_eq!(captured.len(), 2);
+        let line = &captured[0];
+        assert!(line.len() <= MAX_CAPTURED_LINE_BYTES + TRUNCATION_MARKER.len());
+        assert!(line.ends_with(TRUNCATION_MARKER));
+    }
+
+    #[tokio::test]
+    async fn stderr_secret_is_masked_before_storage() {
+        let secret = "k5-sentinel-secret-value-123";
+        let transcript = format!("diagnostic before {secret} diagnostic after\n");
+        let sink = Arc::new(Mutex::new(VecDeque::new()));
+        drain_bounded(
+            "probe",
+            transcript.as_bytes(),
+            &sink,
+            true,
+            &[secret.to_string()],
+        )
+        .await;
+        let captured = sink.lock().await;
+        let joined = captured.iter().cloned().collect::<Vec<_>>().join("\n");
+        assert!(
+            !joined.contains(secret),
+            "the known secret survived masking: {joined}"
+        );
+        assert!(joined.contains("***"));
+    }
+
+    #[tokio::test]
+    async fn stderr_secret_shape_masking_fallback_redacts_credentials() {
+        let secret = format!("{}-{}", "sk", "1234567890abcdef12345678");
+        let transcript = format!("error from provider with {secret} inside\n");
+        let sink = Arc::new(Mutex::new(VecDeque::new()));
+        drain_bounded("probe", transcript.as_bytes(), &sink, true, &[]).await;
+        let captured = sink.lock().await;
+        let joined = captured.iter().cloned().collect::<Vec<_>>().join("\n");
+        assert!(
+            !joined.contains(&secret),
+            "credential was not masked: {joined}"
+        );
+        assert!(joined.contains(crate::guardrails::REDACTED));
+    }
+
+    #[tokio::test]
+    async fn stderr_secret_spawned_child_redacts_sentinel_from_ring_and_tracing() {
+        use std::sync::Mutex as StdMutex;
+        use tracing::field::{Field, Visit};
+        use tracing::Subscriber;
+
+        struct CaptureVisitor(String);
+        impl Visit for CaptureVisitor {
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                self.0.push_str(&format!(" {}={:?}", field.name(), value));
+            }
+            fn record_str(&mut self, field: &Field, value: &str) {
+                self.0.push_str(&format!(" {}={}", field.name(), value));
+            }
+        }
+        struct CaptureSubscriber(Arc<StdMutex<Vec<String>>>);
+        impl Subscriber for CaptureSubscriber {
+            fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+                true
+            }
+            fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                tracing::span::Id::from_u64(1)
+            }
+            fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+            fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+            fn event(&self, event: &tracing::Event<'_>) {
+                let mut v = CaptureVisitor(String::new());
+                event.record(&mut v);
+                if let Ok(mut g) = self.0.lock() {
+                    g.push(v.0);
+                }
+            }
+            fn enter(&self, _: &tracing::span::Id) {}
+            fn exit(&self, _: &tracing::span::Id) {}
+        }
+
+        let secret = "k5-sentinel-secret-value-123";
+        let logs = Arc::new(StdMutex::new(Vec::new()));
+        let subscriber = CaptureSubscriber(logs.clone());
+        let dispatch = tracing::Dispatch::new(subscriber);
+        let _guard = tracing::dispatcher::set_default(&dispatch);
+
+        let transcript = format!("plugin stderr line with {secret} emitted\n");
+        let sink = Arc::new(Mutex::new(VecDeque::new()));
+        drain_bounded(
+            "probe",
+            transcript.as_bytes(),
+            &sink,
+            true,
+            &[secret.to_string()],
+        )
+        .await;
+
+        let captured = sink.lock().await;
+        let ring_joined = captured.iter().cloned().collect::<Vec<_>>().join("\n");
+        assert!(!ring_joined.contains(secret));
+        assert!(ring_joined.contains("***"));
+
+        let logged = logs.lock().expect("logs lock").join("\n");
+        assert!(
+            !logged.contains(secret),
+            "tracing event leaked known secret: {logged}"
+        );
+        assert!(
+            logged.contains("***"),
+            "tracing event must contain masked output: {logged}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_blocked_stdin_writer_does_not_block_the_entry_list() {
+        let manager = InMemoryProcessManager::shared();
+        let env: HashMap<String, String> = HashMap::new();
+        let id = manager
+            .spawn("sleep", &["30".to_string()], &env)
+            .await
+            .expect("sleep starts");
+        let writer = {
+            let manager = manager.clone();
+            let id = id.clone();
+            tokio::spawn(async move {
+                let payload = vec![b'x'; 8 * 1024 * 1024];
+                let _ = manager.write_stdin(&id, &payload).await;
+            })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let listed = tokio::time::timeout(std::time::Duration::from_secs(2), manager.list())
+            .await
+            .expect("the entry list answers while a writer is blocked");
+        assert_eq!(listed.len(), 1);
+        writer.abort();
+        let _ = manager.stop(&id).await;
     }
 }
