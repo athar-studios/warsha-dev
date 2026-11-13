@@ -2,7 +2,7 @@
 
 use axum::{
     extract::{ws::WebSocketUpgrade, ConnectInfo, Query, State},
-    http::{header::AUTHORIZATION, HeaderMap},
+    http::{header::AUTHORIZATION, HeaderMap, HeaderValue},
     response::{IntoResponse, Json, Response},
     routing::get,
     Extension, Router,
@@ -6307,6 +6307,25 @@ pub async fn start_daemon_with_provider_factory(
         .allow_origin(allowed_origins)
         .allow_methods(Any)
         .allow_headers(Any);
+
+    // CSP middleware to add Content-Security-Policy headers to all responses
+    let csp_middleware = tower::ServiceBuilder::new()
+        .map_response(|mut response: Response| {
+            // Add CSP header to restrict sources
+            let csp_value = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' http://127.0.0.1:8765 ws://127.0.0.1:8766 http://localhost:8765 ws://localhost:8766; frame-ancestors 'none'; form-action 'self';";
+            if let Ok(header_value) = HeaderValue::from_str(csp_value) {
+                response.headers_mut().insert("Content-Security-Policy", header_value);
+            }
+            // Add X-Content-Type-Options header
+            if let Ok(header_value) = HeaderValue::from_str("nosniff") {
+                response.headers_mut().insert("X-Content-Type-Options", header_value);
+            }
+            // Add X-Frame-Options header
+            if let Ok(header_value) = HeaderValue::from_str("DENY") {
+                response.headers_mut().insert("X-Frame-Options", header_value);
+            }
+            response
+        });
 
     // Auth middleware: a bounded ceiling on every route, and a verified bearer token
     // on every route except /health (security audit H-01, H-03, H-04).
