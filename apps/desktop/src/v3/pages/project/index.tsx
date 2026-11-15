@@ -8,6 +8,7 @@ import type {
   Stage,
   WarshaEvent,
 } from '@warsha/client';
+import { decodeRunFinished } from '@warsha/client';
 // eslint-disable-next-line import/no-unresolved
 import { useT } from '@warsha/i18n/v3';
 import {
@@ -39,6 +40,7 @@ import {
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useAction } from '../../actions';
+import { canEndRuns } from '../../actions/capabilities';
 import { useCapabilities } from '../../app/CapabilitiesContext';
 import { useClient } from '../../app/ClientContext';
 import { useDataReady } from '../../app/DataReadyContext';
@@ -208,23 +210,6 @@ export function extractTestArtifacts(
   });
 }
 
-export function isRunEndingEnabled(capabilities: unknown): boolean {
-  if (
-    capabilities &&
-    typeof capabilities === 'object' &&
-    Boolean((capabilities as Record<string, unknown>)['runs.resume'])
-  ) {
-    return true;
-  }
-  if (
-    typeof window !== 'undefined' &&
-    Boolean((window as unknown as Record<string, unknown>).__WARSHA_RUN_ENDING_ENABLED__)
-  ) {
-    return true;
-  }
-  return false;
-}
-
 export default function ProjectPage(): React.ReactElement {
   const t = useT();
   const client = useClient();
@@ -245,7 +230,7 @@ export default function ProjectPage(): React.ReactElement {
   const artifactsResult = useArtifacts(runId);
   const eventsResult = useRunEvents(runId);
 
-  const hasRunEndingCapability = isRunEndingEnabled(capabilities);
+  const hasRunEndingCapability = canEndRuns(capabilities);
 
   // Local UI state
   const [showActivity, setShowActivity] = useState(true);
@@ -468,6 +453,9 @@ export default function ProjectPage(): React.ReactElement {
   const feedEvents = useMemo<ActivityEvent[]>(() => {
     return visibleEvents.map((ev) => {
       const summary = extractEventSummary(ev.payload);
+      // A run's end says which ending it was (R-EXT-2). Every other kind keeps the
+      // plain-language label the map already owns.
+      const finished = decodeRunFinished(ev);
       return {
         id: ev.id,
         time: formatTime24(ev.createdAt),
@@ -475,7 +463,7 @@ export default function ProjectPage(): React.ReactElement {
         stageLabel: t(getSimpleStageLabelKey(ev.stage)),
         message: (
           <span>
-            <span>{t(getEventKey(ev.kind))}</span>
+            <span>{finished ? t(`events.run_finished.${finished}`) : t(getEventKey(ev.kind))}</span>
             {summary ? (
               <>
                 {' — '}

@@ -10,11 +10,13 @@ import {
   IconCpu,
   IconGitBranch,
   IconInfo,
+  IconKey,
   IconLink,
   IconPhone,
   IconPlug,
   IconSettings,
   IconSparkle,
+  IconTerminal,
   IconWallet,
 } from '@warsha/ui/v3';
 /* eslint-enable import/no-unresolved */
@@ -46,6 +48,10 @@ function getSectionIcon(id: SettingsSectionId): React.ReactNode {
       return <IconSparkle size={18} />;
     case 'plugins':
       return <IconPlug size={18} />;
+    case 'connections':
+      return <IconTerminal size={18} />;
+    case 'mcp':
+      return <IconKey size={18} />;
     case 'integrations':
       return <IconLink size={18} />;
     case 'routines':

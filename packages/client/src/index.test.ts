@@ -6,20 +6,35 @@ import {
   createClient,
   decodeBackendKit,
   decodeDeviceSummary,
+  decodeGateEvidence,
+  decodeMcpApproval,
+  decodeMcpApprovalAnswer,
+  decodeMcpConnection,
+  decodeMcpPermissionRow,
+  decodeMcpPermissionsReply,
+  decodeMcpStatus,
+  decodeMcpCall,
+  decodeMcpTransport,
   decodeProjectSummary,
+  decodeRunFinished,
   decodeRoutine,
   decodeRunSummary,
   encodeBackendKit,
   parseWarshaEvent,
   pairingDataFromQrPayload,
   redactToken,
+  RUN_FINISHED_KIND,
   subscribeEvents,
   WarshaClient,
   type BackendKit,
   type BudgetStatus,
   type DeviceId,
+  type GateEvidence,
   type GateState,
   type GateSummary,
+  type McpApproval,
+  type McpConnection,
+  type McpServerConfig,
   type PairingData,
   type PreferenceSignal,
   type ProjectId,
@@ -533,7 +548,49 @@ describe('client', () => {
     fetchMock.mockResolvedValueOnce(okResponse({ status: 'ok', version: '0.1.0' }));
 
     const health = await client.health();
-    expect(health).toEqual({ status: 'ok', version: '0.1.0' });
+    // A daemon that predates `capabilities` still decodes: the run-ending answer is `false`,
+    // which is what keeps the controls hidden instead of guessing (R-UI-2 D1).
+    expect(health).toEqual({
+      status: 'ok',
+      version: '0.1.0',
+      capabilities: { runControls: false },
+    });
+  });
+
+  it('decodes capabilities.run_controls from a health reply', async () => {
+    fetchMock.mockResolvedValueOnce(
+      okResponse({
+        status: 'healthy',
+        version: '0.3.0',
+        uptime_seconds: 12,
+        capabilities: { daemon: true, providers: false, keychain: true, run_controls: true },
+      })
+    );
+
+    const health = await client.health();
+    expect(health.capabilities.runControls).toBe(true);
+    expect(health.status).toBe('healthy');
+
+    fetchMock.mockResolvedValueOnce(
+      okResponse({
+        status: 'healthy',
+        version: '0.3.0',
+        capabilities: { daemon: true, providers: false, keychain: true, run_controls: false },
+      })
+    );
+    expect((await client.health()).capabilities.runControls).toBe(false);
+  });
+
+  it('names the field when capabilities.run_controls is not a boolean', async () => {
+    fetchMock.mockResolvedValueOnce(
+      okResponse({
+        status: 'healthy',
+        version: '0.3.0',
+        capabilities: { daemon: true, run_controls: 'yes' },
+      })
+    );
+
+    await expect(client.health()).rejects.toThrow(/health\.capabilities\.run_controls/);
   });
 
   it('sends approveGate with the daemon argument names and no claimed device', async () => {
@@ -812,28 +869,49 @@ describe('configured provider and agent wiring (C2)', () => {
       tools: [],
     };
     fetchMock.mockResolvedValueOnce(okResponse(turn));
-    await expect(client.agentTurn('build it')).resolves.toEqual(turn);
-    expect(lastBody().method).toBe('agent.turn');
-    expect(lastBody().params).toEqual({ input: 'build it' });
+    await expect(client.agentTurn('run-123', 'build it')).resolves.toEqual(turn);
+    expect(lastBody().method).toBe('agent.turn_run');
+    expect(lastBody().params).toEqual({ run_id: 'run-123', input: 'build it' });
 
-    // Approving the mode that edits carries no approver: the session is the approver.
+    // Approving the mode that edits carries run_id only when given; daemon session is the approver.
     const transition = { from: 'plan', to: 'agent', approved_by: 'device-1', approved_at: 1 };
     fetchMock.mockResolvedValueOnce(okResponse(transition));
     await expect(client.approveAgentMode()).resolves.toEqual(transition);
     expect(lastBody().method).toBe('agent.approve_mode');
     expect(lastBody().params).toBeUndefined();
 
+    fetchMock.mockResolvedValueOnce(okResponse(transition));
+    await expect(client.approveAgentMode('run-123')).resolves.toEqual(transition);
+    expect(lastBody().method).toBe('agent.approve_mode');
+    expect(lastBody().params).toEqual({ run_id: 'run-123' });
+
     fetchMock.mockResolvedValueOnce(
       okResponse({ from: 'agent', to: 'plan', approved_by: 'device-1', approved_at: 2 })
     );
     await client.returnAgentToPlanMode();
     expect(lastBody().method).toBe('agent.plan_mode');
+    expect(lastBody().params).toBeUndefined();
+
+    fetchMock.mockResolvedValueOnce(
+      okResponse({ from: 'agent', to: 'plan', approved_by: 'device-1', approved_at: 2 })
+    );
+    await client.returnAgentToPlanMode('run-123');
+    expect(lastBody().method).toBe('agent.plan_mode');
+    expect(lastBody().params).toEqual({ run_id: 'run-123' });
 
     fetchMock.mockResolvedValueOnce(
       okResponse({ mode: 'plan', approvals: [], todos: [], model_wired: true })
     );
     await expect(client.agentState()).resolves.toMatchObject({ model_wired: true });
     expect(lastBody().method).toBe('agent.state');
+    expect(lastBody().params).toBeUndefined();
+
+    fetchMock.mockResolvedValueOnce(
+      okResponse({ mode: 'plan', approvals: [], todos: [], model_wired: true })
+    );
+    await expect(client.agentState('run-123')).resolves.toMatchObject({ model_wired: true });
+    expect(lastBody().method).toBe('agent.state');
+    expect(lastBody().params).toEqual({ run_id: 'run-123' });
   });
 
   it('keeps a provider key out of every message this client can produce', async () => {
@@ -2345,5 +2423,691 @@ describe('wiring client methods (M16/M19/M20)', () => {
     expect(() => decodeBackendKit(configNull, 'backend.get')).toThrow(
       '"enabled_features" is not a list'
     );
+  });
+});
+
+// R-BRIDGE-B2 — `gates.evidence(run_id, program, args)` and the explicit decoder for
+// `warsha_pipeline::GateEvidence` (`crates/warsha-pipeline/src/gate_evidence.rs:108`).
+//
+// Every field of the struct is decoded explicitly: `diff` (string), `files_changed`
+// (string[]), `tests` (`TestRun`: program, args, success, exit_code, stdout, stderr,
+// duration_ms, truncated) and `preview` (`null` or `{ project_id, process_id, url,
+// status }`). A missing or mistyped field is a decode error rather than an `undefined`
+// that the UI renders as blank — the difference between "the daemon said no preview"
+// and "the decoder lost the field".
+
+const GATE_EVIDENCE_ROW = {
+  diff: 'diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n',
+  files_changed: ['src/a.ts', 'src/b.ts'],
+  tests: {
+    program: 'pnpm',
+    args: ['-r', 'test'],
+    success: true,
+    exit_code: 0,
+    stdout: 'all green\n',
+    stderr: '',
+    duration_ms: 1234,
+    truncated: false,
+  },
+  preview: {
+    project_id: 'proj-1',
+    process_id: 'proc-1',
+    url: 'http://127.0.0.1:5173/',
+    status: 'running',
+  },
+};
+
+const GATE_EVIDENCE_DECODED: GateEvidence = {
+  diff: GATE_EVIDENCE_ROW.diff,
+  files_changed: ['src/a.ts', 'src/b.ts'],
+  tests: {
+    program: 'pnpm',
+    args: ['-r', 'test'],
+    success: true,
+    exit_code: 0,
+    stdout: 'all green\n',
+    stderr: '',
+    duration_ms: 1234,
+    truncated: false,
+  },
+  preview: {
+    project_id: 'proj-1',
+    process_id: 'proc-1',
+    url: 'http://127.0.0.1:5173/',
+    status: 'running',
+  },
+};
+
+describe('gate evidence (R-BRIDGE-B2)', () => {
+  it('decodes the full GateEvidence struct, field by field', () => {
+    expect(decodeGateEvidence(GATE_EVIDENCE_ROW, 'gates.evidence')).toEqual(GATE_EVIDENCE_DECODED);
+  });
+
+  it('dials gates.evidence with run_id, program and args — no shell, no merged command', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse(GATE_EVIDENCE_ROW));
+
+    await expect(
+      client.gateEvidence('run-1' as RunId, 'pnpm', ['-r', 'test'])
+    ).resolves.toEqual(GATE_EVIDENCE_DECODED);
+
+    expect(sentMethod(0)).toBe('gates.evidence');
+    // The program and its arguments travel as two fields, exactly as the daemon binds
+    // them: the caller's sandwich of `program + args` is split by the UI, never here.
+    expect(sentParams(0)).toEqual({ run_id: 'run-1', program: 'pnpm', args: ['-r', 'test'] });
+  });
+
+  it('decodes an explicit null preview as null — absent is a fact, not a lost field', () => {
+    const decoded = decodeGateEvidence({ ...GATE_EVIDENCE_ROW, preview: null }, 'gates.evidence');
+    expect(decoded.preview).toBeNull();
+  });
+
+  it('surfaces the tests truncated flag and the in-band diff marker as the daemon sent them', () => {
+    const chunk = 'x'.repeat(64);
+    const decoded = decodeGateEvidence(
+      {
+        ...GATE_EVIDENCE_ROW,
+        diff: `${chunk}\n…[truncated]`,
+        tests: {
+          ...GATE_EVIDENCE_ROW.tests,
+          success: false,
+          exit_code: 2,
+          stdout: `${chunk}\n…[truncated]`,
+          stderr: 'boom\n',
+          truncated: true,
+        },
+      },
+      'gates.evidence'
+    );
+
+    expect(decoded.tests.truncated).toBe(true);
+    expect(decoded.tests.stdout.endsWith('\n…[truncated]')).toBe(true);
+    // Truncation is shown only from what the daemon reports: the diff marker is
+    // in-band text, and nothing here re-derives a flag from a string length.
+    expect(decoded.diff.endsWith('\n…[truncated]')).toBe(true);
+    expect(decoded.tests.success).toBe(false);
+    expect(decoded.tests.exit_code).toBe(2);
+  });
+
+  it('decodes an unset exit code as null (a child killed by a signal has none)', () => {
+    const decoded = decodeGateEvidence(
+      { ...GATE_EVIDENCE_ROW, tests: { ...GATE_EVIDENCE_ROW.tests, exit_code: null } },
+      'gates.evidence'
+    );
+    expect(decoded.tests.exit_code).toBeNull();
+  });
+
+  it('errors on every missing field, naming the field', () => {
+    const cases: [string, Record<string, unknown>][] = [
+      ['diff', { files_changed: [], tests: GATE_EVIDENCE_ROW.tests, preview: null }],
+      ['files_changed', { diff: '', tests: GATE_EVIDENCE_ROW.tests, preview: null }],
+      ['tests', { diff: '', files_changed: [], preview: null }],
+    ];
+    for (const [name, row] of cases) {
+      expect(() => decodeGateEvidence(row, 'gates.evidence')).toThrow(`"${name}"`);
+    }
+
+    const testFields = [
+      'program',
+      'args',
+      'success',
+      'exit_code',
+      'stdout',
+      'stderr',
+      'duration_ms',
+      'truncated',
+    ];
+    for (const name of testFields) {
+      const tests: Record<string, unknown> = { ...GATE_EVIDENCE_ROW.tests };
+      delete tests[name];
+      // A missing `exit_code` is the one field that may be null-but-present, so its
+      // absence is a decode error too: the Rust `Option<i32>` is serialised as an
+      // explicit `null`, never omitted.
+      expect(() => decodeGateEvidence({ ...GATE_EVIDENCE_ROW, tests }, 'gates.evidence')).toThrow(
+        `"${name}"`
+      );
+    }
+
+    for (const name of ['project_id', 'process_id', 'url', 'status']) {
+      const preview: Record<string, unknown> = { ...GATE_EVIDENCE_ROW.preview };
+      delete preview[name];
+      expect(() =>
+        decodeGateEvidence({ ...GATE_EVIDENCE_ROW, preview }, 'gates.evidence')
+      ).toThrow(`"${name}"`);
+    }
+  });
+
+  it('errors on every mistyped field, naming the field', () => {
+    const cases: [string, Record<string, unknown>][] = [
+      ['diff', { ...GATE_EVIDENCE_ROW, diff: 7 }],
+      ['files_changed', { ...GATE_EVIDENCE_ROW, files_changed: 'src/a.ts' }],
+      ['files_changed', { ...GATE_EVIDENCE_ROW, files_changed: [1] }],
+      ['tests', { ...GATE_EVIDENCE_ROW, tests: 'pnpm test' }],
+      ['preview', { ...GATE_EVIDENCE_ROW, preview: 'http://127.0.0.1:5173/' }],
+    ];
+    for (const [name, row] of cases) {
+      expect(() => decodeGateEvidence(row, 'gates.evidence')).toThrow(`"${name}"`);
+    }
+
+    const testCases: [string, unknown][] = [
+      ['program', 7],
+      ['args', 'test'],
+      ['success', 'yes'],
+      ['exit_code', '0'],
+      ['stdout', null],
+      ['stderr', 0],
+      ['duration_ms', '1234'],
+      ['truncated', 'no'],
+    ];
+    for (const [name, value] of testCases) {
+      const tests = { ...GATE_EVIDENCE_ROW.tests, [name]: value };
+      expect(() => decodeGateEvidence({ ...GATE_EVIDENCE_ROW, tests }, 'gates.evidence')).toThrow(
+        `"${name}"`
+      );
+    }
+
+    const previewCases: [string, unknown][] = [
+      ['project_id', 1],
+      ['process_id', null],
+      ['url', 42],
+      ['status', 'bogus'],
+    ];
+    for (const [name, value] of previewCases) {
+      const preview = { ...GATE_EVIDENCE_ROW.preview, [name]: value };
+      expect(() =>
+        decodeGateEvidence({ ...GATE_EVIDENCE_ROW, preview }, 'gates.evidence')
+      ).toThrow(`"${name}"`);
+    }
+  });
+
+  it('refuses a preview url that is absent rather than null', () => {
+    const preview = { ...GATE_EVIDENCE_ROW.preview };
+    delete (preview as Record<string, unknown>)['url'];
+    expect(() => decodeGateEvidence({ ...GATE_EVIDENCE_ROW, preview }, 'gates.evidence')).toThrow(
+      '"url"'
+    );
+  });
+
+  it('refuses a non-object answer and an omitted preview', () => {
+    expect(() => decodeGateEvidence(null, 'gates.evidence')).toThrow(
+      'Malformed RPC result from gates.evidence: expected an object'
+    );
+    const withoutPreview = { ...GATE_EVIDENCE_ROW } as Record<string, unknown>;
+    delete withoutPreview['preview'];
+    // `preview: Option<…>` serialises as an explicit null, so an omitted key is a
+    // malformed answer — decoding it as "no preview" would hide a wire change.
+    expect(() => decodeGateEvidence(withoutPreview, 'gates.evidence')).toThrow('"preview"');
+  });
+
+  it('keeps the daemon token out of a refusal', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse({ diff: 'x' }));
+    const error = await client
+      .gateEvidence('run-1' as RunId, 'pnpm', ['test'])
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('gates.evidence');
+    expect((error as Error).message).not.toContain('test-token');
+  });
+});
+
+// R-BRIDGE-B3b — the four MCP methods B3a registered on the daemon and the client now wraps.
+const MCP_APPROVAL_ROW = {
+  id: 'mcp-approval-01J',
+  run_id: 'run-1',
+  server: 'github',
+  tool: 'create_issue',
+  role: 'agent',
+  summary: '{title: "Bug", body: [120 chars]}',
+  requested_at: '2026-11-10T09:00:00Z',
+};
+
+const MCP_APPROVAL_DECODED: McpApproval = {
+  id: 'mcp-approval-01J',
+  runId: 'run-1',
+  server: 'github',
+  tool: 'create_issue',
+  role: 'agent',
+  summary: '{title: "Bug", body: [120 chars]}',
+  requestedAt: '2026-11-10T09:00:00Z',
+};
+
+const MCP_ANSWER_ROW = {
+  id: 'mcp-approval-01J',
+  run_id: 'run-1',
+  server: 'github',
+  tool: 'create_issue',
+  role: 'agent',
+  granted_by: 'dev-laptop',
+  expires_at: '2026-11-10T09:10:00Z',
+};
+
+const MCP_PERMISSION_ROW = {
+  server: 'github',
+  tool: 'create_issue',
+  role: 'agent',
+  permission: 'allow',
+};
+
+const MCP_PERMISSIONS_REPLY_ROW = {
+  rows: [MCP_PERMISSION_ROW],
+  agent_role: 'agent',
+  default_permission: 'ask',
+};
+
+describe('mcp approvals and permissions (R-BRIDGE-B3b)', () => {
+  it('decodes a full McpApproval, field by field, snake_case to camelCase', () => {
+    expect(decodeMcpApproval(MCP_APPROVAL_ROW, 'mcp.approvals.list')).toEqual(MCP_APPROVAL_DECODED);
+  });
+
+  it('decodes a full McpApprovalAnswer and keeps the authenticated grantor', () => {
+    expect(decodeMcpApprovalAnswer(MCP_ANSWER_ROW, 'mcp.approvals.allow_once')).toEqual({
+      id: 'mcp-approval-01J',
+      runId: 'run-1',
+      server: 'github',
+      tool: 'create_issue',
+      role: 'agent',
+      grantedBy: 'dev-laptop',
+      expiresAt: '2026-11-10T09:10:00Z',
+    });
+  });
+
+  it('decodes the permission table with its fail-closed default', () => {
+    expect(decodeMcpPermissionsReply(MCP_PERMISSIONS_REPLY_ROW, 'mcp.permissions.list')).toEqual({
+      rows: [{ server: 'github', tool: 'create_issue', role: 'agent', permission: 'allow' }],
+      agentRole: 'agent',
+      defaultPermission: 'ask',
+    });
+  });
+
+  it('dials mcp.approvals.list with no params and returns every pending approval', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse([MCP_APPROVAL_ROW]));
+    await expect(client.mcpApprovalsList()).resolves.toEqual([MCP_APPROVAL_DECODED]);
+    expect(sentMethod(0)).toBe('mcp.approvals.list');
+    expect(sentParams(0)).toEqual({});
+  });
+
+  it('dials mcp.approvals.allow_once with the question id and nothing else', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse(MCP_ANSWER_ROW));
+    const answer = await client.mcpAllowOnce('mcp-approval-01J');
+    expect(answer.grantedBy).toBe('dev-laptop');
+    expect(sentMethod(0)).toBe('mcp.approvals.allow_once');
+    // One required argument, bound as `id`; the grantor is the daemon's authenticated
+    // device, never a parameter a caller could name.
+    expect(sentParams(0)).toEqual({ id: 'mcp-approval-01J' });
+  });
+
+  it('dials mcp.permissions.list with no params', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse(MCP_PERMISSIONS_REPLY_ROW));
+    await expect(client.mcpPermissionsList()).resolves.toHaveProperty('defaultPermission', 'ask');
+    expect(sentMethod(0)).toBe('mcp.permissions.list');
+    expect(sentParams(0)).toEqual({});
+  });
+
+  it('dials mcp.permissions.set with the four bound arguments', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse(MCP_PERMISSION_ROW));
+    await expect(
+      client.mcpPermissionsSet('github', 'create_issue', 'agent', 'deny')
+    ).resolves.toEqual({ server: 'github', tool: 'create_issue', role: 'agent', permission: 'allow' });
+    expect(sentMethod(0)).toBe('mcp.permissions.set');
+    expect(sentParams(0)).toEqual({
+      server: 'github',
+      tool: 'create_issue',
+      role: 'agent',
+      permission: 'deny',
+    });
+  });
+
+  it('refuses a mcp.approvals.list answer that is not a list', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse({ approvals: [] }));
+    await expect(client.mcpApprovalsList()).rejects.toThrow(
+      'Malformed RPC result from mcp.approvals.list: "approvals" is not a list'
+    );
+  });
+
+  it('errors on every missing McpApproval field, naming the field', () => {
+    for (const name of ['id', 'run_id', 'server', 'tool', 'role', 'summary', 'requested_at']) {
+      const row: Record<string, unknown> = { ...MCP_APPROVAL_ROW };
+      delete row[name];
+      expect(() => decodeMcpApproval(row, 'mcp.approvals.list')).toThrow(`"${name}"`);
+    }
+  });
+
+  it('errors on every mistyped McpApproval field, naming the field', () => {
+    for (const name of ['id', 'run_id', 'server', 'tool', 'role', 'summary', 'requested_at']) {
+      const row = { ...MCP_APPROVAL_ROW, [name]: 7 };
+      expect(() => decodeMcpApproval(row, 'mcp.approvals.list')).toThrow(`"${name}"`);
+    }
+  });
+
+  it('errors on every missing McpApprovalAnswer field, naming the field', () => {
+    for (const name of ['id', 'run_id', 'server', 'tool', 'role', 'granted_by', 'expires_at']) {
+      const row: Record<string, unknown> = { ...MCP_ANSWER_ROW };
+      delete row[name];
+      expect(() => decodeMcpApprovalAnswer(row, 'mcp.approvals.allow_once')).toThrow(`"${name}"`);
+    }
+  });
+
+  it('errors on a missing McpPermissionsReply member and on a mistyped row permission', () => {
+    for (const name of ['rows', 'agent_role', 'default_permission']) {
+      const row: Record<string, unknown> = { ...MCP_PERMISSIONS_REPLY_ROW };
+      delete row[name];
+      expect(() => decodeMcpPermissionsReply(row, 'mcp.permissions.list')).toThrow(`"${name}"`);
+    }
+
+    for (const name of ['server', 'tool', 'role', 'permission']) {
+      const row: Record<string, unknown> = { ...MCP_PERMISSION_ROW };
+      delete row[name];
+      expect(() => decodeMcpPermissionRow(row, 'mcp.permissions.set')).toThrow(`"${name}"`);
+    }
+
+    expect(() =>
+      decodeMcpPermissionRow({ ...MCP_PERMISSION_ROW, permission: 'always' }, 'mcp.permissions.set')
+    ).toThrow('"permission" is not allow, ask or deny');
+    expect(() =>
+      decodeMcpPermissionsReply(
+        { ...MCP_PERMISSIONS_REPLY_ROW, default_permission: 'maybe' },
+        'mcp.permissions.list'
+      )
+    ).toThrow('"default_permission" is not allow, ask or deny');
+  });
+
+  it('keeps the daemon token out of an MCP refusal', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse({ not: 'an approval' }));
+    const error = await client.mcpApprovalsList().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('mcp.approvals.list');
+    expect((error as Error).message).not.toContain(TOKEN);
+  });
+});
+
+// R-EXT-1 — the three MCP connection methods the daemon already served and the client now wraps.
+const MCP_STDIO_CONNECTION = {
+  config: {
+    name: 'files',
+    transport: { kind: 'stdio' },
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-filesystem@1.2.3', '/tmp'],
+  },
+  status: 'connected',
+  process_id: 'proc-1',
+  tools: ['read_file', 'write_file'],
+  tool_definitions: [
+    {
+      name: 'read_file',
+      description: 'Read one file',
+      input_schema: { type: 'object' },
+      annotations: { title: 'Read', read_only: true, destructive: false, idempotent: true },
+    },
+    {
+      name: 'write_file',
+      description: 'Write one file',
+      input_schema: { type: 'object' },
+      annotations: null,
+    },
+  ],
+};
+
+const MCP_HTTP_CONNECTION = {
+  config: {
+    name: 'remote',
+    transport: { kind: 'http', url: 'https://mcp.example.test/x' },
+    command: null,
+    args: [],
+  },
+  status: 'disconnected',
+  process_id: null,
+  tools: [],
+  tool_definitions: [],
+};
+
+describe('mcp connections (R-EXT-1)', () => {
+  it('decodes a stdio connection with its tools, annotations and hidden process id', () => {
+    expect(decodeMcpConnection(MCP_STDIO_CONNECTION, 'mcp.list')).toEqual<McpConnection>({
+      config: {
+        name: 'files',
+        transport: { kind: 'stdio' },
+        command: 'npx',
+        args: ['-y', '@modelcontextprotocol/server-filesystem@1.2.3', '/tmp'],
+      },
+      status: { kind: 'connected' },
+      processId: 'proc-1',
+      tools: [
+        { name: 'read_file', description: 'Read one file', readOnly: true, destructive: false },
+        { name: 'write_file', description: 'Write one file' },
+      ],
+    });
+  });
+
+  it('decodes all three unit statuses as strings and the error variant as {error}', () => {
+    expect(decodeMcpStatus('connected', 'mcp.list')).toEqual({ kind: 'connected' });
+    expect(decodeMcpStatus('connecting', 'mcp.list')).toEqual({ kind: 'connecting' });
+    expect(decodeMcpStatus('disconnected', 'mcp.list')).toEqual({ kind: 'disconnected' });
+    // The externally tagged `Error(String)` arrival, which a string-only decoder would refuse.
+    expect(decodeMcpStatus({ error: 'handshake timed out' }, 'mcp.list')).toEqual({
+      kind: 'error',
+      message: 'handshake timed out',
+    });
+  });
+
+  it('refuses an unknown status instead of defaulting to disconnected', () => {
+    for (const bogus of ['ready', { connected: true }, { error: 7 }, null, 3]) {
+      expect(() => decodeMcpStatus(bogus, 'mcp.list')).toThrow('mcp.list');
+    }
+  });
+
+  it('falls back to the bare tools names when a connection carries no definitions', () => {
+    const connection = decodeMcpConnection(
+      { ...MCP_STDIO_CONNECTION, tool_definitions: [] },
+      'mcp.list'
+    );
+    expect(connection.tools).toEqual([
+      { name: 'read_file', description: '' },
+      { name: 'write_file', description: '' },
+    ]);
+  });
+
+  it('decodes an http server that is recorded, not connected', () => {
+    expect(decodeMcpConnection(MCP_HTTP_CONNECTION, 'mcp.list')).toEqual<McpConnection>({
+      config: {
+        name: 'remote',
+        transport: { kind: 'http', url: 'https://mcp.example.test/x' },
+        command: null,
+        args: [],
+      },
+      status: { kind: 'disconnected' },
+      processId: null,
+      tools: [],
+    });
+  });
+
+  it('dials mcp.list with no params and decodes every server', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse([MCP_STDIO_CONNECTION, MCP_HTTP_CONNECTION]));
+    const servers = await client.mcpList();
+    expect(servers.map((server) => server.config.name)).toEqual(['files', 'remote']);
+    expect(sentMethod(0)).toBe('mcp.list');
+    expect(sentParams(0)).toEqual({});
+  });
+
+  it('refuses a mcp.list answer that is not a list, naming the method', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse({ servers: [] }));
+    await expect(client.mcpList()).rejects.toThrow(
+      'Malformed RPC result from mcp.list: "servers" is not a list'
+    );
+  });
+
+  it('refuses a connection with no config or a nameless config, naming mcp.list', () => {
+    const noConfig = { ...MCP_STDIO_CONNECTION } as Record<string, unknown>;
+    delete noConfig['config'];
+    expect(() => decodeMcpConnection(noConfig, 'mcp.list')).toThrow(
+      'Malformed RPC result from mcp.list'
+    );
+
+    const nameless = {
+      ...MCP_STDIO_CONNECTION,
+      config: { ...MCP_STDIO_CONNECTION.config, name: '' },
+    };
+    expect(() => decodeMcpConnection(nameless, 'mcp.list')).toThrow(
+      'Malformed RPC result from mcp.list: "name" is blank'
+    );
+  });
+
+  it('refuses a transport the daemon does not have, and an http transport with no url', () => {
+    expect(() => decodeMcpTransport({ kind: 'grpc' }, 'mcp.list')).toThrow(
+      '"kind" is not stdio, http or websocket'
+    );
+    expect(() => decodeMcpTransport({ kind: 'http' }, 'mcp.list')).toThrow('"url" is not a string');
+  });
+
+  it('dials mcp.connect with the whole config and nothing beside it', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse(null));
+    const config: McpServerConfig = {
+      name: 'files',
+      transport: { kind: 'stdio' },
+      command: 'npx',
+      args: ['-y', '@modelcontextprotocol/server-filesystem@1.2.3', '/tmp'],
+    };
+    await expect(client.mcpConnect(config)).resolves.toBeUndefined();
+    expect(sentMethod(0)).toBe('mcp.connect');
+    // W8's own assertion: the daemon binds `config`, so the body is that one key and no other.
+    expect(sentParams(0)).toEqual({ config });
+  });
+
+  it('dials mcp.disconnect with the bound name and nothing else', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse(null));
+    await expect(client.mcpDisconnect('files')).resolves.toBeUndefined();
+    expect(sentMethod(0)).toBe('mcp.disconnect');
+    expect(sentParams(0)).toEqual({ name: 'files' });
+  });
+
+  it('keeps the daemon token out of a connections refusal', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse([{ config: { name: '' } }]));
+    const error = await client.mcpList().then(
+      () => null,
+      (failure: unknown) => failure
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('mcp.list');
+    expect((error as Error).message).not.toContain(TOKEN);
+  });
+});
+
+/** One daemon event, in the typed shape the client hands a screen. */
+function eventOf(kind: string, payload: unknown): WarshaEvent {
+  return {
+    id: `evt-${kind}`,
+    runId: 'run-1' as RunId,
+    stage: 'code' as Stage,
+    role: null,
+    kind,
+    payload,
+    costCents: null,
+    createdAt: '2026-10-28T00:00:00Z',
+    deviceId: null,
+  };
+}
+
+describe('R-EXT-2 run_finished and MCP call decoders', () => {
+  it('names the run-end kind the daemon writes', () => {
+    expect(RUN_FINISHED_KIND).toBe('run_finished');
+  });
+
+  it('decodes the three endings a finished run carries', () => {
+    for (const status of ['completed', 'failed', 'cancelled'] as const) {
+      expect(decodeRunFinished(eventOf(RUN_FINISHED_KIND, { status }))).toBe(status);
+    }
+  });
+
+  it('returns null for another kind, an unknown status, or a payload that is not an object', () => {
+    expect(decodeRunFinished(eventOf('agent_step', { status: 'completed' }))).toBeNull();
+    expect(decodeRunFinished(eventOf(RUN_FINISHED_KIND, { status: 'skipped' }))).toBeNull();
+    expect(decodeRunFinished(eventOf(RUN_FINISHED_KIND, { status: 3 }))).toBeNull();
+    expect(decodeRunFinished(eventOf(RUN_FINISHED_KIND, { status: null }))).toBeNull();
+    expect(decodeRunFinished(eventOf(RUN_FINISHED_KIND, null))).toBeNull();
+    expect(decodeRunFinished(eventOf(RUN_FINISHED_KIND, 'completed'))).toBeNull();
+    expect(decodeRunFinished(eventOf(RUN_FINISHED_KIND, ['completed']))).toBeNull();
+    expect(decodeRunFinished(eventOf(RUN_FINISHED_KIND, {}))).toBeNull();
+  });
+
+  it('decodes an agent MCP call with its phase, server and tool', () => {
+    const call = decodeMcpCall(
+      eventOf('tool_call', {
+        action: 'mcp_call',
+        phase: 'approval_required',
+        server: 'files',
+        tool: 'read_file',
+        role: 'agent',
+        question_id: 'mcp-approval-1',
+      })
+    );
+    expect(call).toEqual({
+      phase: 'approval_required',
+      server: 'files',
+      tool: 'read_file',
+      questionId: 'mcp-approval-1',
+    });
+
+    const quiet = decodeMcpCall(
+      eventOf('tool_call', {
+        action: 'mcp_call',
+        phase: 'succeeded',
+        server: 'files',
+        tool: 'read_file',
+        role: 'agent',
+      })
+    );
+    expect(quiet).toEqual({
+      phase: 'succeeded',
+      server: 'files',
+      tool: 'read_file',
+      questionId: null,
+    });
+  });
+
+  it('decodes every phase the daemon writes', () => {
+    const phases = ['requested', 'approval_required', 'denied', 'succeeded', 'failed'];
+    for (const phase of phases) {
+      const call = decodeMcpCall(
+        eventOf('tool_call', { action: 'mcp_call', phase, server: 'srv', tool: 'echo' })
+      );
+      expect(call?.phase).toBe(phase);
+    }
+  });
+
+  it('returns null for an allow_once answer and for a shape it does not understand', () => {
+    // The owner's answer is a `tool_call` too, and it is not a call.
+    expect(
+      decodeMcpCall(eventOf('tool_call', { action: 'mcp_allow_once', server: 'srv', tool: 'echo' }))
+    ).toBeNull();
+    expect(
+      decodeMcpCall(eventOf('agent_step', { action: 'mcp_call', phase: 'requested' }))
+    ).toBeNull();
+    expect(
+      decodeMcpCall(
+        eventOf('tool_call', { action: 'mcp_call', phase: 'finished', server: 's', tool: 't' })
+      )
+    ).toBeNull();
+    expect(
+      decodeMcpCall(eventOf('tool_call', { action: 'mcp_call', phase: 'requested', tool: 'echo' }))
+    ).toBeNull();
+    expect(
+      decodeMcpCall(eventOf('tool_call', { action: 'mcp_call', phase: 'requested', server: 'srv' }))
+    ).toBeNull();
+    expect(decodeMcpCall(eventOf('tool_call', null))).toBeNull();
+    expect(decodeMcpCall(eventOf('tool_call', 'mcp_call'))).toBeNull();
+  });
+
+  it('never reads an argument out of the event, because none is there', () => {
+    // The decoder's whole return value: no field could carry a tool argument.
+    const call = decodeMcpCall(
+      eventOf('tool_call', {
+        action: 'mcp_call',
+        phase: 'succeeded',
+        server: 'files',
+        tool: 'read_file',
+        role: 'agent',
+        path: 'a.txt',
+      })
+    );
+    expect(call).not.toBeNull();
+    expect(Object.keys(call ?? {}).sort()).toEqual(['phase', 'questionId', 'server', 'tool']);
   });
 });

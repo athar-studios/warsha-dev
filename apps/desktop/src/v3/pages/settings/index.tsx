@@ -3,14 +3,17 @@ import React, { useEffect, useState } from 'react';
 
 import { useDensity } from '../../app/DensityContext';
 import { useNavigate, useRoute } from '../../router';
+import { useNarrowViewport } from '../bench/useNarrowViewport';
 
 import { SettingsNav } from './SettingsNav';
 import { AboutSection } from './sections/AboutSection';
 import { BackendSection } from './sections/BackendSection';
 import { BudgetsSection } from './sections/BudgetsSection';
+import { ConnectionsSection } from './sections/ConnectionsSection';
 import { DevicesSection } from './sections/DevicesSection';
 import { GeneralSection } from './sections/GeneralSection';
 import { IntegrationsSection } from './sections/IntegrationsSection';
+import { McpPermissionsSection } from './sections/McpPermissionsSection';
 import { ModelsSection } from './sections/ModelsSection';
 import { PluginsSection } from './sections/PluginsSection';
 import { PostLaunchSection } from './sections/PostLaunchSection';
@@ -28,6 +31,9 @@ export default function SettingsPage(): React.ReactElement {
   const { params } = useRoute();
   const navigate = useNavigate();
   const { mode } = useDensity();
+  // One column at phone width (planner decision 4). The hook decides it, and the root's `data-narrow`
+  // paints it, so a media query never has to hold a breakpoint literal (settings.css).
+  const narrow = useNarrowViewport();
 
   const rawSection = params.section ?? 'general';
   const activeSection: SettingsSectionId = isSettingsSectionId(rawSection)
@@ -63,6 +69,10 @@ export default function SettingsPage(): React.ReactElement {
         return <SkillsSection />;
       case 'plugins':
         return <PluginsSection />;
+      case 'connections':
+        return <ConnectionsSection />;
+      case 'mcp':
+        return <McpPermissionsSection />;
       case 'integrations':
         return <IntegrationsSection />;
       case 'routines':
@@ -81,7 +91,11 @@ export default function SettingsPage(): React.ReactElement {
   };
 
   return (
-    <div className="v3-settings-root" data-testid="settings-page">
+    <div
+      className="v3-settings-root"
+      data-narrow={narrow ? 'true' : 'false'}
+      data-testid="settings-page"
+    >
       <SettingsNav
         activeSection={activeSection}
         onSelectSection={handleSelectSection}

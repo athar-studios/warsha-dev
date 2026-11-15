@@ -20,6 +20,12 @@
 //! - **The environment survives a restart.** [`ManagedProcess`] keeps exactly the
 //!   six documented fields, so the environment a spawn was given is stored beside
 //!   the record and replayed by [`ProcessManager::restart`].
+//! - **A restart re-checks the policy.** The manager holds the command policy it
+//!   was built with, and [`ProcessManager::restart`] judges the stored program and
+//!   its arguments again before it re-spawns, so a configuration narrowed after a
+//!   spawn cannot re-launch a program the daemon would now refuse (KEEL checkpoint
+//!   finding M4). The check runs before the running child is touched, so a refused
+//!   restart leaves the process as it was.
 //! - **The environment is cleared, not inherited.** Every child starts from
 //!   `env_clear()` and the fixed [`MINIMAL_CHILD_ENV`] floor; the only other
 //!   variables it sees are the ones the caller named, and a caller cannot
@@ -53,7 +59,7 @@ use tokio::io::{AsyncRead, AsyncWriteExt};
 use tokio::process::{Child, ChildStderr, ChildStdout, Command};
 use tokio::sync::Mutex;
 
-use crate::command_policy::{child_path, MINIMAL_CHILD_ENV};
+use crate::command_policy::{child_path, CommandPolicy, MINIMAL_CHILD_ENV};
 
 /// Environment names a spawn may not hand to a child, whatever its caller asks.
 ///
@@ -315,6 +321,27 @@ pub enum ProcessError {
     /// A project already has a live dev server.
     #[error("project `{0}` already has a running preview")]
     PreviewAlreadyRunning(String),
+    /// Another live run owns this project's live dev server (R-BRIDGE-B5 D3).
+    #[error(
+        "project `{project}` already has a running preview owned by run `{owner}`; \
+         run `{run_id}` cannot take it"
+    )]
+    PreviewOwnedByRun {
+        /// The project whose server is already up.
+        project: String,
+        /// The live run that owns it.
+        owner: String,
+        /// The run that asked for a server of its own.
+        run_id: String,
+    },
+    /// The command policy refuses the stored command, so it may not be re-spawned.
+    #[error("process `{id}` cannot restart: {reason}")]
+    PolicyRefused {
+        /// The process whose stored command was refused.
+        id: String,
+        /// The policy's own refusal message.
+        reason: String,
+    },
     /// No preview is tracked for that project.
     #[error("no preview for project `{0}`")]
     PreviewNotFound(String),
@@ -342,6 +369,11 @@ pub trait ProcessManager: Send + Sync {
 
     /// Kill the process if it is alive and start the same command again under
     /// the same id, with the same arguments and the same environment.
+    ///
+    /// The stored command is judged again by the policy the manager was built
+    /// with before anything is spawned, and a refused command leaves the running
+    /// child alone: a policy narrowed after a spawn cannot re-launch a program the
+    /// daemon would now refuse.
     async fn restart(&self, id: &str) -> Result<String, ProcessError>;
 
     /// The stdout lines the process has printed, oldest first, from `offset` on.
@@ -700,6 +732,12 @@ fn refresh(process: &mut ManagedProcess) -> Result<(), ProcessError> {
 pub struct InMemoryProcessManager {
     entries: Mutex<Vec<Entry>>,
     next_id: AtomicU64,
+    /// The policy a [`ProcessManager::restart`] re-checks before it re-spawns.
+    ///
+    /// It is set at construction and never absent: a manager always judges a
+    /// restart against *some* policy, so no caller can build one that skips the
+    /// check (KEEL checkpoint finding M4).
+    policy: Arc<CommandPolicy>,
 }
 
 impl Default for InMemoryProcessManager {
@@ -709,11 +747,21 @@ impl Default for InMemoryProcessManager {
 }
 
 impl InMemoryProcessManager {
-    /// An empty manager: no processes, the next id is `proc-1`.
+    /// An empty manager that re-checks `restart` against the shipped safe list.
+    ///
+    /// An unset configuration means `DEFAULT_ALLOWED_COMMANDS`, the same rule
+    /// [`CommandPolicy::from_config`] applies, so a manager built with no explicit
+    /// policy is never unrestricted.
     pub fn new() -> Self {
+        InMemoryProcessManager::with_policy(CommandPolicy::from_config(&[]))
+    }
+
+    /// An empty manager that re-checks `restart` against `policy`.
+    pub fn with_policy(policy: CommandPolicy) -> Self {
         InMemoryProcessManager {
             entries: Mutex::new(Vec::new()),
             next_id: AtomicU64::new(1),
+            policy: Arc::new(policy),
         }
     }
 
@@ -721,6 +769,12 @@ impl InMemoryProcessManager {
     /// process RPC, the MCP transports and the live preview.
     pub fn shared() -> Arc<dyn ProcessManager> {
         Arc::new(InMemoryProcessManager::new())
+    }
+
+    /// The daemon's own manager: one instance, re-checking a restart against the
+    /// owner's configured allow-list.
+    pub fn shared_with_policy(policy: CommandPolicy) -> Arc<dyn ProcessManager> {
+        Arc::new(InMemoryProcessManager::with_policy(policy))
     }
 }
 
@@ -829,6 +883,16 @@ impl ProcessManager for InMemoryProcessManager {
             .iter_mut()
             .find(|entry| entry.process.id == id)
             .ok_or_else(|| ProcessError::NotFound(id.to_string()))?;
+
+        // The program and its arguments are judged again before the running child
+        // is touched: a policy narrowed after the spawn refuses here, and the
+        // process keeps running rather than being killed into a refused restart.
+        self.policy
+            .check_invocation(&entry.process.command, &entry.process.args)
+            .map_err(|error| ProcessError::PolicyRefused {
+                id: entry.process.id.clone(),
+                reason: error.to_string(),
+            })?;
 
         if let Some(mut child) = entry.process.child.take() {
             let _ = child.start_kill();
@@ -1015,6 +1079,25 @@ struct PreviewEntry {
     process_id: String,
     command: String,
     args: Vec<String>,
+    /// The run that owns this server, or `None` for one started outside a run.
+    ///
+    /// Ownership metadata, not a second key (R-BRIDGE-B5 D1): the project is still
+    /// what a lookup is by, and this answers *whose* server it is — which is what
+    /// lets a run's end stop it and stops a newcomer inheriting it.
+    run_id: Option<String>,
+}
+
+/// Whether a run is still live, which is what makes a preview's owner dead or alive.
+///
+/// `process_spawn` owns processes, not run records, so the answer is handed in
+/// rather than reached for: the daemon implements this over the store it already
+/// reads. A manager built without one ([`LivePreviewManager::new`]) cannot prove an
+/// owner dead, so it treats every owner as live and never lets a newcomer take a
+/// tagged server (the no-steal rule, fail-closed).
+#[async_trait]
+pub trait RunLiveness: Send + Sync {
+    /// `true` when `run_id` names a run that has not finished.
+    async fn is_live(&self, run_id: &str) -> bool;
 }
 
 /// Starts and stops one dev server per project through a [`ProcessManager`].
@@ -1029,6 +1112,9 @@ struct PreviewEntry {
 pub struct LivePreviewManager {
     processes: Arc<dyn ProcessManager>,
     previews: Mutex<Vec<(String, PreviewEntry)>>,
+    /// How an owner run's liveness is judged (R-BRIDGE-B5 D3); `None` on a manager
+    /// with no run source, where an owner is therefore treated as live.
+    run_liveness: Option<Arc<dyn RunLiveness>>,
 }
 
 impl LivePreviewManager {
@@ -1037,7 +1123,19 @@ impl LivePreviewManager {
         LivePreviewManager {
             processes,
             previews: Mutex::new(Vec::new()),
+            run_liveness: None,
         }
+    }
+
+    /// The same manager, judging an owner run's liveness through `run_liveness`.
+    ///
+    /// A preview records the run that started it and a run's end stops it; the
+    /// oracle is what tells a live owner from one that died without its close ever
+    /// running, so the dead one's entry is swept rather than blocking the next run
+    /// (R-BRIDGE-B5 D2, D3).
+    pub fn with_run_liveness(mut self, run_liveness: Arc<dyn RunLiveness>) -> Self {
+        self.run_liveness = Some(run_liveness);
+        self
     }
 
     /// Split `"npm run dev"` into the program and its arguments.
@@ -1110,11 +1208,18 @@ impl LivePreviewManager {
         Ok(tokens)
     }
 
-    /// Start `command` as `project_id`'s dev server.
+    /// Start `command` as `project_id`'s dev server, owned by `run_id` when given.
     ///
     /// One preview per project: a second start is refused while the first is
     /// alive, because two servers on one port is a port conflict, not a feature.
     /// A preview whose process has finished may be replaced.
+    ///
+    /// The run id is ownership, not a second key (R-BRIDGE-B5 D1): `preview.start`
+    /// still addresses a project, and the id answers whose server it is, so the
+    /// run's end can stop it ([`LivePreviewManager::stop_run`]). A start with a run
+    /// id on a project whose live server belongs to another live run is refused
+    /// with [`ProcessError::PreviewOwnedByRun`] (D3); a server whose owner has
+    /// finished never blocks, because the dead entry is swept before this check.
     ///
     /// The call waits up to [`PREVIEW_URL_TIMEOUT`] for the server to print its
     /// address, so the preview the caller gets back already carries the URL when
@@ -1123,20 +1228,24 @@ impl LivePreviewManager {
         &self,
         project_id: &str,
         command: &str,
+        run_id: Option<&str>,
     ) -> Result<LivePreview, ProcessError> {
         let project = project_id.trim();
         if project.is_empty() {
             return Err(ProcessError::EmptyProjectId);
         }
+        // A caller that names no run owns nothing: an empty id is no id, so a
+        // server started with it stays the project's ambient one.
+        let run_id = run_id
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_string);
 
-        let existing = self
-            .previews
-            .lock()
-            .await
-            .iter()
-            .find(|(id, _)| id == project)
-            .map(|(_, entry)| entry.clone());
-        if let Some(entry) = existing {
+        // A dead run's entry never blocks a newcomer, so it is swept before the
+        // ownership check rather than after it (D3).
+        self.sweep_dead(project).await;
+
+        if let Ok(entry) = self.preview_entry(project).await {
             // A process the manager no longer has counts as finished, so its
             // project may start a new preview instead of being stuck forever.
             let status = self
@@ -1145,7 +1254,20 @@ impl LivePreviewManager {
                 .await
                 .unwrap_or(ProcessStatus::Stopped);
             if !status.is_terminal() {
-                return Err(ProcessError::PreviewAlreadyRunning(project.to_string()));
+                return Err(match (entry.run_id.as_deref(), run_id.as_deref()) {
+                    // The server is another live run's to keep: this is ownership,
+                    // not a port conflict, and the answer says so.
+                    (Some(owner), Some(caller)) if owner != caller => {
+                        ProcessError::PreviewOwnedByRun {
+                            project: project.to_string(),
+                            owner: owner.to_string(),
+                            run_id: caller.to_string(),
+                        }
+                    }
+                    // The same run asking twice, or a server no run owns, is the
+                    // one-preview-per-project rule.
+                    _ => ProcessError::PreviewAlreadyRunning(project.to_string()),
+                });
             }
         }
 
@@ -1166,6 +1288,7 @@ impl LivePreviewManager {
                     process_id: process_id.clone(),
                     command: program.clone(),
                     args: args.clone(),
+                    run_id,
                 },
             ));
         }
@@ -1194,10 +1317,75 @@ impl LivePreviewManager {
         }
     }
 
+    /// Stop and drop every dev server `run_id` owns, answering how many there were.
+    ///
+    /// This is what a run's end calls — the terminal `runs.advance` arm and
+    /// `runs.cancel` — so the server a run started dies with it (R-BRIDGE-B5 D2).
+    ///
+    /// Best-effort by construction: it returns no error, so no run close can fail
+    /// because a dev server would not die. A stop that fails is logged and the
+    /// entry is dropped anyway — the run is over either way, and a preview entry
+    /// nobody will ever stop is worse than a child the daemon's exit reaps.
+    pub async fn stop_run(&self, run_id: &str) -> usize {
+        let run_id = run_id.trim();
+        if run_id.is_empty() {
+            return 0;
+        }
+
+        // The entries leave the list before any child is touched: a stop awaits
+        // the OS, and `status`/`list` have to keep answering meanwhile.
+        let owned: Vec<(String, String)> = {
+            let mut previews = self.previews.lock().await;
+            let mut kept = Vec::with_capacity(previews.len());
+            let mut owned = Vec::new();
+            for (project, entry) in previews.drain(..) {
+                match entry.run_id.as_deref() {
+                    Some(owner) if owner == run_id => owned.push((project, entry.process_id)),
+                    _ => kept.push((project, entry)),
+                }
+            }
+            *previews = kept;
+            owned
+        };
+
+        for (project, process_id) in &owned {
+            match self.processes.stop(process_id).await {
+                Ok(()) | Err(ProcessError::NotRunning(_) | ProcessError::NotFound(_)) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        project = %project,
+                        run_id = %run_id,
+                        process_id = %process_id,
+                        "the preview of a finished run could not be stopped: {error}"
+                    );
+                }
+            }
+        }
+        owned.len()
+    }
+
     /// The current status of `project_id`'s dev server.
-    pub async fn status(&self, project_id: &str) -> Result<LivePreview, ProcessError> {
+    ///
+    /// In a run context (`run_id` is `Some`) the answer is that run's server: a
+    /// preview the store still tracks for the project but another run owns is not
+    /// this run's, so it is `PreviewNotFound` for this caller (R-BRIDGE-B5 D4).
+    /// Without a run context the project's server is the answer, which keeps a
+    /// project-scoped status call working.
+    pub async fn status(
+        &self,
+        project_id: &str,
+        run_id: Option<&str>,
+    ) -> Result<LivePreview, ProcessError> {
         let project = project_id.trim();
+        // A run that died without its close running must not answer a stale
+        // preview, so the same lazy sweep `start` performs runs here too (D3).
+        self.sweep_dead(project).await;
         let entry = self.preview_entry(project).await?;
+        if let Some(caller) = run_id.map(str::trim).filter(|id| !id.is_empty()) {
+            if matches!(entry.run_id.as_deref(), Some(owner) if owner != caller) {
+                return Err(ProcessError::PreviewNotFound(project.to_string()));
+            }
+        }
         let status = self
             .processes
             .status(&entry.process_id)
@@ -1248,6 +1436,84 @@ impl LivePreviewManager {
             .ok_or_else(|| ProcessError::PreviewNotFound(project_id.to_string()))
     }
 
+    /// Drop, and stop, every entry for `project_id` whose owner run has finished.
+    ///
+    /// This is the lazy half of R-BRIDGE-B5 D3: a run that ends by its close is
+    /// stopped there, but a run that died without one leaves its server behind, and
+    /// that stale entry must not block the next run of the project. The owners are
+    /// judged outside the list lock — a liveness answer reads a store — and each
+    /// doomed entry is re-found by its process id before it is removed, so a
+    /// concurrent `stop_run` that already dropped it is not double-counted.
+    ///
+    /// Returns how many entries were swept.
+    async fn sweep_dead(&self, project_id: &str) -> usize {
+        let owned: Vec<(String, String)> = self
+            .previews
+            .lock()
+            .await
+            .iter()
+            .filter(|(id, entry)| id == project_id && entry.run_id.is_some())
+            .filter_map(|(_, entry)| {
+                entry
+                    .run_id
+                    .as_ref()
+                    .map(|run_id| (entry.process_id.clone(), run_id.clone()))
+            })
+            .collect();
+
+        let mut dead: Vec<(String, String)> = Vec::new();
+        for (process_id, run_id) in owned {
+            if !self.run_is_live(&run_id).await {
+                dead.push((process_id, run_id));
+            }
+        }
+        if dead.is_empty() {
+            return 0;
+        }
+
+        let mut swept: Vec<String> = Vec::new();
+        {
+            let mut previews = self.previews.lock().await;
+            for (process_id, run_id) in &dead {
+                let before = previews.len();
+                previews.retain(|(id, entry)| {
+                    !(id == project_id
+                        && entry.process_id == *process_id
+                        && entry.run_id.as_deref() == Some(run_id.as_str()))
+                });
+                if previews.len() < before {
+                    swept.push(process_id.clone());
+                }
+            }
+        }
+
+        for process_id in &swept {
+            match self.processes.stop(process_id).await {
+                Ok(()) | Err(ProcessError::NotRunning(_) | ProcessError::NotFound(_)) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        project = %project_id,
+                        process_id = %process_id,
+                        "the preview of a run that is no longer live could not be stopped: {error}"
+                    );
+                }
+            }
+        }
+        swept.len()
+    }
+
+    /// Whether an entry's owner run is still live.
+    ///
+    /// A manager with no run source cannot prove an owner dead, so it answers `true`
+    /// and keeps the no-steal rule: refusing a newcomer is recoverable with
+    /// `preview.stop`, while stealing a live server is not.
+    async fn run_is_live(&self, run_id: &str) -> bool {
+        match self.run_liveness {
+            Some(ref liveness) => liveness.is_live(run_id).await,
+            None => true,
+        }
+    }
+
     /// The first URL a process has printed, waiting up to `timeout` for one.
     ///
     /// The wait is bounded and it is the only one: a server that never prints an
@@ -1286,6 +1552,109 @@ mod tests {
     /// The child is this same test binary, so both halves read one constant: a
     /// dev server that printed something else would be a different server.
     const PROBE_URL: &str = "http://127.0.0.1:5199/";
+
+    /// The runs a preview test's manager judges live, and what it can kill.
+    ///
+    /// The production oracle reads a run store; a preview test needs the same one
+    /// answer, set and revoked on demand, so a "the run died" case is a single
+    /// call instead of a database write.
+    struct LiveRuns(std::sync::Mutex<std::collections::HashSet<String>>);
+
+    impl LiveRuns {
+        fn of(runs: &[&str]) -> Arc<Self> {
+            Arc::new(LiveRuns(std::sync::Mutex::new(
+                runs.iter().map(|id| (*id).to_string()).collect(),
+            )))
+        }
+
+        /// The run is over — and no close ran, which is the state a sweep finds.
+        fn finish(&self, run_id: &str) {
+            self.0
+                .lock()
+                .expect("the live set is not poisoned")
+                .remove(run_id);
+        }
+    }
+
+    #[async_trait]
+    impl RunLiveness for LiveRuns {
+        async fn is_live(&self, run_id: &str) -> bool {
+            self.0
+                .lock()
+                .expect("the live set is not poisoned")
+                .contains(run_id)
+        }
+    }
+
+    /// A spawner whose `stop` always fails: a dev server that will not die.
+    ///
+    /// Everything a preview needs — spawn, status, stdout — is the real in-memory
+    /// manager's; only the kill is poisoned, and the count proves the close tried.
+    struct Unstoppable {
+        inner: Arc<dyn ProcessManager>,
+        refused: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Unstoppable {
+        fn new() -> Arc<Self> {
+            Arc::new(Unstoppable {
+                inner: InMemoryProcessManager::shared(),
+                refused: std::sync::atomic::AtomicUsize::new(0),
+            })
+        }
+
+        fn refusals(&self) -> usize {
+            self.refused.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl ProcessManager for Unstoppable {
+        async fn spawn(
+            &self,
+            command: &str,
+            args: &[String],
+            env: &HashMap<String, String>,
+        ) -> Result<String, ProcessError> {
+            self.inner.spawn(command, args, env).await
+        }
+
+        async fn stop(&self, id: &str) -> Result<(), ProcessError> {
+            self.refused
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(ProcessError::Stop {
+                id: id.to_string(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "the server ignored the signal",
+                ),
+            })
+        }
+
+        async fn status(&self, id: &str) -> Result<ProcessStatus, ProcessError> {
+            self.inner.status(id).await
+        }
+
+        async fn list(&self) -> Vec<ManagedProcess> {
+            self.inner.list().await
+        }
+
+        async fn restart(&self, id: &str) -> Result<String, ProcessError> {
+            self.inner.restart(id).await
+        }
+
+        async fn read_stdout(&self, id: &str, offset: usize) -> Result<Vec<String>, ProcessError> {
+            self.inner.read_stdout(id, offset).await
+        }
+
+        async fn read_stderr(&self, id: &str, offset: usize) -> Result<Vec<String>, ProcessError> {
+            self.inner.read_stderr(id, offset).await
+        }
+
+        async fn kill_all(&self) -> usize {
+            self.inner.kill_all().await
+        }
+    }
 
     /// The ignored test the preview tests spawn as their dev server.
     ///
@@ -1383,6 +1752,19 @@ mod tests {
             "sh".to_string(),
             vec!["-c".to_string(), "exit 0".to_string()],
         )
+    }
+
+    /// A manager whose policy admits the platform shell.
+    ///
+    /// [`long_running`] is a shell and the shipped default list refuses shells,
+    /// so a restart test whose re-check is meant to pass needs a policy that
+    /// admits the program the test spawns.
+    fn shell_manager() -> InMemoryProcessManager {
+        #[cfg(windows)]
+        let policy = CommandPolicy::from_config(&["cmd".to_string()]);
+        #[cfg(not(windows))]
+        let policy = CommandPolicy::from_config(&["sh".to_string()]);
+        InMemoryProcessManager::with_policy(policy)
     }
 
     /// Poll until the process settles, or fail the test after ~4 seconds.
@@ -1559,7 +1941,7 @@ mod tests {
 
     #[tokio::test]
     async fn restart_keeps_the_id_and_starts_a_new_child() {
-        let manager = InMemoryProcessManager::new();
+        let manager = shell_manager();
         let (command, args) = long_running();
         let id = manager
             .spawn(&command, &args, &HashMap::new())
@@ -1579,7 +1961,7 @@ mod tests {
 
     #[tokio::test]
     async fn restart_replays_the_environment_it_was_spawned_with() {
-        let manager = InMemoryProcessManager::new();
+        let manager = shell_manager();
         let (command, args) = long_running();
         let mut env = HashMap::new();
         env.insert("WARSHA_TEST_MARKER".to_string(), "1".to_string());
@@ -1597,6 +1979,75 @@ mod tests {
             ProcessStatus::Running
         );
         manager.stop(&id).await.expect("the process stops");
+    }
+
+    /// KEEL checkpoint finding M4: `restart` re-spawned the stored command with no
+    /// policy re-check, so a record could re-launch a program the daemon would now
+    /// refuse. The manager holds the policy, so the re-check cannot be forgotten by
+    /// a caller; it runs before the running child is touched, so a refusal leaves
+    /// the process as it was. A command the policy admits still restarts.
+    #[tokio::test]
+    async fn restart_rechecks_the_policy_before_respawning() {
+        // The shipped policy refuses a shell, and `spawn` is gated at the RPC edge,
+        // so this record exists exactly as one does after a narrowing.
+        let manager = InMemoryProcessManager::new();
+        let (command, args) = long_running();
+        let expected = CommandPolicy::default()
+            .check_invocation(&command, &args)
+            .expect_err("the shipped policy refuses this program");
+        let id = manager
+            .spawn(&command, &args, &HashMap::new())
+            .await
+            .expect("the record exists");
+
+        let error = manager
+            .restart(&id)
+            .await
+            .expect_err("a program the policy refuses cannot be re-spawned");
+        match error {
+            ProcessError::PolicyRefused {
+                id: refused,
+                reason,
+            } => {
+                assert_eq!(refused, id, "the refusal names the process");
+                assert_eq!(
+                    reason,
+                    expected.to_string(),
+                    "the refusal carries the policy's own message"
+                );
+                assert!(
+                    reason.contains(&command),
+                    "the refusal names the program: {reason}"
+                );
+            }
+            other => panic!("expected PolicyRefused, got {other:?}"),
+        }
+        assert_eq!(
+            manager.status(&id).await.expect("the process is tracked"),
+            ProcessStatus::Running,
+            "a refused restart leaves the running child alone"
+        );
+        assert_eq!(manager.list().await.len(), 1, "no second record was made");
+        manager.stop(&id).await.expect("the process stops");
+
+        // Control: the same command, under a policy that admits it, restarts.
+        let admitting = shell_manager();
+        let id = admitting
+            .spawn(&command, &args, &HashMap::new())
+            .await
+            .expect("the process starts");
+        assert_eq!(
+            admitting
+                .restart(&id)
+                .await
+                .expect("an admitted program restarts"),
+            id
+        );
+        assert_eq!(
+            admitting.status(&id).await.expect("the process is tracked"),
+            ProcessStatus::Running
+        );
+        admitting.stop(&id).await.expect("the process stops");
     }
 
     #[tokio::test]
@@ -1805,7 +2256,7 @@ mod tests {
         let previews = LivePreviewManager::new(processes.clone());
 
         let started = previews
-            .start("project-1", &probe_line())
+            .start("project-1", &probe_line(), None)
             .await
             .expect("the preview starts");
 
@@ -1814,7 +2265,7 @@ mod tests {
         // sees the address even if it never looked at the start reply.
         assert_eq!(
             previews
-                .status("project-1")
+                .status("project-1", None)
                 .await
                 .expect("the preview is tracked")
                 .url
@@ -1838,6 +2289,7 @@ mod tests {
             .start(
                 "project-1",
                 &probe_line_for("process_spawn::tests::preview_silent_probe"),
+                None,
             )
             .await
             .expect("the preview starts");
@@ -1861,11 +2313,11 @@ mod tests {
         let command = probe_line();
 
         let started = previews
-            .start("project-1", &command)
+            .start("project-1", &command, None)
             .await
             .expect("the preview starts");
         let status = previews
-            .status("project-1")
+            .status("project-1", None)
             .await
             .expect("the preview is tracked");
 
@@ -1876,7 +2328,7 @@ mod tests {
         previews.stop("project-1").await.expect("the preview stops");
         assert_eq!(
             previews
-                .status("project-1")
+                .status("project-1", None)
                 .await
                 .expect("the preview is still tracked")
                 .status,
@@ -1890,12 +2342,12 @@ mod tests {
         let previews = LivePreviewManager::new(processes);
         let command = probe_line();
         previews
-            .start("project-1", &command)
+            .start("project-1", &command, None)
             .await
             .expect("the preview starts");
 
         let error = previews
-            .start("project-1", &command)
+            .start("project-1", &command, None)
             .await
             .expect_err("one preview per project");
 
@@ -1908,7 +2360,7 @@ mod tests {
         let previews = LivePreviewManager::new(InMemoryProcessManager::shared());
 
         assert!(matches!(
-            previews.status("nobody").await,
+            previews.status("nobody", None).await,
             Err(ProcessError::PreviewNotFound(_))
         ));
         assert!(matches!(
@@ -1916,7 +2368,7 @@ mod tests {
             Err(ProcessError::PreviewNotFound(_))
         ));
         assert!(matches!(
-            previews.start("  ", "npm run dev").await,
+            previews.start("  ", "npm run dev", None).await,
             Err(ProcessError::EmptyProjectId)
         ));
         assert!(previews.list().await.is_empty());
@@ -1927,7 +2379,7 @@ mod tests {
         let processes = InMemoryProcessManager::shared();
         let previews = LivePreviewManager::new(processes.clone());
         let started = previews
-            .start("project-1", &probe_line())
+            .start("project-1", &probe_line(), None)
             .await
             .expect("the preview starts");
         let status = processes
@@ -1941,6 +2393,337 @@ mod tests {
             .stop("project-1")
             .await
             .expect("stopping a stopped preview succeeds");
+    }
+
+    /// A run's server is its own: a later run on the same project is refused.
+    ///
+    /// The daemon-level half of T1 (`second_run_never_inherits_a_live_server`) is
+    /// the store-backed run context; this is the manager rule under it — ownership,
+    /// not the port, is what the refusal names.
+    #[tokio::test]
+    async fn a_live_server_owned_by_another_live_run_is_not_a_newcomers_to_take() {
+        let processes = InMemoryProcessManager::shared();
+        let live = LiveRuns::of(&["run-a", "run-b"]);
+        let previews = LivePreviewManager::new(processes.clone()).with_run_liveness(live.clone());
+
+        let first = previews
+            .start("project-1", &probe_line(), Some("run-a"))
+            .await
+            .expect("run A starts its server");
+
+        let error = previews
+            .start("project-1", &probe_line(), Some("run-b"))
+            .await
+            .expect_err("run B cannot take run A's live server");
+        match error {
+            ProcessError::PreviewOwnedByRun {
+                project,
+                owner,
+                run_id,
+            } => {
+                assert_eq!(project, "project-1");
+                assert_eq!(owner, "run-a");
+                assert_eq!(run_id, "run-b");
+            }
+            other => panic!("a refused takeover answered {other:?}"),
+        }
+
+        // The refusal changed nothing: run A's server is exactly where it was.
+        assert_eq!(
+            previews
+                .status("project-1", Some("run-a"))
+                .await
+                .expect("run A's server is still its own")
+                .process_id,
+            first.process_id
+        );
+        // The same run asking twice is the one-preview-per-project rule, not a
+        // takeover: it already has the server it asked for.
+        assert!(matches!(
+            previews
+                .start("project-1", &probe_line(), Some("run-a"))
+                .await,
+            Err(ProcessError::PreviewAlreadyRunning(_))
+        ));
+
+        assert_eq!(previews.stop_run("run-a").await, 1);
+        assert_eq!(
+            processes.kill_all().await,
+            0,
+            "the run's close stopped its server"
+        );
+    }
+
+    /// `stop_run` stops and drops every server the run owns, and nobody else's.
+    #[tokio::test]
+    async fn stop_run_stops_the_servers_the_run_owns_and_only_those() {
+        let processes = InMemoryProcessManager::shared();
+        let live = LiveRuns::of(&["run-a", "run-b"]);
+        let previews = LivePreviewManager::new(processes.clone()).with_run_liveness(live);
+
+        let owned = previews
+            .start("project-1", &probe_line(), Some("run-a"))
+            .await
+            .expect("run A's first server starts");
+        let owned_elsewhere = previews
+            .start("project-2", &probe_line(), Some("run-a"))
+            .await
+            .expect("run A's second server starts");
+        let kept = previews
+            .start("project-3", &probe_line(), Some("run-b"))
+            .await
+            .expect("run B's server starts");
+
+        assert_eq!(previews.stop_run("run-a").await, 2);
+
+        for (project, process_id) in [
+            ("project-1", owned.process_id),
+            ("project-2", owned_elsewhere.process_id),
+        ] {
+            assert_eq!(
+                processes
+                    .status(&process_id)
+                    .await
+                    .expect("the process is tracked"),
+                ProcessStatus::Stopped,
+                "{project}'s server did not stop with its run"
+            );
+            assert!(
+                matches!(
+                    previews.status(project, None).await,
+                    Err(ProcessError::PreviewNotFound(_))
+                ),
+                "{project}'s entry outlived its run"
+            );
+        }
+
+        // Another run's server is untouched, entry and process both.
+        assert_eq!(
+            previews
+                .status("project-3", Some("run-b"))
+                .await
+                .expect("run B's server is still tracked")
+                .process_id,
+            kept.process_id
+        );
+        assert_eq!(
+            processes
+                .status(&kept.process_id)
+                .await
+                .expect("the process is tracked"),
+            ProcessStatus::Running
+        );
+
+        assert_eq!(previews.stop_run("run-b").await, 1);
+        assert_eq!(processes.kill_all().await, 0);
+    }
+
+    /// T5 (R-BRIDGE-B5 D2): a stop that fails is logged, and the close still
+    /// answers — `stop_run` has no error to return, so no run close can fail on it.
+    #[tokio::test]
+    async fn stop_failure_never_fails_run_close() {
+        let processes = Unstoppable::new();
+        let previews = LivePreviewManager::new(processes.clone());
+
+        let started = previews
+            .start("project-1", &probe_line(), Some("run-a"))
+            .await
+            .expect("run A starts its server");
+
+        // The poisoned kill is attempted, refused, and swallowed.
+        assert_eq!(previews.stop_run("run-a").await, 1);
+        assert_eq!(
+            processes.refusals(),
+            1,
+            "the close did not try to stop the server it owns"
+        );
+        // The entry is gone anyway: a run that ends leaves no preview behind, not
+        // even a server that would not die.
+        assert!(matches!(
+            previews.status("project-1", None).await,
+            Err(ProcessError::PreviewNotFound(_))
+        ));
+        assert!(previews.list().await.is_empty());
+
+        // The child the poisoned manager would not kill is reaped here, so the test
+        // leaves no process behind.
+        assert_eq!(processes.inner.kill_all().await, 1);
+        assert_eq!(
+            processes
+                .status(&started.process_id)
+                .await
+                .expect("the process is tracked"),
+            ProcessStatus::Stopped
+        );
+    }
+
+    /// T6 (R-BRIDGE-B5 D5): previews are process memory — a rebuilt manager starts
+    /// clean, and nothing of the old one blocks or answers.
+    #[tokio::test]
+    async fn restart_starts_clean() {
+        let processes = InMemoryProcessManager::shared();
+        let live = LiveRuns::of(&["run-a"]);
+        let before = LivePreviewManager::new(processes.clone()).with_run_liveness(live.clone());
+        let started = before
+            .start("project-1", &probe_line(), Some("run-a"))
+            .await
+            .expect("the first manager starts a server");
+
+        // The daemon restart: the processes are the daemon's, the entries are not.
+        let after = LivePreviewManager::new(processes.clone()).with_run_liveness(live);
+
+        assert!(after.list().await.is_empty(), "a restart kept a preview");
+        assert!(
+            matches!(
+                after.status("project-1", None).await,
+                Err(ProcessError::PreviewNotFound(_))
+            ),
+            "a restarted manager answered for the previous manager's server"
+        );
+        // Not just absent from the list: the next run starts clean, unblocked by an
+        // entry nobody kept.
+        let fresh = after
+            .start("project-1", &probe_line(), Some("run-a"))
+            .await
+            .expect("a restarted manager starts a server of its own");
+        assert_ne!(fresh.process_id, started.process_id);
+
+        assert_eq!(after.stop_run("run-a").await, 1);
+        // The restarted manager stops what *it* started. The child the previous
+        // manager left is exactly what a restart forgets — the known half in
+        // PLAN.md — so it is still alive here and only this test can reap it.
+        assert_eq!(
+            processes.kill_all().await,
+            1,
+            "the server the old manager started outlived it, as a restart does"
+        );
+    }
+
+    /// A run context answers for the run's server; another run's is not its own.
+    #[tokio::test]
+    async fn status_in_a_run_context_reports_only_that_runs_server() {
+        let processes = InMemoryProcessManager::shared();
+        let live = LiveRuns::of(&["run-a", "run-b"]);
+        let previews = LivePreviewManager::new(processes.clone()).with_run_liveness(live);
+
+        let started = previews
+            .start("project-1", &probe_line(), Some("run-a"))
+            .await
+            .expect("run A starts its server");
+
+        assert_eq!(
+            previews
+                .status("project-1", Some("run-a"))
+                .await
+                .expect("run A's own server answers")
+                .process_id,
+            started.process_id
+        );
+        assert!(
+            matches!(
+                previews.status("project-1", Some("run-b")).await,
+                Err(ProcessError::PreviewNotFound(_))
+            ),
+            "run B was answered with run A's server"
+        );
+        // Without a run context the project's server is the answer, so a
+        // project-scoped status call keeps working (D1).
+        assert_eq!(
+            previews
+                .status("project-1", None)
+                .await
+                .expect("a project-scoped status answers")
+                .process_id,
+            started.process_id
+        );
+
+        assert_eq!(previews.stop_run("run-a").await, 1);
+        assert_eq!(processes.kill_all().await, 0);
+    }
+
+    /// Without a run source nothing can be proved dead, so an owner is treated as
+    /// live: the no-steal rule holds rather than a stranger taking the server.
+    #[tokio::test]
+    async fn a_manager_with_no_run_source_never_lets_a_newcomer_take_a_server() {
+        let processes = InMemoryProcessManager::shared();
+        let previews = LivePreviewManager::new(processes.clone());
+
+        previews
+            .start("project-1", &probe_line(), Some("run-a"))
+            .await
+            .expect("the server starts");
+
+        assert!(matches!(
+            previews
+                .start("project-1", &probe_line(), Some("run-b"))
+                .await,
+            Err(ProcessError::PreviewOwnedByRun { .. })
+        ));
+
+        assert_eq!(previews.stop_run("run-a").await, 1);
+        assert_eq!(processes.kill_all().await, 0);
+    }
+
+    /// A dead owner's entry never blocks the next run, and is stopped as it goes.
+    #[tokio::test]
+    async fn a_dead_runs_entry_is_swept_instead_of_blocking_the_next_run() {
+        let processes = InMemoryProcessManager::shared();
+        let live = LiveRuns::of(&["run-a", "run-b"]);
+        let previews = LivePreviewManager::new(processes.clone()).with_run_liveness(live.clone());
+
+        let abandoned = previews
+            .start("project-1", &probe_line(), Some("run-a"))
+            .await
+            .expect("run A starts its server");
+        // Run A died without its close running: the record says over, no hook ran.
+        live.finish("run-a");
+
+        // The next status for the project is what sweeps it ...
+        assert!(matches!(
+            previews.status("project-1", None).await,
+            Err(ProcessError::PreviewNotFound(_))
+        ));
+        assert_eq!(
+            processes
+                .status(&abandoned.process_id)
+                .await
+                .expect("the process is tracked"),
+            ProcessStatus::Stopped,
+            "the swept server was left running"
+        );
+
+        // ... and the next run starts clean rather than refused.
+        let fresh = previews
+            .start("project-1", &probe_line(), Some("run-b"))
+            .await
+            .expect("the next run starts its own server");
+        assert_ne!(fresh.process_id, abandoned.process_id);
+
+        assert_eq!(previews.stop_run("run-b").await, 1);
+        assert_eq!(processes.kill_all().await, 0);
+    }
+
+    /// A start with no run id keeps the old rule exactly: one preview per project.
+    #[tokio::test]
+    async fn a_start_without_a_run_is_still_one_preview_per_project() {
+        let processes = InMemoryProcessManager::shared();
+        let previews = LivePreviewManager::new(processes.clone());
+
+        previews
+            .start("project-1", &probe_line(), None)
+            .await
+            .expect("the project's own server starts");
+        assert!(matches!(
+            previews
+                .start("project-1", &probe_line(), Some("run-a"))
+                .await,
+            Err(ProcessError::PreviewAlreadyRunning(_))
+        ));
+        // An untagged server is nobody's, so no run close takes it with it.
+        assert_eq!(previews.stop_run("run-a").await, 0);
+
+        previews.stop("project-1").await.expect("the preview stops");
+        assert_eq!(processes.kill_all().await, 0);
     }
 }
 

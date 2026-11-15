@@ -426,6 +426,91 @@ export interface RunStreamSync {
 }
 
 /**
+ * The `EventKind` a run's end is recorded under (`warsha_core::EventKind::RunFinished`).
+ *
+ * A run ends once, by `Completed`, `Failed` or `Cancelled`; the daemon appends exactly
+ * one `run_finished` event for that transition, so a stream watcher learns the run is
+ * over without re-polling `runs.list`.
+ */
+export const RUN_FINISHED_KIND = 'run_finished';
+
+/** The three ways a run can end, as the `run_finished` payload spells them. */
+export type RunFinishedStatus = 'completed' | 'failed' | 'cancelled';
+
+/**
+ * The status a finished run ended with, or `null` when this event is not a run's end.
+ *
+ * `null` for any other kind (the common case — a stream carries every kind), and `null`
+ * for a `run_finished` whose payload names a status this client does not know: an
+ * unknown ending is not a default one, and guessing `completed` would report success
+ * for a run that failed.
+ */
+export function decodeRunFinished(event: WarshaEvent): RunFinishedStatus | null {
+  if (event.kind !== RUN_FINISHED_KIND) return null;
+  const payload = event.payload;
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return null;
+  const status = (payload as Record<string, unknown>)['status'];
+  if (status === 'completed' || status === 'failed' || status === 'cancelled') return status;
+  return null;
+}
+
+/** Where an agent MCP tool call is, as `tool_call` events report it. */
+export type McpCallPhase = 'requested' | 'approval_required' | 'denied' | 'succeeded' | 'failed';
+
+/**
+ * One agent MCP tool call moment, decoded from a `tool_call` event.
+ *
+ * `server` and `tool` are what the daemon recorded; the arguments never travel in the
+ * event at all (privacy is the packet's binding rule), so there is nothing here to
+ * render from them. `questionId` is present only on `approval_required` — it names the
+ * Inbox item the owner answers.
+ */
+export interface McpCallEvent {
+  phase: McpCallPhase;
+  server: string;
+  tool: string;
+  questionId: string | null;
+}
+
+const MCP_CALL_PHASES: readonly McpCallPhase[] = [
+  'requested',
+  'approval_required',
+  'denied',
+  'succeeded',
+  'failed',
+];
+
+/**
+ * The agent MCP call a `tool_call` event records, or `null` when it records something
+ * else.
+ *
+ * A `tool_call` that is an owner's `allow_once` answer carries `action: mcp_allow_once`
+ * and no phase; this returns `null` for it rather than inventing one. A phase that is
+ * not one of the five the daemon writes also returns `null`.
+ */
+export function decodeMcpCall(event: WarshaEvent): McpCallEvent | null {
+  if (event.kind !== 'tool_call') return null;
+  const payload = event.payload;
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return null;
+  const source = payload as Record<string, unknown>;
+  if (source['action'] !== 'mcp_call') return null;
+  const phase = source['phase'];
+  if (typeof phase !== 'string' || !MCP_CALL_PHASES.includes(phase as McpCallPhase)) {
+    return null;
+  }
+  const server = source['server'];
+  const tool = source['tool'];
+  if (typeof server !== 'string' || typeof tool !== 'string') return null;
+  const questionId = source['question_id'];
+  return {
+    phase: phase as McpCallPhase,
+    server,
+    tool,
+    questionId: typeof questionId === 'string' ? questionId : null,
+  };
+}
+
+/**
  * `warsha_core::Artifact` as `runs.artifacts` returns it — snake_case on the
  * wire, one versioned document a pipeline stage produced for the run.
  */
@@ -909,6 +994,24 @@ function wave2Boolean(
   return typeof value === 'boolean' ? value : fallback;
 }
 
+/**
+ * `capabilities.run_controls` of a `health` reply.
+ *
+ * Absent (an older daemon, or a test stub that answers only `status`/`version`) reads as
+ * `false`; a present-but-wrong value is a named decode error, because a run-ending control
+ * must never be rendered on a guess.
+ */
+function healthRunControls(capabilities: unknown): boolean {
+  if (capabilities === undefined || capabilities === null) return false;
+  const record = wave2Object(capabilities, 'health.capabilities');
+  const value = field(record, 'run_controls', 'runControls');
+  if (value === undefined || value === null) return false;
+  if (typeof value !== 'boolean') {
+    throw new Error(`${WAVE2_ERROR}: "health.capabilities.run_controls" is not a boolean`);
+  }
+  return value;
+}
+
 /** A Wave 2 list of strings; a missing or malformed list decodes to the empty list. */
 function wave2StringList(source: Record<string, unknown>, ...names: string[]): string[] {
   const value = field(source, ...names);
@@ -1386,6 +1489,313 @@ export function decodeFileContent(source: unknown): FileContent {
   };
 }
 
+/** One row of the MCP permission table (`warshad::McpPermissionRow`, `crates/warshad/src/lib.rs:581-592`). */
+export interface McpPermissionRow {
+  server: string;
+  tool: string;
+  role: string;
+  permission: McpPermission;
+}
+
+/** What an unseen `server::tool` gets for the agent role (`ToolPermission`, `crates/warsha-pipeline/src/mcp_permission.rs:52-63`). */
+export type McpPermission = 'allow' | 'ask' | 'deny';
+
+/**
+ * One MCP tool call waiting for the owner's answer (`warshad::mcp_approvals::McpApproval`,
+ * `crates/warshad/src/mcp_approvals.rs:48-63`).
+ *
+ * `summary` is the daemon's bounded, redacted rendering of the call's arguments — never the raw
+ * values. It is a *preview*: B3a's O8 limit travels with it, because a value whose key is not a
+ * secret name, whose schema does not mark it secret and whose text is not token-shaped cannot be
+ * recognised by any redactor. A screen renders it as a "redacted preview", never as an exhaustive
+ * account of what the call will send.
+ */
+export interface McpApproval {
+  id: string;
+  runId: string;
+  server: string;
+  tool: string;
+  role: string;
+  summary: string;
+  requestedAt: string;
+}
+
+/** What `mcp.approvals.allow_once` granted (`warshad::McpApprovalAnswer`, `crates/warshad/src/mcp_approvals.rs:67-84`). */
+export interface McpApprovalAnswer {
+  id: string;
+  runId: string;
+  server: string;
+  tool: string;
+  role: string;
+  grantedBy: string;
+  expiresAt: string;
+}
+
+/** The permission table plus the agent role's fail-closed default (`warshad::McpPermissionsReply`, `crates/warshad/src/lib.rs:594-603`). */
+export interface McpPermissionsReply {
+  rows: McpPermissionRow[];
+  agentRole: string;
+  defaultPermission: McpPermission;
+}
+
+function decodeMcpPermission(value: unknown, method: string, name: string): McpPermission {
+  if (value === 'allow' || value === 'ask' || value === 'deny') return value;
+  throw new Error(`${WIRING_RESULT_ERROR} from ${method}: "${name}" is not allow, ask or deny`);
+}
+
+/**
+ * How the daemon reaches an MCP server (`McpTransport`,
+ * `crates/warsha-pipeline/src/mcp_transport.rs:84-97`).
+ *
+ * The daemon's enum is tagged on `kind` with the url inside the variant, so a transport that
+ * names no endpoint cannot be built here either. `stdio` is always dialled, and R-EXT-4 makes
+ * `http` dialled too — over Streamable HTTP — so a connected `http` row has a `null`
+ * `process_id` and may carry tools. `websocket` stays *recorded, not dialled*, which is why
+ * `mcp.list` reports it `disconnected` with no tools (`McpServerConfig::is_wired` remains the
+ * static stdio-only predicate; the manager's own `dials` takes the injected client into account).
+ */
+export type McpTransport =
+  { kind: 'stdio' } | { kind: 'http'; url: string } | { kind: 'websocket'; url: string };
+
+/** What `mcp.connect` takes and `mcp.list` echoes (`McpServerConfig`, `…/mcp_transport.rs:120-136`). */
+export interface McpServerConfig {
+  name: string;
+  transport: McpTransport;
+  /** The program to spawn, for the stdio transport; `null` for a recorded url transport. */
+  command: string | null;
+  args: string[];
+}
+
+/**
+ * Where a server's connection is (`McpStatus`, `crates/warsha-pipeline/src/mcp_transport.rs:220-232`).
+ *
+ * The daemon's enum is externally tagged, so the three unit variants arrive as bare strings
+ * (`"connected" | "connecting" | "disconnected"`) and `Error(String)` arrives as
+ * `{ "error": "<message>" }`. `decodeMcpStatus` normalises both into this one shape; a decoder
+ * that only read strings would turn every failed server into a decode error, and a failed
+ * server's own message is what the screen has to show.
+ */
+export type McpStatus =
+  | { kind: 'connected' }
+  | { kind: 'connecting' }
+  | { kind: 'disconnected' }
+  | { kind: 'error'; message: string };
+
+/** One tool a server said it can run (`warsha_pipeline::mcp::McpTool`, `…/mcp.rs:124-137`). */
+export interface McpToolInfo {
+  name: string;
+  description: string;
+  /** `annotations.read_only`, when the server sent annotations at all. */
+  readOnly?: boolean;
+  /** `annotations.destructive`, when the server sent annotations at all. */
+  destructive?: boolean;
+}
+
+/** One configured MCP server and what it is doing (`McpConnection`, `…/mcp_transport.rs:247-268`). */
+export interface McpConnection {
+  config: McpServerConfig;
+  status: McpStatus;
+  /** The managed process behind a stdio connection. A pid is not a setting, so no screen shows it. */
+  processId: string | null;
+  /**
+   * The server's tools: `tool_definitions` when it sent them, else the bare `tools` names with no
+   * description. Both empty means the handshake never ran — an `http`/`websocket` config, or a
+   * server that failed — never "this server has no tools".
+   */
+  tools: McpToolInfo[];
+}
+
+/** Decode one `McpApproval` (snake_case) into the screen's camelCase row. */
+export function decodeMcpApproval(value: unknown, method: string): McpApproval {
+  const source = wiringObject(value, method);
+  return {
+    id: wiringString(source['id'], method, 'id'),
+    runId: wiringString(source['run_id'], method, 'run_id'),
+    server: wiringString(source['server'], method, 'server'),
+    tool: wiringString(source['tool'], method, 'tool'),
+    role: wiringString(source['role'], method, 'role'),
+    summary: wiringString(source['summary'], method, 'summary'),
+    requestedAt: wiringString(source['requested_at'], method, 'requested_at'),
+  };
+}
+
+/** Decode one `McpApprovalAnswer` (snake_case) into the screen's camelCase row. */
+export function decodeMcpApprovalAnswer(value: unknown, method: string): McpApprovalAnswer {
+  const source = wiringObject(value, method);
+  return {
+    id: wiringString(source['id'], method, 'id'),
+    runId: wiringString(source['run_id'], method, 'run_id'),
+    server: wiringString(source['server'], method, 'server'),
+    tool: wiringString(source['tool'], method, 'tool'),
+    role: wiringString(source['role'], method, 'role'),
+    grantedBy: wiringString(source['granted_by'], method, 'granted_by'),
+    expiresAt: wiringString(source['expires_at'], method, 'expires_at'),
+  };
+}
+
+/** Decode one `McpPermissionRow` (snake_case) into the screen's camelCase row. */
+export function decodeMcpPermissionRow(value: unknown, method: string): McpPermissionRow {
+  const source = wiringObject(value, method);
+  return {
+    server: wiringString(source['server'], method, 'server'),
+    tool: wiringString(source['tool'], method, 'tool'),
+    role: wiringString(source['role'], method, 'role'),
+    permission: decodeMcpPermission(source['permission'], method, 'permission'),
+  };
+}
+
+/** Decode one `McpPermissionsReply` (snake_case) into the screen's camelCase reply. */
+export function decodeMcpPermissionsReply(value: unknown, method: string): McpPermissionsReply {
+  const source = wiringObject(value, method);
+  return {
+    rows: wiringArray(source['rows'], method, 'rows').map((row) =>
+      decodeMcpPermissionRow(row, method)
+    ),
+    agentRole: wiringString(source['agent_role'], method, 'agent_role'),
+    defaultPermission: decodeMcpPermission(source['default_permission'], method, 'default_permission'),
+  };
+}
+
+/** A boolean serde may omit or null (`annotations.read_only`): both read as "not declared". */
+function wiringOptionalBoolean(value: unknown, method: string, name: string): boolean | undefined {
+  if (value === null || value === undefined) return undefined;
+  return wiringBoolean(value, method, name);
+}
+
+/** Decode one `McpTransport` (`{kind: 'stdio'} | {kind: 'http', url} | {kind: 'websocket', url}`). */
+export function decodeMcpTransport(value: unknown, method: string): McpTransport {
+  const source = wiringObject(value, method);
+  const kind = wiringString(source['kind'], method, 'kind');
+  if (kind === 'stdio') return { kind: 'stdio' };
+  if (kind === 'http' || kind === 'websocket') {
+    return { kind, url: wiringString(source['url'], method, 'url') };
+  }
+  // The daemon has three transports; a fourth would be a wire change this decoder must not
+  // swallow as "some url transport".
+  throw new Error(`${WIRING_RESULT_ERROR} from ${method}: "kind" is not stdio, http or websocket`);
+}
+
+/**
+ * Decode one `McpStatus`.
+ *
+ * Externally tagged serde sends a unit variant as a bare string and `Error(String)` as
+ * `{ "error": "<message>" }`; both forms are read here, and anything else — a status the daemon
+ * does not define — is a named refusal rather than a default. Guessing `disconnected` for an
+ * unknown status would paint a broken server as merely idle.
+ */
+export function decodeMcpStatus(value: unknown, method: string): McpStatus {
+  const refusal = new Error(
+    `${WIRING_RESULT_ERROR} from ${method}: "status" is not connected, connecting, disconnected or {error}`
+  );
+  if (typeof value === 'string') {
+    if (value === 'connected' || value === 'connecting' || value === 'disconnected') {
+      return { kind: value };
+    }
+    throw refusal;
+  }
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    const message = (value as Record<string, unknown>)['error'];
+    if (typeof message === 'string') return { kind: 'error', message };
+  }
+  throw refusal;
+}
+
+/** Decode one `McpServerConfig`; a server with no name is refused, because nothing can address it. */
+export function decodeMcpServerConfig(value: unknown, method: string): McpServerConfig {
+  const source = wiringObject(value, method);
+  const name = wiringString(source['name'], method, 'name');
+  if (name.length === 0) {
+    throw new Error(`${WIRING_RESULT_ERROR} from ${method}: "name" is blank`);
+  }
+  return {
+    name,
+    transport: decodeMcpTransport(source['transport'], method),
+    command: wiringNullableString(source['command'], method, 'command'),
+    args: wiringStringList(source['args'], method, 'args'),
+  };
+}
+
+/** Decode one `McpTool` (`tool_definitions`' row) into the screen's tool row. */
+export function decodeMcpToolInfo(value: unknown, method: string): McpToolInfo {
+  const source = wiringObject(value, method);
+  const tool: McpToolInfo = {
+    name: wiringString(source['name'], method, 'name'),
+    description: wiringString(source['description'], method, 'description'),
+  };
+  const annotations = source['annotations'];
+  if (typeof annotations === 'object' && annotations !== null && !Array.isArray(annotations)) {
+    const declared = annotations as Record<string, unknown>;
+    const readOnly = wiringOptionalBoolean(declared['read_only'], method, 'read_only');
+    const destructive = wiringOptionalBoolean(declared['destructive'], method, 'destructive');
+    if (readOnly !== undefined) tool.readOnly = readOnly;
+    if (destructive !== undefined) tool.destructive = destructive;
+  }
+  return tool;
+}
+
+/** Decode one `McpConnection`, taking the tools from `tool_definitions` or the bare names. */
+export function decodeMcpConnection(value: unknown, method: string): McpConnection {
+  const source = wiringObject(value, method);
+  const definitions = wiringDefaultArray(source['tool_definitions'], method, 'tool_definitions');
+  const tools =
+    definitions.length > 0
+      ? definitions.map((row) => decodeMcpToolInfo(row, method))
+      : wiringStringList(source['tools'], method, 'tools').map((name) => ({
+          name,
+          description: '',
+        }));
+  return {
+    config: decodeMcpServerConfig(source['config'], method),
+    status: decodeMcpStatus(source['status'], method),
+    processId: wiringNullableString(source['process_id'], method, 'process_id'),
+    tools,
+  };
+}
+
+/**
+ * The MCP approval and permission surface (R-BRIDGE-B3b): the two B3a answer methods plus the
+ * permission table. `WarshaClient` implements this interface so the Inbox and Settings screens
+ * call a named method instead of assembling `mcp.*` params themselves.
+ */
+export interface WarshaMcpApi {
+  /** `mcp.approvals.list` — every MCP call waiting for the owner's answer, across runs. */
+  mcpApprovalsList(): Promise<McpApproval[]>;
+  /** `mcp.approvals.allow_once` — answer one pending call with a single-use grant. */
+  mcpAllowOnce(id: string): Promise<McpApprovalAnswer>;
+  /** `mcp.permissions.list` — the stored `server::tool::role` rows and the fail-closed default. */
+  mcpPermissionsList(): Promise<McpPermissionsReply>;
+  /** `mcp.permissions.set` — write one row and resolve to the stored row. */
+  mcpPermissionsSet(
+    server: string,
+    tool: string,
+    role: string,
+    permission: McpPermission
+  ): Promise<McpPermissionRow>;
+}
+
+/**
+ * The MCP connection surface (R-EXT-1): the three methods the daemon already serves — `mcp.list`,
+ * `mcp.connect` and `mcp.disconnect`. No new wire method and no changed shape; `WarshaClient`
+ * implements this interface so the Connections screen calls a named method instead of assembling
+ * `mcp.*` params itself, exactly as `WarshaMcpApi` does for the B3b batch.
+ *
+ * There is deliberately no `mcp.send`/`mcp.call` wrapper here: both are the raw seam and the
+ * permission-governed call path (out of scope for this packet).
+ */
+export interface WarshaMcpConnectionsApi {
+  /** `mcp.list` — every configured server with its status, tools and (stdio) process. */
+  mcpList(): Promise<McpConnection[]>;
+  /**
+   * `mcp.connect` — record a server and, for stdio, start it and run the MCP handshake.
+   *
+   * `config` is the daemon's own struct, field for field: the daemon binds the whole
+   * `McpServerConfig` under `config`, so this is the one body it accepts.
+   */
+  mcpConnect(config: McpServerConfig): Promise<void>;
+  /** `mcp.disconnect` — stop a stdio server (and its child) by name, or drop a recorded one. */
+  mcpDisconnect(name: string): Promise<void>;
+}
+
 /**
  * The Wave 2 surface: harnesses, skills, plugins, custom models, integrations and
  * the project file browser. `WarshaClient` implements this interface so a screen
@@ -1426,9 +1836,39 @@ export interface WarshaWave2Api {
 
   getFilesTree(projectId: string, path?: string): Promise<FileEntry[]>;
   readFileContent(projectId: string, path: string): Promise<FileContent>;
+  /**
+   * `gates.evidence` — collect the diff, changed paths and test result for a
+   * Gate C decision.
+   */
+  gateEvidence(runId: RunId, program: string, args: string[]): Promise<GateEvidence>;
 }
 
-export class WarshaClient implements WarshaWiringApi, WarshaWave2Api {
+/**
+ * The daemon's probed capabilities in a `health` reply (`warshad::HealthCapabilities`,
+ * `crates/warshad/src/api.rs`).
+ */
+export interface HealthCapabilities {
+  /**
+   * Whether the daemon can honour the run-ending controls (`gates.changes`,
+   * `gates.reject`, `runs.cancel`): the daemon is up **and** its store carries the K2
+   * run-version column the run-state CAS loop needs. The field is additive on the wire, so
+   * a daemon that predates it — and a payload written before it existed — reads as `false`,
+   * which is why the UI keeps the controls hidden rather than offering a call the daemon
+   * cannot serve (R-UI-2).
+   */
+  runControls: boolean;
+}
+
+/** A decoded `health` reply. */
+export interface HealthReport {
+  status: string;
+  version: string;
+  capabilities: HealthCapabilities;
+}
+
+export class WarshaClient
+  implements WarshaWiringApi, WarshaWave2Api, WarshaMcpApi, WarshaMcpConnectionsApi
+{
   private baseUrl: string;
   private token: string;
   private requestId = 0;
@@ -1479,6 +1919,75 @@ export class WarshaClient implements WarshaWiringApi, WarshaWave2Api {
 
   private redact(message: string): string {
     return redactToken(message, this.token);
+  }
+
+  async gateEvidence(runId: RunId, program: string, args: string[]): Promise<GateEvidence> {
+    const row = await this.rpc<unknown>('gates.evidence', {
+      run_id: runId,
+      program,
+      args,
+    });
+    return decodeGateEvidence(row, 'gates.evidence');
+  }
+
+  // MCP approvals and permissions (R-BRIDGE-B3b).
+  //
+  // B3a registered the four daemon methods (`crates/warshad/src/lib.rs:882-904`); these are the
+  // client's names for them. Every parameter is the daemon's own bound argument name, because
+  // jsonrpsee binds by name and anything else answers `-32602`, and every answer is decoded here
+  // so a snake_case row never reaches a screen as `undefined`.
+  async mcpApprovalsList(): Promise<McpApproval[]> {
+    const rows = await this.rpc<unknown>('mcp.approvals.list');
+    return wiringArray(rows, 'mcp.approvals.list', 'approvals').map((row) =>
+      decodeMcpApproval(row, 'mcp.approvals.list')
+    );
+  }
+
+  async mcpAllowOnce(id: string): Promise<McpApprovalAnswer> {
+    const row = await this.rpc<unknown>('mcp.approvals.allow_once', { id });
+    return decodeMcpApprovalAnswer(row, 'mcp.approvals.allow_once');
+  }
+
+  async mcpPermissionsList(): Promise<McpPermissionsReply> {
+    const row = await this.rpc<unknown>('mcp.permissions.list');
+    return decodeMcpPermissionsReply(row, 'mcp.permissions.list');
+  }
+
+  async mcpPermissionsSet(
+    server: string,
+    tool: string,
+    role: string,
+    permission: McpPermission
+  ): Promise<McpPermissionRow> {
+    const row = await this.rpc<unknown>('mcp.permissions.set', {
+      server,
+      tool,
+      role,
+      permission,
+    });
+    return decodeMcpPermissionRow(row, 'mcp.permissions.set');
+  }
+
+  // MCP connections (R-EXT-1).
+  //
+  // The daemon served these three before this client wrapped them (`crates/warshad/src/api.rs:275`,
+  // `:281`, `:284`): `mcp.connect` binds `config`, `mcp.disconnect` binds `name`, and `mcp.list`
+  // takes nothing. The params objects below are exactly those keys, because jsonrpsee binds by
+  // name and anything else answers `-32602`. Nothing here probes a server: the daemon has no probe
+  // method, so a refresh is `mcp.list` again and the screen's label says "refresh", never "tested".
+  async mcpList(): Promise<McpConnection[]> {
+    const rows = await this.rpc<unknown>('mcp.list');
+    return wiringArray(rows, 'mcp.list', 'servers').map((row) =>
+      decodeMcpConnection(row, 'mcp.list')
+    );
+  }
+
+  async mcpConnect(config: McpServerConfig): Promise<void> {
+    await this.rpc<unknown>('mcp.connect', { config });
+  }
+
+  async mcpDisconnect(name: string): Promise<void> {
+    await this.rpc<unknown>('mcp.disconnect', { name });
   }
 
   // Projects
@@ -1811,20 +2320,29 @@ export class WarshaClient implements WarshaWiringApi, WarshaWave2Api {
   // from a screen: ask a turn, approve the mode that edits, and go back to the mode that
   // does not. There is no approver parameter on any of them, by the same rule the gates
   // follow: the daemon records the device its session authenticated as.
-  async agentTurn(input: string): Promise<AgentTurn> {
-    return this.rpc<AgentTurn>('agent.turn', { input });
+  async agentTurn(runId: string, input: string): Promise<AgentTurn> {
+    return this.rpc<AgentTurn>('agent.turn_run', { run_id: runId, input });
   }
 
-  async approveAgentMode(): Promise<AgentModeTransition> {
+  async approveAgentMode(runId?: string): Promise<AgentModeTransition> {
+    if (runId) {
+      return this.rpc<AgentModeTransition>('agent.approve_mode', { run_id: runId });
+    }
     return this.rpc<AgentModeTransition>('agent.approve_mode');
   }
 
-  async returnAgentToPlanMode(): Promise<AgentModeTransition> {
+  async returnAgentToPlanMode(runId?: string): Promise<AgentModeTransition> {
+    if (runId) {
+      return this.rpc<AgentModeTransition>('agent.plan_mode', { run_id: runId });
+    }
     return this.rpc<AgentModeTransition>('agent.plan_mode');
   }
 
   /** The mode, the approval history and the todos — including after a restart. */
-  async agentState(): Promise<AgentState> {
+  async agentState(runId?: string): Promise<AgentState> {
+    if (runId) {
+      return this.rpc<AgentState>('agent.state', { run_id: runId });
+    }
     return this.rpc<AgentState>('agent.state');
   }
 
@@ -1873,9 +2391,21 @@ export class WarshaClient implements WarshaWiringApi, WarshaWave2Api {
     await this.rpc<unknown>('devices.revoke', { deviceId });
   }
 
-  // Health
-  async health(): Promise<{ status: string; version: string }> {
-    return this.rpc('health');
+  /**
+   * `health` — the daemon's probed capabilities, decoded.
+   *
+   * `capabilities.run_controls` is the daemon's own answer to "can you honour
+   * `gates.changes` / `gates.reject` / `runs.cancel`", so it is read here once and the
+   * screens ask `canEndRuns` rather than probing the wire themselves (R-UI-2 D1/D3).
+   */
+  async health(): Promise<HealthReport> {
+    const result = await this.rpc<unknown>('health');
+    const record = wave2Object(result, 'health');
+    return {
+      status: wave2String(record, 'status'),
+      version: wave2String(record, 'version'),
+      capabilities: { runControls: healthRunControls(field(record, 'capabilities')) },
+    };
   }
 
   // Wiring (PLAN.md M20): backend kit export, continue-on-server handoff, and the
@@ -2212,6 +2742,31 @@ export interface Routine {
   schedule: RoutineSchedule;
   state: RoutineState;
   lastRunUnix: number | null;
+}
+
+export interface TestRun {
+  program: string;
+  args: string[];
+  success: boolean;
+  exit_code: number | null;
+  stdout: string;
+  stderr: string;
+  duration_ms: number;
+  truncated: boolean;
+}
+
+export interface PreviewEvidence {
+  project_id: string;
+  process_id: string;
+  url: string | null;
+  status: ProcessStatus;
+}
+
+export interface GateEvidence {
+  diff: string;
+  files_changed: string[];
+  tests: TestRun;
+  preview: PreviewEvidence | null;
 }
 
 /** The open-source backend a project points at (`warsha_pipeline::BackendKind`). */
@@ -2574,6 +3129,89 @@ function decodeRoutineState(value: unknown, method: string): RoutineState {
     if (typeof failed === 'string') return { failed };
   }
   throw new Error(`${WIRING_RESULT_ERROR} from ${method}: "state" is not a known routine state`);
+}
+
+/**
+ * One key of a `GateEvidence` row, which must be present even when its value is `null`.
+ *
+ * A Rust `Option<T>` serialises as an explicit `null`, never as an omitted key, so an
+ * absent one is a wire change rather than "no value" — and decoding it as the empty
+ * form would show the reviewer a blank where the daemon said something.
+ */
+function evidenceField(
+  source: Record<string, unknown>,
+  name: string,
+  method: string
+): unknown {
+  if (!Object.prototype.hasOwnProperty.call(source, name)) {
+    throw new Error(`${WIRING_RESULT_ERROR} from ${method}: "${name}" is missing`);
+  }
+  return source[name];
+}
+
+/** A nested `GateEvidence` object (`tests` or a present `preview`), refused by its field name. */
+function evidenceObject(
+  value: unknown,
+  field: string,
+  method: string
+): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`${WIRING_RESULT_ERROR} from ${method}: "${field}" is not an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function decodeTestRun(value: unknown, method: string): TestRun {
+  const source = evidenceObject(value, 'tests', method);
+  return {
+    program: wiringString(evidenceField(source, 'program', method), method, 'program'),
+    args: wiringStringList(evidenceField(source, 'args', method), method, 'args'),
+    success: wiringBoolean(evidenceField(source, 'success', method), method, 'success'),
+    exit_code: wiringNullableNumber(evidenceField(source, 'exit_code', method), method, 'exit_code'),
+    stdout: wiringString(evidenceField(source, 'stdout', method), method, 'stdout'),
+    stderr: wiringString(evidenceField(source, 'stderr', method), method, 'stderr'),
+    duration_ms: wiringNumber(evidenceField(source, 'duration_ms', method), method, 'duration_ms'),
+    truncated: wiringBoolean(evidenceField(source, 'truncated', method), method, 'truncated'),
+  };
+}
+
+function decodePreviewEvidence(value: unknown, method: string): PreviewEvidence {
+  const source = evidenceObject(value, 'preview', method);
+  return {
+    project_id: wiringString(evidenceField(source, 'project_id', method), method, 'project_id'),
+    process_id: wiringString(evidenceField(source, 'process_id', method), method, 'process_id'),
+    url: wiringNullableString(evidenceField(source, 'url', method), method, 'url'),
+    // A present preview's status is the same `ProcessStatus` `preview.status` reports, so
+    // it is read by the one decoder: a status neither knows is refused with the same words.
+    status: decodeProcessStatus(evidenceField(source, 'status', method), method),
+  };
+}
+
+/**
+ * `warsha_pipeline::GateEvidence` (`crates/warsha-pipeline/src/gate_evidence.rs:108`),
+ * decoded field by field — the shape `gates.evidence` answers.
+ *
+ * `tests.truncated` and the in-band `TRUNCATION_MARKER` are carried exactly as the
+ * daemon reported them: nothing here re-derives either from a string length, so the
+ * reviewer sees truncation only where there was truncation. `preview` is the run's
+ * *project* preview (the preview manager is keyed by project), and `null` is the
+ * daemon saying no server is up — never something this client fills in.
+ */
+export function decodeGateEvidence(value: unknown, method: string): GateEvidence {
+  const source = wiringObject(value, method);
+  const preview = evidenceField(source, 'preview', method);
+  return {
+    diff: wiringString(evidenceField(source, 'diff', method), method, 'diff'),
+    files_changed: wiringStringList(
+      evidenceField(source, 'files_changed', method),
+      method,
+      'files_changed'
+    ),
+    tests: decodeTestRun(evidenceField(source, 'tests', method), method),
+    // Collection leaves the preview unset; the daemon's `Option<PreviewEvidence>` is an
+    // explicit `null` when no server is up, and anything else must decode as a preview.
+    preview: preview === null ? null : decodePreviewEvidence(preview, method),
+  };
 }
 
 /** Decode one `warsha_pipeline::Routine` (snake_case) into the screen's camelCase row. */

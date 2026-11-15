@@ -22,3 +22,6 @@ ulid = { workspace = true }
 mockall = { workspace = true }
 tempfile = { workspace = true }
 pretty_assertions = "1.4"
+warsha-store = { path = "../warsha-store" }
+warsha-providers = { path = "../warsha-providers" }
+chrono = { workspace = true }
