@@ -115,14 +115,14 @@ jobs:
           strip target/${{ matrix.target }}/release/warshad${{ matrix.binary_suffix }}
 
       - name: Upload CLI binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: warsha-${{ matrix.os }}
           path: target/${{ matrix.target }}/release/warsha${{ matrix.binary_suffix }}
           retention-days: 1
 
       - name: Upload daemon binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: warshad-${{ matrix.os }}
           path: target/${{ matrix.target }}/release/warshad${{ matrix.binary_suffix }}
@@ -212,7 +212,7 @@ jobs:
           pnpm tauri build --target ${{ matrix.tauri_target }}
 
       - name: Upload desktop artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: warsha-desktop-${{ matrix.os }}
           path: apps/desktop/src-tauri/target/${{ matrix.tauri_target }}/release/bundle/**/*
@@ -254,7 +254,7 @@ jobs:
           cyclonedx-bom -o artifacts/sbom.xml || echo "SBOM generation skipped"
 
       - name: Upload checksums and SBOM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-artifacts
           path: |
@@ -410,7 +410,7 @@ jobs:
           EOF
 
       - name: Upload manifests
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: package-manifests
           path: manifests/
@@ -448,7 +448,7 @@ jobs:
           mdbook build
 
       - name: Upload docs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: docs
           path: docs/book
