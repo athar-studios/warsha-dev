@@ -1,10 +1,10 @@
 // apps/desktop/src/v3/pages/frame/QuotaGaugeButton.tsx — A3 status-bar quota gauge
+import React from 'react';
 import { useT } from '@warsha/i18n/v3';
 import { Gauge } from '@warsha/ui/v3';
-import React from 'react';
 
-import { useNavigate } from '../../router';
 import { useQuotaGauge } from '../../data';
+import { useNavigate } from '../../router';
 
 /**
  * The status-bar quota gauge (A3): green / amber / red from the tightest quota
