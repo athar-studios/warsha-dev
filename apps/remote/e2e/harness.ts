@@ -42,7 +42,6 @@ export { rpcCalls, RPC_METHODS };
 // packet's allowed files, so the harness cannot make the injection policy-shaped. It turns CSP off
 // for its own contexts instead, and only those: the PWA's screens, layout, state and keyboard flows
 // are still measured, but "the page refuses an inline script" is no longer a property e2e proves.
-test.use({ bypassCSP: true });
 
 /**
  * The daemon the paired cases point the phone at. Nothing listens here; the stub answers.

@@ -390,8 +390,9 @@ impl Store {
     pub async fn create_run(&self, run: &Run) -> Result<()> {
         sqlx::query(
             "INSERT INTO runs (id, project_id, current_stage, gate_states, artifacts, \
-             created_at, updated_at, status, budget_cents, spent_cents, version) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+             created_at, updated_at, status, budget_cents, spent_cents, version, \
+             worktree_path, worktree_branch) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
         )
         .bind(run.id.0.to_string())
         .bind(run.project_id.0.as_bytes().to_vec())
@@ -403,6 +404,8 @@ impl Store {
         .bind(serde_json::to_string(&run.status)?)
         .bind(run.budget_cents.map(|v| v as i64))
         .bind(run.spent_cents as i64)
+        .bind(&run.worktree_path)
+        .bind(&run.worktree_branch)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -418,7 +421,8 @@ impl Store {
     pub async fn get_run_versioned(&self, id: RunId) -> Result<(Run, u64)> {
         let row = sqlx::query(
             "SELECT id, project_id, current_stage, gate_states, artifacts, created_at, \
-             updated_at, status, budget_cents, spent_cents, version FROM runs WHERE id = ?",
+             updated_at, status, budget_cents, spent_cents, version, worktree_path, \
+             worktree_branch FROM runs WHERE id = ?",
         )
         .bind(id.0.to_string())
         .fetch_optional(&self.pool)
@@ -443,7 +447,8 @@ impl Store {
     pub async fn update_run(&self, run: &Run) -> Result<()> {
         let outcome = sqlx::query(
             "UPDATE runs SET current_stage = ?, gate_states = ?, artifacts = ?, updated_at = ?, \
-             status = ?, budget_cents = ?, spent_cents = ?, version = version + 1 WHERE id = ?",
+             status = ?, budget_cents = ?, spent_cents = ?, version = version + 1, \
+             worktree_path = ?, worktree_branch = ? WHERE id = ?",
         )
         .bind(serde_json::to_string(&run.current_stage)?)
         .bind(serde_json::to_string(&run.gate_states)?)
@@ -452,6 +457,8 @@ impl Store {
         .bind(serde_json::to_string(&run.status)?)
         .bind(run.budget_cents.map(|v| v as i64))
         .bind(run.spent_cents as i64)
+        .bind(&run.worktree_path)
+        .bind(&run.worktree_branch)
         .bind(run.id.0.to_string())
         .execute(&self.pool)
         .await?;
@@ -469,7 +476,8 @@ impl Store {
     pub async fn update_run_cas(&self, run: &Run, expected_version: u64) -> Result<u64> {
         let outcome = sqlx::query(
             "UPDATE runs SET current_stage = ?, gate_states = ?, artifacts = ?, updated_at = ?, \
-             status = ?, budget_cents = ?, spent_cents = ?, version = version + 1 \
+             status = ?, budget_cents = ?, spent_cents = ?, version = version + 1, \
+             worktree_path = ?, worktree_branch = ? \
              WHERE id = ? AND version = ?",
         )
         .bind(serde_json::to_string(&run.current_stage)?)
@@ -479,6 +487,8 @@ impl Store {
         .bind(serde_json::to_string(&run.status)?)
         .bind(run.budget_cents.map(|v| v as i64))
         .bind(run.spent_cents as i64)
+        .bind(&run.worktree_path)
+        .bind(&run.worktree_branch)
         .bind(run.id.0.to_string())
         .bind(expected_version as i64)
         .execute(&self.pool)
@@ -500,7 +510,8 @@ impl Store {
     pub async fn list_runs(&self, project_id: ProjectId) -> Result<Vec<Run>> {
         let rows = sqlx::query(
             "SELECT id, project_id, current_stage, gate_states, artifacts, created_at, \
-             updated_at, status, budget_cents, spent_cents, version FROM runs \
+             updated_at, status, budget_cents, spent_cents, version, worktree_path, \
+             worktree_branch FROM runs \
              WHERE project_id = ? ORDER BY created_at DESC",
         )
         .bind(project_id.0.as_bytes().to_vec())
@@ -513,7 +524,8 @@ impl Store {
     pub async fn list_all_runs(&self) -> Result<Vec<Run>> {
         let rows = sqlx::query(
             "SELECT id, project_id, current_stage, gate_states, artifacts, created_at, \
-             updated_at, status, budget_cents, spent_cents, version FROM runs \
+             updated_at, status, budget_cents, spent_cents, version, worktree_path, \
+             worktree_branch FROM runs \
              ORDER BY created_at DESC",
         )
         .fetch_all(&self.pool)
@@ -527,7 +539,8 @@ impl Store {
     pub async fn recover_interrupted_runs(&self) -> Result<Vec<Run>> {
         let rows = sqlx::query(
             "SELECT id, project_id, current_stage, gate_states, artifacts, created_at, \
-             updated_at, status, budget_cents, spent_cents, version FROM runs \
+             updated_at, status, budget_cents, spent_cents, version, worktree_path, \
+             worktree_branch FROM runs \
              WHERE status = '\"running\"'",
         )
         .fetch_all(&self.pool)
@@ -966,6 +979,8 @@ fn run_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Run> {
         budget_cents: column_opt_int(row, "budget_cents")?.map(|v| v.unsigned_abs()),
         spent_cents: column_opt_int(row, "spent_cents")?
             .map_or(0, |v| u64::from_ne_bytes(i64::to_ne_bytes(v))),
+        worktree_path: column_opt_text(row, "worktree_path")?,
+        worktree_branch: column_opt_text(row, "worktree_branch")?,
     })
 }
 

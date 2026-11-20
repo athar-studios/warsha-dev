@@ -81,6 +81,11 @@ RUN_TRIGGER
 graphify-out/
 .graphify*
 
+# Agent caches (untracked, large; keep git status usable)
+.agents/cargo-home/
+.agents/pnpm-home/
+.agents/xdg-cache/
+
 # Android signing keys (SECURITY.md)
 *.jks
 *.keystore

@@ -43,7 +43,7 @@ pub struct CliBackend {
 }
 
 /// The wall-clock bound a coding CLI gets before the backend gives up.
-pub const CODING_CLI_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+pub const DEFAULT_CODING_CLI_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 impl CliBackend {
     pub fn new(name: &str, command: &str, args: Vec<String>) -> Self {
@@ -116,13 +116,17 @@ impl CodingBackend for CliBackend {
             cmd.env(k, v);
         }
 
-        let output = tokio::time::timeout(CODING_CLI_TIMEOUT, cmd.output())
+        let timeout = task
+            .context
+            .get("coding_cli_timeout_seconds")
+            .and_then(|s| s.parse().ok())
+            .map(std::time::Duration::from_secs)
+            .unwrap_or(DEFAULT_CODING_CLI_TIMEOUT);
+
+        let output = tokio::time::timeout(timeout, cmd.output())
             .await
             .map_err(|_| {
-                BackendError::Timeout(format!(
-                    "{} did not finish within {CODING_CLI_TIMEOUT:?}",
-                    self.name
-                ))
+                BackendError::Timeout(format!("{} did not finish within {timeout:?}", self.name))
             })?
             .map_err(|e| BackendError::ExecutionFailed(e.to_string()))?;
 

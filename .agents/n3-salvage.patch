@@ -1,0 +1,324 @@
+diff --git a/crates/warsha-backends/src/lib.rs b/crates/warsha-backends/src/lib.rs
+index cb18c69..9f67b5f 100644
+--- a/crates/warsha-backends/src/lib.rs
++++ b/crates/warsha-backends/src/lib.rs
+@@ -43,7 +43,7 @@ pub struct CliBackend {
+ }
+ 
+ /// The wall-clock bound a coding CLI gets before the backend gives up.
+-pub const CODING_CLI_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
++pub const DEFAULT_CODING_CLI_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+ 
+ impl CliBackend {
+     pub fn new(name: &str, command: &str, args: Vec<String>) -> Self {
+@@ -116,11 +116,18 @@ impl CodingBackend for CliBackend {
+             cmd.env(k, v);
+         }
+ 
+-        let output = tokio::time::timeout(CODING_CLI_TIMEOUT, cmd.output())
++        let timeout = task
++            .context
++            .get("coding_cli_timeout_seconds")
++            .and_then(|s| s.parse().ok())
++            .map(std::time::Duration::from_secs)
++            .unwrap_or(DEFAULT_CODING_CLI_TIMEOUT);
++
++        let output = tokio::time::timeout(timeout, cmd.output())
+             .await
+             .map_err(|_| {
+                 BackendError::Timeout(format!(
+-                    "{} did not finish within {CODING_CLI_TIMEOUT:?}",
++                    "{} did not finish within {timeout:?}",
+                     self.name
+                 ))
+             })?
+diff --git a/crates/warsha-core/src/harness.rs b/crates/warsha-core/src/harness.rs
+index 86edcc9..a945629 100644
+--- a/crates/warsha-core/src/harness.rs
++++ b/crates/warsha-core/src/harness.rs
+@@ -60,6 +60,7 @@ pub struct HarnessStage {
+ pub struct HarnessRules {
+     /// Upper bound on build-test-repair iterations before the run stops.
+     pub max_repair_iterations: u32,
++    pub coding_cli_timeout_seconds: Option<u64>,
+     /// Hard spending limit for the run, in cents; `None` means uncapped.
+     pub budget_cap_cents: Option<u64>,
+     /// Whether a stage may fan out to parallel subagents.
+diff --git a/crates/warsha-core/src/lib.rs b/crates/warsha-core/src/lib.rs
+index 5759512..6421cc0 100644
+--- a/crates/warsha-core/src/lib.rs
++++ b/crates/warsha-core/src/lib.rs
+@@ -231,6 +231,8 @@ pub struct Run {
+     pub status: RunStatus,
+     pub budget_cents: Option<u64>,
+     pub spent_cents: u64,
++    pub worktree_path: Option<String>,
++    pub worktree_branch: Option<String>,
+ }
+ 
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+diff --git a/crates/warsha-pipeline/src/coding_backend.rs b/crates/warsha-pipeline/src/coding_backend.rs
+index 4719627..8784215 100644
+--- a/crates/warsha-pipeline/src/coding_backend.rs
++++ b/crates/warsha-pipeline/src/coding_backend.rs
+@@ -32,6 +32,7 @@ pub struct CodingTask {
+     pub title: String,
+     pub description: String,
+     pub repo_path: PathBuf,
++    pub worktree_path: Option<PathBuf>,
+     pub branch_name: String,
+     pub base_branch: String,
+     pub files: Vec<TaskFile>,
+diff --git a/crates/warsha-pipeline/src/lib.rs b/crates/warsha-pipeline/src/lib.rs
+index fdabc41..f81f957 100644
+--- a/crates/warsha-pipeline/src/lib.rs
++++ b/crates/warsha-pipeline/src/lib.rs
+@@ -53,7 +53,8 @@ pub use crate::mcp_permission::{
+     AskEverything, McpPermissionSource, McpPermissionStore, StaticPermissions, MCP_AGENT_ROLE,
+ };
+ pub use crate::worktree::{
+-    create_run_worktree, remove_run_worktree, worktree_path, RunWorktree, WorktreeError,
++    commit_run_worktree, create_run_worktree, remove_run_worktree, worktree_path, RunWorktree,
++    WorktreeError,
+ };
+ /// The Streamable HTTP transport's client seam and its pure SSE parser (R-EXT-4):
+ /// the daemon implements [`McpHttpClient`] and injects it, and the pipeline keeps
+@@ -871,6 +872,14 @@ impl<S: SettingsProvider> PipelineEngine<S> {
+             backend,
+         } = completion;
+ 
++        if let Some(worktree_path) = run.worktree_path.as_ref() {
++            let _ = commit_run_worktree(
++                &PathBuf::from(worktree_path),
++                &format!("chore(run-{}): CLI code stage", run.id.0),
++            )
++            .await;
++        }
++
+         // Re-check cancellation and commit under state_lock via CAS before writing any artifact.
+         let (artifact_name, artifact_content, budget_exceeded_info, budget_warn_info) = {
+             let _state_guard = ctrl.state_lock.lock().await;
+@@ -1037,12 +1046,15 @@ impl<S: SettingsProvider> PipelineEngine<S> {
+                 ))
+             })?;
+ 
++        let timeout = self.get_coding_cli_timeout(run).await;
++
+         let task = CodingTask {
+             id: Ulid::new(),
+             run_id: run.id,
+             title: format!("{} — Code", project.name),
+             description: prompt.to_string(),
+             repo_path: PathBuf::from(repo_path),
++            worktree_path: run.worktree_path.as_ref().map(PathBuf::from),
+             branch_name: format!("warsha/run-{}", run.id.0),
+             base_branch: "HEAD".to_string(),
+             files: Vec::new(),
+@@ -1051,9 +1063,21 @@ impl<S: SettingsProvider> PipelineEngine<S> {
+                 ("language".to_string(), language.to_string()),
+                 ("run".to_string(), run.id.0.to_string()),
+                 ("stage".to_string(), stage_to_string(stage).to_string()),
++                ("coding_cli_timeout_seconds".to_string(), timeout.to_string()),
+             ]),
+         };
+-        let sandbox = Sandbox::new(PathBuf::from(repo_path));
++        let sandbox_path = run
++            .worktree_path
++            .as_ref()
++            .map(PathBuf::from)
++            .ok_or_else(|| {
++                PipelineError::Other(format!(
++                    "run `{}` has no assigned worktree",
++                    run.id.0
++                ))
++            })?;
++
++        let sandbox = Sandbox::new(sandbox_path);
+ 
+         let result = backend.execute(task, &sandbox).await.map_err(|error| {
+             PipelineError::Other(format!(
+@@ -1075,6 +1099,24 @@ impl<S: SettingsProvider> PipelineEngine<S> {
+         }))
+     }
+ 
++    async fn get_coding_cli_timeout(&self, run: &Run) -> u64 {
++        let project = self.store.get_project(run.project_id).await.ok();
++        let harness = project
++            .as_ref()
++            .and_then(|p| p.harness_id.as_ref())
++            .and_then(|id| self.settings.get_harness(id).await.ok().flatten());
++
++        harness
++            .and_then(|h| {
++                serde_json::from_str::<HarnessDefinition>(&h.data_json)
++                    .ok()
++                    .map(|d| d.rules)
++            })
++            .and_then(|r| r.coding_cli_timeout_seconds)
++            .map(|t| t.min(4 * 3600))
++            .unwrap_or(30 * 60)
++    }
++
+     /// Take one stage/follow-up request to the provider that should answer it.
+     ///
+     /// 1. The role IS routed (`providers.route(role).is_some()`): the request goes
+diff --git a/crates/warsha-pipeline/src/worktree.rs b/crates/warsha-pipeline/src/worktree.rs
+index 6631917..395e043 100644
+--- a/crates/warsha-pipeline/src/worktree.rs
++++ b/crates/warsha-pipeline/src/worktree.rs
+@@ -126,6 +126,43 @@ pub async fn remove_run_worktree(repo: &Path, worktree: &RunWorktree) -> Result<
+     Ok(())
+ }
+ 
++pub async fn commit_run_worktree(worktree_path: &Path, message: &str) -> Result<()> {
++    let status_output = tokio::process::Command::new("git")
++        .arg("-C")
++        .arg(worktree_path)
++        .args(["status", "--porcelain"])
++        .output()
++        .await
++        .map_err(|e| WorktreeError::Git(e.to_string()))?;
++
++    if String::from_utf8_lossy(&status_output.stdout).trim().is_empty() {
++        return Ok(());
++    }
++
++    tokio::process::Command::new("git")
++        .arg("-C")
++        .arg(worktree_path)
++        .args(["add", "."])
++        .status()
++        .await
++        .map_err(|e| WorktreeError::Git(e.to_string()))?;
++
++    let output = tokio::process::Command::new("git")
++        .arg("-C")
++        .arg(worktree_path)
++        .args(["commit", "-m", message])
++        .output()
++        .await
++        .map_err(|e| WorktreeError::Git(e.to_string()))?;
++
++    if !output.status.success() {
++        return Err(WorktreeError::Git(
++            String::from_utf8_lossy(&output.stderr).trim().to_string(),
++        ));
++    }
++    Ok(())
++}
++
+ /// Validate that `repo` is a usable git work tree.
+ ///
+ /// This is the exact probe [`create_run_worktree`] runs before it asks git for a
+diff --git a/crates/warsha-store/src/lib.rs b/crates/warsha-store/src/lib.rs
+index 8b52bbf..df66f4b 100644
+--- a/crates/warsha-store/src/lib.rs
++++ b/crates/warsha-store/src/lib.rs
+@@ -390,8 +390,9 @@ impl Store {
+     pub async fn create_run(&self, run: &Run) -> Result<()> {
+         sqlx::query(
+             "INSERT INTO runs (id, project_id, current_stage, gate_states, artifacts, \
+-             created_at, updated_at, status, budget_cents, spent_cents, version) \
+-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
++             created_at, updated_at, status, budget_cents, spent_cents, version, \
++             worktree_path, worktree_branch) \
++             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+         )
+         .bind(run.id.0.to_string())
+         .bind(run.project_id.0.as_bytes().to_vec())
+@@ -403,6 +404,8 @@ impl Store {
+         .bind(serde_json::to_string(&run.status)?)
+         .bind(run.budget_cents.map(|v| v as i64))
+         .bind(run.spent_cents as i64)
++        .bind(&run.worktree_path)
++        .bind(&run.worktree_branch)
+         .execute(&self.pool)
+         .await?;
+         Ok(())
+@@ -418,7 +421,8 @@ impl Store {
+     pub async fn get_run_versioned(&self, id: RunId) -> Result<(Run, u64)> {
+         let row = sqlx::query(
+             "SELECT id, project_id, current_stage, gate_states, artifacts, created_at, \
+-             updated_at, status, budget_cents, spent_cents, version FROM runs WHERE id = ?",
++             updated_at, status, budget_cents, spent_cents, version, worktree_path, \
++             worktree_branch FROM runs WHERE id = ?",
+         )
+         .bind(id.0.to_string())
+         .fetch_optional(&self.pool)
+@@ -443,7 +447,8 @@ impl Store {
+     pub async fn update_run(&self, run: &Run) -> Result<()> {
+         let outcome = sqlx::query(
+             "UPDATE runs SET current_stage = ?, gate_states = ?, artifacts = ?, updated_at = ?, \
+-             status = ?, budget_cents = ?, spent_cents = ?, version = version + 1 WHERE id = ?",
++             status = ?, budget_cents = ?, spent_cents = ?, version = version + 1, \
++             worktree_path = ?, worktree_branch = ? WHERE id = ?",
+         )
+         .bind(serde_json::to_string(&run.current_stage)?)
+         .bind(serde_json::to_string(&run.gate_states)?)
+@@ -452,6 +457,8 @@ impl Store {
+         .bind(serde_json::to_string(&run.status)?)
+         .bind(run.budget_cents.map(|v| v as i64))
+         .bind(run.spent_cents as i64)
++        .bind(&run.worktree_path)
++        .bind(&run.worktree_branch)
+         .bind(run.id.0.to_string())
+         .execute(&self.pool)
+         .await?;
+@@ -469,7 +476,8 @@ impl Store {
+     pub async fn update_run_cas(&self, run: &Run, expected_version: u64) -> Result<u64> {
+         let outcome = sqlx::query(
+             "UPDATE runs SET current_stage = ?, gate_states = ?, artifacts = ?, updated_at = ?, \
+-             status = ?, budget_cents = ?, spent_cents = ?, version = version + 1 \
++             status = ?, budget_cents = ?, spent_cents = ?, version = version + 1, \
++             worktree_path = ?, worktree_branch = ? \
+              WHERE id = ? AND version = ?",
+         )
+         .bind(serde_json::to_string(&run.current_stage)?)
+@@ -479,6 +487,8 @@ impl Store {
+         .bind(serde_json::to_string(&run.status)?)
+         .bind(run.budget_cents.map(|v| v as i64))
+         .bind(run.spent_cents as i64)
++        .bind(&run.worktree_path)
++        .bind(&run.worktree_branch)
+         .bind(run.id.0.to_string())
+         .bind(expected_version as i64)
+         .execute(&self.pool)
+@@ -500,7 +510,8 @@ impl Store {
+     pub async fn list_runs(&self, project_id: ProjectId) -> Result<Vec<Run>> {
+         let rows = sqlx::query(
+             "SELECT id, project_id, current_stage, gate_states, artifacts, created_at, \
+-             updated_at, status, budget_cents, spent_cents, version FROM runs \
++             updated_at, status, budget_cents, spent_cents, version, worktree_path, \
++             worktree_branch FROM runs \
+              WHERE project_id = ? ORDER BY created_at DESC",
+         )
+         .bind(project_id.0.as_bytes().to_vec())
+@@ -513,7 +524,8 @@ impl Store {
+     pub async fn list_all_runs(&self) -> Result<Vec<Run>> {
+         let rows = sqlx::query(
+             "SELECT id, project_id, current_stage, gate_states, artifacts, created_at, \
+-             updated_at, status, budget_cents, spent_cents, version FROM runs \
++             updated_at, status, budget_cents, spent_cents, version, worktree_path, \
++             worktree_branch FROM runs \
+              ORDER BY created_at DESC",
+         )
+         .fetch_all(&self.pool)
+@@ -527,7 +539,8 @@ impl Store {
+     pub async fn recover_interrupted_runs(&self) -> Result<Vec<Run>> {
+         let rows = sqlx::query(
+             "SELECT id, project_id, current_stage, gate_states, artifacts, created_at, \
+-             updated_at, status, budget_cents, spent_cents, version FROM runs \
++             updated_at, status, budget_cents, spent_cents, version, worktree_path, \
++             worktree_branch FROM runs \
+              WHERE status = '\"running\"'",
+         )
+         .fetch_all(&self.pool)
+@@ -966,6 +979,8 @@ fn run_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Run> {
+         budget_cents: column_opt_int(row, "budget_cents")?.map(|v| v.unsigned_abs()),
+         spent_cents: column_opt_int(row, "spent_cents")?
+             .map_or(0, |v| u64::from_ne_bytes(i64::to_ne_bytes(v))),
++        worktree_path: column_opt_text(row, "worktree_path")?,
++        worktree_branch: column_opt_text(row, "worktree_branch")?,
+     })
+ }
+ 

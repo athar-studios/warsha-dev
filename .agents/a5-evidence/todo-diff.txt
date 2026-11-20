@@ -1,0 +1,11 @@
+--- a/apps/desktop/src/screens/ArtifactViewer.tsx
++++ b/apps/desktop/src/screens/ArtifactViewer.tsx
+- * TODO(M20 wiring): the daemon has no `runs.artifacts` RPC yet, so this fixture is the seam it will fill.
++ * TODO(M20 wiring): this legacy v2 screen still reads a fixture; the daemon now has a `runs.artifacts` RPC
++ * (crates/warshad/src/api.rs), and the v3 Bench/Project pages supersede this screen.
+--- a/apps/desktop/src/screens/RunView.tsx
++++ b/apps/desktop/src/screens/RunView.tsx
+-    // TODO(M20 wiring): call the daemon's dev-server start RPC once it exists.
++    // TODO(M20 wiring): legacy v2 screen; the daemon's `preview.start` RPC exists (crates/warshad/src/api.rs) and v3 supersedes this screen.
+-    // TODO(M20 wiring): call the daemon's dev-server stop RPC once it exists.
++    // TODO(M20 wiring): legacy v2 screen; the daemon's `preview.stop` RPC exists (crates/warshad/src/api.rs) and v3 supersedes this screen.

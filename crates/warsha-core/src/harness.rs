@@ -60,6 +60,7 @@ pub struct HarnessStage {
 pub struct HarnessRules {
     /// Upper bound on build-test-repair iterations before the run stops.
     pub max_repair_iterations: u32,
+    pub coding_cli_timeout_seconds: Option<u64>,
     /// Hard spending limit for the run, in cents; `None` means uncapped.
     pub budget_cap_cents: Option<u64>,
     /// Whether a stage may fan out to parallel subagents.

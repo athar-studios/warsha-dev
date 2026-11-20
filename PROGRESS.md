@@ -79,6 +79,12 @@
 - **PM gate runs**: e1_budget 6/6; pipeline 465/0/7 (baseline 462 + 3); warshad 262/0/3 (baseline 261 + 1); clippy 0; fmt 0.
 - **Next**: P-E1b (discovery pinning) → P-E3 (projects.attach) → P-E2 (retire the legacy loop) → P-E4 (CLI into the Code stage) → P-E6 (skills wiring) → P-E5 (preview) → P-E8 (pilot); P-H1/P-E7 on separate tracks.
 
+## Run 2026-11-19 — Z1 Merge: COMPLETE (Merge commit 3c8b3a1)
+
+- **Merge commit**: `3c8b3a1aceddec7c99f30d46d94fb27de07705a0` (r-next/integration merged with r-next/z1-final).
+- **Validation**: Verified with `check-versions.mjs`, `check-arch.mjs`, `check-engineering-policy.mjs` (all green). Artifacts `docs/zadloop/R-NEXT-FINAL-REPORT.md` and `bridge-io/audit/z1/` present.
+- **Note**: Performed in worktree `/home/moe/Downloads/Warsha/.agents/worktrees/r-next-integration`. The main branch `repair/dev-csp-f474776` became dirty due to an initial mistaken merge attempt; it remains in its current state as requested.
+
 ## Run 2026-11-13 — R-ENGINE opened: audit DONE + P-E1c (project language) closed (PM-verified)
 
 - **R-ENGINE audit** (Planner lane, `docs/zadloop/packets/R-ENGINE-audit.md`, integrated at `f2470ed`): verdicts with file:line evidence — E1 cancel DONE, E1 streaming DONE, E1 budget PARTIAL (no start-time refusal; start_run always passes budget_cents: None), E1 discovery PARTIAL (static role_for_stage), E1 language GAP, E2 PARTIAL (legacy loop beside per-run), E3 PARTIAL (no projects.attach), E4 PARTIAL (CLI backend exists but never invoked in the Code stage), E5 PARTIAL (diff+tests DONE; preview GAP), E6 PARTIAL (skills lib DONE; daemon serves a hardcoded catalog), H1 GAP (13,451 lines; a 14-step pure-move split plan produced), E7 PARTIAL (one native lib, two Rust APIs: sqlx Store vs rusqlite SqliteStore; keep libsqlite3-sys 0.30.1 pinned per OD-S1c), E8 GAP (no acceptance criteria; a mock-provider e2e proposed). I spot-verified the load-bearing claims myself (the hardcoded "en" at pipeline lib.rs:1508-1514, the hardcoded SKILL_CATALOG at warshad lib.rs:5394+, wc -l = 13,451).

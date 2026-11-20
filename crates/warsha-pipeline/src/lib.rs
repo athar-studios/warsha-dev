@@ -53,7 +53,8 @@ pub use crate::mcp_permission::{
     AskEverything, McpPermissionSource, McpPermissionStore, StaticPermissions, MCP_AGENT_ROLE,
 };
 pub use crate::worktree::{
-    create_run_worktree, remove_run_worktree, worktree_path, RunWorktree, WorktreeError,
+    commit_run_worktree, create_run_worktree, remove_run_worktree, worktree_path, RunWorktree,
+    WorktreeError,
 };
 /// The Streamable HTTP transport's client seam and its pure SSE parser (R-EXT-4):
 /// the daemon implements [`McpHttpClient`] and injects it, and the pipeline keeps
@@ -871,6 +872,14 @@ impl<S: SettingsProvider> PipelineEngine<S> {
             backend,
         } = completion;
 
+        if let Some(worktree_path) = run.worktree_path.as_ref() {
+            let _ = commit_run_worktree(
+                &PathBuf::from(worktree_path),
+                &format!("chore(run-{}): CLI code stage", run.id.0),
+            )
+            .await;
+        }
+
         // Re-check cancellation and commit under state_lock via CAS before writing any artifact.
         let (artifact_name, artifact_content, budget_exceeded_info, budget_warn_info) = {
             let _state_guard = ctrl.state_lock.lock().await;
@@ -1037,12 +1046,15 @@ impl<S: SettingsProvider> PipelineEngine<S> {
                 ))
             })?;
 
+        let timeout = self.get_coding_cli_timeout(run).await;
+
         let task = CodingTask {
             id: Ulid::new(),
             run_id: run.id,
             title: format!("{} — Code", project.name),
             description: prompt.to_string(),
             repo_path: PathBuf::from(repo_path),
+            worktree_path: run.worktree_path.as_ref().map(PathBuf::from),
             branch_name: format!("warsha/run-{}", run.id.0),
             base_branch: "HEAD".to_string(),
             files: Vec::new(),
@@ -1051,9 +1063,21 @@ impl<S: SettingsProvider> PipelineEngine<S> {
                 ("language".to_string(), language.to_string()),
                 ("run".to_string(), run.id.0.to_string()),
                 ("stage".to_string(), stage_to_string(stage).to_string()),
+                (
+                    "coding_cli_timeout_seconds".to_string(),
+                    timeout.to_string(),
+                ),
             ]),
         };
-        let sandbox = Sandbox::new(PathBuf::from(repo_path));
+        let sandbox_path = run
+            .worktree_path
+            .as_ref()
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                PipelineError::Other(format!("run `{}` has no assigned worktree", run.id.0))
+            })?;
+
+        let sandbox = Sandbox::new(sandbox_path);
 
         let result = backend.execute(task, &sandbox).await.map_err(|error| {
             PipelineError::Other(format!(
@@ -1073,6 +1097,24 @@ impl<S: SettingsProvider> PipelineEngine<S> {
             tokens: None,
             backend: Some(backend_name),
         }))
+    }
+
+    async fn get_coding_cli_timeout(&self, run: &Run) -> u64 {
+        let project = self.store.get_project(run.project_id).await.ok();
+        let harness = project
+            .as_ref()
+            .and_then(|p| p.harness_id.as_ref())
+            .and_then(|id| self.settings.get_harness(id).await.ok().flatten());
+
+        harness
+            .and_then(|h| {
+                serde_json::from_str::<HarnessDefinition>(&h.data_json)
+                    .ok()
+                    .map(|d| d.rules)
+            })
+            .and_then(|r| r.coding_cli_timeout_seconds)
+            .map(|t| t.min(4 * 3600))
+            .unwrap_or(30 * 60)
     }
 
     /// Take one stage/follow-up request to the provider that should answer it.

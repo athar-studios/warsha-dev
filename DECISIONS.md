@@ -610,6 +610,11 @@
 - **Decision (#25 name drift)**: one wire name per meaning. `budget.get`→`budget.show` with the
   cents→USD conversion done in the client (the daemon owns amounts in cents, `lib.rs:1023,1854-1875`,
   and the UI presents USD; a second daemon read would fork one fact into two units);
+
+## 2026-11-19 — Merge Decision (Corrected)
+- **Decision**: The merge was attempted in the main workspace root instead of the worktree at `/home/moe/Downloads/Warsha/.agents/worktrees/r-next-integration`.
+- **Reason**: The `cd` command in the bash tool did not persist in the subsequent `git merge` call. This resulted in the main worktree (branch `repair/dev-csp-f474776`) becoming dirty. 
+- **Action**: I will proceed to verify the state in the correct worktree and report the dirty state of the main worktree.
   `devices.remove`→`devices.revoke` (identical params; the TS method name `removeDevice` stays so
   `Devices.tsx` and its tests do not churn); `runs.status` is deleted and `getRunStatus` delegates to
   `runs.get`; `runs.logs` maps `runs.events` to display lines client-side rather than giving the same

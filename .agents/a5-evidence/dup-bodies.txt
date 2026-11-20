@@ -1,0 +1,163 @@
+### home deriveProjectName
+export const EXAMPLE_CHIP_KEYS = [
+  'home.example_1',
+  'home.example_2',
+  'home.example_3',
+  'home.example_4',
+] as const;
+
+export function deriveProjectName(idea: string): string {
+  const trimmed = idea.trim();
+  if (!trimmed) return '';
+  const firstLine = trimmed.split('\n')[0].trim();
+  return firstLine.slice(0, 60);
+}
+
+export function findCoordinatorModel(
+  roles: readonly RoleRouting[] | null | undefined,
+  models: readonly { modelId: string; displayName: string | null }[] | null | undefined
+): string | null {
+  if (!roles || roles.length === 0) {
+    return models?.[0]?.displayName || models?.[0]?.modelId || null;
+  }
+  const coordinatorRole =
+    roles.find((r) => r.role === 'intake') ??
+    roles.find((r) => r.role === 'pm') ??
+    roles[0];
+  const target = coordinatorRole?.targets?.[0];
+  if (!target) {
+    return models?.[0]?.displayName || models?.[0]?.modelId || null;
+  }
+  const matchingModel = models?.find((m) => m.modelId === target.model_id);
+  return matchingModel?.displayName || target.model_id;
+### onboarding deriveProjectName
+  const msg = err instanceof Error ? err.message : String(err);
+  const trimmed = msg.trim();
+  if (!trimmed) return '';
+  if (!secret) return trimmed;
+  return trimmed.split(secret).join('[redacted]');
+}
+
+export function deriveProjectName(idea: string): string {
+  const trimmed = idea.trim();
+  const firstLine = trimmed.split(/\r?\n/)[0] ?? trimmed;
+  return (firstLine.slice(0, 60).trim() || trimmed.slice(0, 60)).trim();
+}
+
+function readInitialStep(): OnboardingStep {
+  if (typeof window === 'undefined') return 'language';
+  const hash = window.location.hash;
+  const queryIdx = hash.indexOf('?');
+  if (queryIdx >= 0) {
+    const params = new URLSearchParams(hash.slice(queryIdx + 1));
+    const stepParam = params.get('step');
+    if (stepParam === 'provider' || stepParam === 'idea' || stepParam === 'language') {
+      return stepParam;
+    }
+  }
+  return 'language';
+}
+
+async function markOnboardingComplete(): Promise<void> {
+  try {
+    await invoke('set_config', { key: 'onboarding_complete', value: 'true' });
+  } catch {
+    // Ignore in non-Tauri or test environments
+  }
+}
+### remote slotText/carries
+import { useRemote } from './bench';
+import { hasCeiling, money } from './format';
+import { stageWord } from './labels';
+import { endpointHost, type DaemonSession } from './session';
+
+const JOINED_SCRIPT = /[\u0600-\u06FF\u0750-\u077F\u0870-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+
+function slotText(node: React.ReactNode): string {
+  if (node === null || node === undefined || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(slotText).join('');
+  if (typeof node === 'object') {
+    const candidate = node as { [Symbol.iterator]?: unknown; props?: { children?: React.ReactNode } };
+    if (typeof candidate[Symbol.iterator] === 'function') {
+      return [...(node as Iterable<React.ReactNode>)].map(slotText).join('');
+    }
+    if (candidate.props && typeof candidate.props === 'object') {
+      return slotText(candidate.props.children);
+    }
+  }
+  return '';
+}
+
+function carriesJoinedScript(node: React.ReactNode): boolean {
+  return JOINED_SCRIPT.test(slotText(node));
+}
+
+/**
+ * One machine value, isolated from the line's direction (§11).
+ *
+ * `title` carries the full reading when the row shows a shortened one, so the value stays reachable.
+ */
+export function Machine({ children, title }: { children: React.ReactNode; title?: string }) {
+  const isMachineValue = !carriesJoinedScript(children);
+
+  return (
+    <span
+      dir={isMachineValue ? 'ltr' : undefined}
+      translate={isMachineValue ? 'no' : undefined}
+      title={title}
+      style={{
+        fontFamily: isMachineValue ? 'var(--w-font-mono)' : 'var(--w-font-sans)',
+        fontVariantNumeric: 'tabular-nums',
+        letterSpacing: isMachineValue ? undefined : 'normal',
+        unicodeBidi: isMachineValue ? 'isolate' : undefined,
+        fontSize: 'var(--w-font-size-xs)',
+### ui slotText/carries
+ * The text a slot will actually show, flattened out of whatever the screen put in it.
+ *
+ * A slot's skin is a decision about *rendered text*, so it is taken from the rendered text and not from
+ * a prop a screen can forget: a string, a number, an array, an iterable and the children of an element
+ * all flatten the same way. A nested element that paints itself (`<Machine>`, a `code` block) states its
+ * own family, so the slot's answer never overrules it — the slot only stops being mono for the words it
+ * holds itself.
+ */
+export function slotText(node: ReactNode): string {
+  if (node === null || node === undefined || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(slotText).join('');
+
+  const candidate = node as Partial<ReactElement<{ children?: ReactNode }>> & {
+    [Symbol.iterator]?: unknown;
+  };
+  if (typeof candidate[Symbol.iterator] === 'function') {
+    return [...(node as Iterable<ReactNode>)].map(slotText).join('');
+  }
+
+  const props = candidate?.props;
+  if (typeof props !== 'object' || props === null) return '';
+  return slotText(props.children);
+}
+
+/** Whether the slot carries a joined script, which no fixed-advance face may set. */
+export function carriesJoinedScript(node: ReactNode): boolean {
+  return JOINED_SCRIPT.test(slotText(node));
+}
+
+/**
+ * The machine skin, resolved against the text the slot carries — §11's split, applied per slot.
+ *
+ * Two things are called "machine" on the bench: the *treatment* (tabular numerals, the slot's own size
+ * and alignment) and the *face* (a fixed-advance mono, so a column of ids and costs lines up). Only the
+ * second one is script-dependent. A Latin machine value takes the mono face. A word in a joined script
+ * takes the sans Arabic face with the tracking explicitly cleared, because a fixed advance plus
+ * letter-spacing puts a seam inside the word where the join should be — `البوا ب ة` instead of `البوابة`
+ * — and a face with no Arabic coverage resolves to a fallback run that cannot join at all. The
+ * treatment is kept for both, so the slot still aligns and still reads at its own step.
+ *
+ * This is the one place the decision lives: a compound that offers a machine skin asks here instead of
+ * naming a family, so a screen that puts prose in a data slot is answered by the rule rather than by
+ * fifteen call sites.
+ */
+export function machineSkin(node: ReactNode): CSSProperties {
+  if (!carriesJoinedScript(node)) return MACHINE;
+  return {
