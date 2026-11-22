@@ -262,7 +262,7 @@ export function computeProjectStatus(
     return {
       status: 'paused',
       stageKey,
-      summaryKey: 'home.summary_failed',
+      summaryKey: 'home.summary_cancelled',
     };
   }
 
@@ -841,7 +841,14 @@ export default function HomePage(): React.ReactElement {
               {latestRun?.runMode && toRunModeChip(latestRun.runMode) !== 'agent' ? (
                 <RunModeChip runMode={latestRun.runMode} />
               ) : null}
-              <StatusPill status={status} label={statusLabels[status]} />
+              <StatusPill
+                status={status}
+                label={
+                  latestRun?.status === 'cancelled' && status === 'paused'
+                    ? t('home.status_cancelled')
+                    : statusLabels[status]
+                }
+              />
             </span>
           );
         },
@@ -1251,7 +1258,14 @@ export default function HomePage(): React.ReactElement {
                           {runs?.[0]?.runMode && toRunModeChip(runs[0].runMode) !== 'agent' ? (
                             <RunModeChip runMode={runs[0].runMode} />
                           ) : null}
-                          <StatusPill status={status} label={statusLabels[status]} />
+                          <StatusPill
+                            status={status}
+                            label={
+                              runs?.[0]?.status === 'cancelled' && status === 'paused'
+                                ? t('home.status_cancelled')
+                                : statusLabels[status]
+                            }
+                          />
                         </span>
                       </div>
 

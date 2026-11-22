@@ -22,6 +22,7 @@ export default {
   'frame.status_done': 'انتهى',
   'frame.status_failed': 'تعثّر',
   'frame.status_paused': 'متوقّف',
+  'frame.status_cancelled': 'ملغى',
   'frame.quota_gauge_label': 'مقياس حصص المزوّدين',
   'frame.quota_gauge_none': 'لا نعرف حصة أي مزوّد بعد',
   'frame.quota_gauge.tightest': 'أضيق حصة: {name}',

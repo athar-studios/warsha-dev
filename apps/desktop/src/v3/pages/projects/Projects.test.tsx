@@ -380,4 +380,31 @@ describe('ProjectsPage', () => {
     expect(chips.length).toBe(1);
     expect(chips[0].getAttribute('data-runmode')).toBe('plan');
   });
+
+  it('labels a cancelled latest run Cancelled with a paused pill, not Failed', async () => {
+    const cancelledRun: RunSummary = { ...SAMPLE_RUNS_P1[0], status: 'cancelled' };
+    const failedRun: RunSummary = { ...SAMPLE_RUNS_P2[0], status: 'failed' };
+    const client = makeMockClient({
+      listRuns: vi.fn().mockImplementation(async (projectId: string) => {
+        if (projectId === 'proj-1') return [cancelledRun];
+        if (projectId === 'proj-2') return [failedRun];
+        return [];
+      }),
+    });
+    await renderProjects({ client, locale: 'en', mode: 'simple' });
+    await waitFor(() => {
+      expect(screen.getByTestId('projects-card-proj-1')).toBeDefined();
+    });
+
+    const cancelledCard = screen.getByTestId('projects-card-proj-1');
+    const cancelledPill = cancelledCard.querySelector('.w-status-pill');
+    expect(cancelledPill?.textContent).toBe('Cancelled');
+    expect(cancelledPill?.getAttribute('data-status')).toBe('paused');
+    expect(cancelledCard.textContent).not.toContain('Failed');
+
+    const failedCard = screen.getByTestId('projects-card-proj-2');
+    const failedPill = failedCard.querySelector('.w-status-pill');
+    expect(failedPill?.textContent).toBe('Failed');
+    expect(failedPill?.getAttribute('data-status')).toBe('failed');
+  });
 });

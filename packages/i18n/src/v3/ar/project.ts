@@ -64,4 +64,5 @@ export default {
   'project.status_done': 'سُلِّم',
   'project.status_failed': 'تعثّر',
   'project.status_paused': 'متوقّف',
+  'project.status_cancelled': 'ملغى',
 };

@@ -64,4 +64,5 @@ export default {
   'project.status_done': 'Delivered',
   'project.status_failed': 'Failed',
   'project.status_paused': 'Paused',
+  'project.status_cancelled': 'Cancelled',
 };

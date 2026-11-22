@@ -139,6 +139,17 @@ describe('resolveProjectStatus', () => {
     expect(resolveProjectStatus([makeRun('r1', 'p1', 'code', 'failed')], t).status).toBe('failed');
     expect(resolveProjectStatus([makeRun('r1', 'p1', 'code', 'paused')], t).status).toBe('paused');
   });
+
+  it('labels a cancelled run as paused with the cancelled key, and a failed run as failed', () => {
+    expect(resolveProjectStatus([makeRun('r1', 'p1', 'code', 'cancelled')], t)).toEqual({
+      status: 'paused',
+      label: 'frame.status_cancelled',
+    });
+    expect(resolveProjectStatus([makeRun('r1', 'p1', 'code', 'failed')], t)).toEqual({
+      status: 'failed',
+      label: 'frame.status_failed',
+    });
+  });
 });
 
 describe('Frame component', () => {

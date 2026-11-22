@@ -49,6 +49,7 @@ export default {
   'bench.status.done': 'Done',
   'bench.status.failed': 'Failed',
   'bench.status.paused': 'Paused',
+  'bench.status.cancelled': 'Cancelled',
   'bench.run_failed_banner': 'This run failed before completion. Check events or retry.',
   'bench.header.run_num': 'Run #{number}',
   'bench.header.gate_waiting': 'Decision waiting',

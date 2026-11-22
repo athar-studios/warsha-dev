@@ -246,6 +246,16 @@ describe('Home helpers', () => {
       'todo',
       'todo',
     ]);
+
+    const cancelled: RunSummary[] = [{ ...SAMPLE_RUNS_P1[0], status: 'cancelled' }];
+    expect(computeProjectStatus(cancelled, 0)).toEqual({
+      status: 'paused',
+      stageKey: 'stages.build',
+      summaryKey: 'home.summary_cancelled',
+    });
+    const failed: RunSummary[] = [{ ...SAMPLE_RUNS_P1[0], status: 'failed' }];
+    expect(computeProjectStatus(failed, 0).status).toBe('failed');
+    expect(computeProjectStatus(failed, 0).summaryKey).toBe('home.summary_failed');
   });
 });
 
@@ -621,5 +631,34 @@ describe('HomePage', () => {
     const chips = screen.getAllByTestId('runmode-chip');
     expect(chips.length).toBe(1);
     expect(chips[0].getAttribute('data-runmode')).toBe('plan');
+  });
+
+  it('labels a cancelled latest run Cancelled with a paused pill, not Failed', async () => {
+    const cancelledRun: RunSummary = { ...SAMPLE_RUNS_P1[0], status: 'cancelled' };
+    const failedRun: RunSummary = { ...SAMPLE_RUNS_P2[0], id: 'run-failed' as RunId, status: 'failed' };
+    const client = makeMockClient({
+      listRuns: vi.fn().mockImplementation(async (projectId: string) => {
+        if (projectId === 'proj-1') return [cancelledRun];
+        if (projectId === 'proj-2') return [failedRun];
+        return [];
+      }),
+    });
+    await renderHome({ client, locale: 'en' });
+    await waitFor(() => {
+      expect(screen.getByTestId('home-project-card-proj-1')).toBeDefined();
+    });
+
+    const cancelledCard = screen.getByTestId('home-project-card-proj-1');
+    const cancelledPill = cancelledCard.querySelector('.w-status-pill');
+    expect(cancelledPill?.textContent).toBe('Cancelled');
+    expect(cancelledPill?.getAttribute('data-status')).toBe('paused');
+    expect(cancelledCard.textContent).toContain('Cancelled');
+    expect(cancelledCard.textContent).not.toContain('Failed');
+    expect(cancelledCard.textContent).not.toContain('Stopped with error');
+
+    const failedCard = screen.getByTestId('home-project-card-proj-2');
+    const failedPill = failedCard.querySelector('.w-status-pill');
+    expect(failedPill?.textContent).toBe('Failed');
+    expect(failedPill?.getAttribute('data-status')).toBe('failed');
   });
 });

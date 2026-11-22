@@ -320,6 +320,52 @@ describe('Advanced Workbench (U4)', () => {
     expect(screen.queryByText('لا توجد تشغيلات لهذا المشروع')).toBeNull();
   });
 
+  it('BenchRail labels a cancelled run Cancelled with a paused pill, and a failed run Failed', () => {
+    const cancelledRun: RunSummary = { ...SAMPLE_RUN, id: 'run-cancelled' as RunId, status: 'cancelled' };
+    const failedRun: RunSummary = { ...SAMPLE_RUN, id: 'run-failed' as RunId, status: 'failed' };
+    const { unmount } = renderWithProviders(
+      <BenchRail
+        projects={[SAMPLE_PROJECT]}
+        projectsStatus="ready"
+        runsByProject={{ 'proj-1': [cancelledRun, failedRun] }}
+        activeProjectId="proj-1"
+        activeRunId="run-cancelled"
+        onNewProject={vi.fn()}
+        onSelectRun={vi.fn()}
+        onRetryProjects={vi.fn()}
+      />,
+      undefined,
+      'en'
+    );
+
+    const cancelledRow = document.querySelector('[data-run-id="run-cancelled"]');
+    const failedRow = document.querySelector('[data-run-id="run-failed"]');
+    const cancelledPill = cancelledRow?.querySelector('.w-status-pill');
+    const failedPill = failedRow?.querySelector('.w-status-pill');
+    expect(cancelledPill).toHaveTextContent('Cancelled');
+    expect(cancelledPill).toHaveAttribute('data-status', 'paused');
+    expect(cancelledPill).not.toHaveTextContent('Failed');
+    expect(failedPill).toHaveTextContent('Failed');
+    expect(failedPill).toHaveAttribute('data-status', 'failed');
+    unmount();
+
+    renderWithProviders(
+      <BenchRail
+        projects={[SAMPLE_PROJECT]}
+        projectsStatus="ready"
+        runsByProject={{ 'proj-1': [cancelledRun] }}
+        activeProjectId="proj-1"
+        activeRunId="run-cancelled"
+        onNewProject={vi.fn()}
+        onSelectRun={vi.fn()}
+        onRetryProjects={vi.fn()}
+      />
+    );
+    const arabicPill = document.querySelector('[data-run-id="run-cancelled"] .w-status-pill');
+    expect(arabicPill).toHaveTextContent('ملغى');
+    expect(arabicPill).not.toHaveTextContent('فشل');
+  });
+
   it('BenchHeader hides gate pill when pending gate is NOT at current stage (Amendment b)', () => {
     const gates: GateSummary[] = [{ stage: 'gate_a', state: { state: 'pending' } }];
     renderWithProviders(
@@ -350,6 +396,32 @@ describe('Advanced Workbench (U4)', () => {
       />
     );
     expect(screen.getByTestId('header-gate-pill')).toBeInTheDocument();
+  });
+
+  it('BenchHeader labels a cancelled run Cancelled with a paused pill, and a failed run Failed', () => {
+    const headerProps = {
+      project: SAMPLE_PROJECT,
+      gates: [] as GateSummary[],
+      onAdvance: vi.fn(),
+      onStartNewRun: vi.fn(),
+      onCancelRun: vi.fn(),
+      onReconnect: vi.fn(),
+    };
+    const { unmount } = renderWithProviders(
+      <BenchHeader {...headerProps} run={{ ...SAMPLE_RUN, status: 'cancelled' }} />,
+      undefined,
+      'en'
+    );
+    const cancelledPill = screen.getByTestId('bench-header').querySelector('.w-status-pill');
+    expect(cancelledPill).toHaveTextContent('Cancelled');
+    expect(cancelledPill).toHaveAttribute('data-status', 'paused');
+    expect(cancelledPill).not.toHaveAttribute('data-status', 'failed');
+    unmount();
+
+    renderWithProviders(<BenchHeader {...headerProps} run={{ ...SAMPLE_RUN, status: 'failed' }} />, undefined, 'en');
+    const failedPill = screen.getByTestId('bench-header').querySelector('.w-status-pill');
+    expect(failedPill).toHaveTextContent('Failed');
+    expect(failedPill).toHaveAttribute('data-status', 'failed');
   });
 
   it('BenchHeader triggers advance, start new run, reconnect, and cancel dialog confirmation', () => {

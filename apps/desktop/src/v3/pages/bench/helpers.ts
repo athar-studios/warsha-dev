@@ -13,9 +13,9 @@ export function mapRunStatusToPill(status: string): StatusPillState {
       return 'done';
     case 'failed':
     case 'error':
-    case 'cancelled':
       return 'failed';
     case 'paused':
+    case 'cancelled':
       return 'paused';
     default:
       return 'idle';
@@ -23,6 +23,7 @@ export function mapRunStatusToPill(status: string): StatusPillState {
 }
 
 export function getStatusLabelKey(status: string): string {
+  if (status === 'cancelled') return 'bench.status.cancelled';
   switch (mapRunStatusToPill(status)) {
     case 'running':
       return 'bench.status.running';

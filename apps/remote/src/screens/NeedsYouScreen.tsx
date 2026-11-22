@@ -51,6 +51,7 @@ function runStatusPill(status: string): StatusPillState {
     case 'failed':
       return 'failed';
     case 'paused':
+    case 'cancelled':
       return 'paused';
     default:
       return 'idle';

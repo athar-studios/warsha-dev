@@ -97,8 +97,8 @@ export function computeRunStatusPill(
   if (!run) return 'idle';
   if (pendingGate || run.status === 'awaiting_gate') return 'waiting';
   if (run.status === 'completed') return 'done';
-  if (run.status === 'failed' || run.status === 'cancelled') return 'failed';
-  if (run.status === 'paused') return 'paused';
+  if (run.status === 'failed') return 'failed';
+  if (run.status === 'paused' || run.status === 'cancelled') return 'paused';
   return 'running';
 }
 
@@ -118,7 +118,7 @@ export function buildSimpleStepperStages(
       return { key: stageKey, label, state: 'done' };
     }
     if (index === activeIndex) {
-      if (run.status === 'failed' || run.status === 'cancelled') {
+      if (run.status === 'failed') {
         return { key: stageKey, label, state: 'failed' };
       }
       if (run.status === 'awaiting_gate') {
@@ -589,7 +589,11 @@ export default function ProjectPage(): React.ReactElement {
             </h1>
             <StatusPill
               status={statusPillState}
-              label={statusLabels[statusPillState]}
+              label={
+                currentRun?.status === 'cancelled' && statusPillState === 'paused'
+                  ? t('project.status_cancelled')
+                  : statusLabels[statusPillState]
+              }
               data-testid="project-status-pill"
             />
             {currentRun && currentRun.runMode && toRunModeChip(currentRun.runMode) !== 'agent' ? (

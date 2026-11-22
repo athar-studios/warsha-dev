@@ -48,8 +48,9 @@ export function resolveProjectStatus(
       return { status: 'done', label: t('frame.status_done') };
     case 'failed':
     case 'error':
-    case 'cancelled':
       return { status: 'failed', label: t('frame.status_failed') };
+    case 'cancelled':
+      return { status: 'paused', label: t('frame.status_cancelled') };
     case 'paused':
       return { status: 'paused', label: t('frame.status_paused') };
     default:

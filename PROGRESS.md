@@ -1,5 +1,13 @@
 # PROGRESS.md — Warsha Build Log
 
+## Run 2026-11-22 — Cancelled runs labelled Cancelled, not Failed (swarm-cancel-label)
+
+- **Scope**: GUI defect where `status === 'cancelled'` rendered as Failed / Stopped with error / Paused. Worktree `.agents/worktrees/swarm-cancel-label`, branch `swarm-cancel-label`. No commit, no merge, no push.
+- **Fix**: Neutral paused pill plus a dedicated cancelled label (`Cancelled` / `ملغى`) in bench, frame switcher, simple project, home, and projects. Remote NeedsYou maps cancelled to the paused pill, matching RunScreen. Failed runs stay failed. i18n keys added in matching ar/en catalogs: `bench.status.cancelled`, `frame.status_cancelled`, `project.status_cancelled`, `home.status_cancelled`, `home.summary_cancelled`, `projects.status_cancelled`, `projects.summary_cancelled`.
+- **Tests**: bench header/rail, `resolveProjectStatus`, project pill + stepper + page, `computeProjectStatus` + home and projects cards.
+- **Verification** (direct `vitest run`; `pnpm --filter` cannot open the default store database in this worktree): `@warsha/i18n` 60 passed; desktop bench/frame/project/home/projects 106 passed; `@warsha/remote` 229 passed.
+- **Status**: DONE — cancelled runs show Cancelled / ملغى; failed runs stay failed.
+
 ## Run 2026-11-22 — Practical UI drive proof for R9 (GAP-H3 + MISS-1) (D-R9-DRIVE-1)
 - **Scope**: Practical end-to-end UI drive on `r-next/integration` for merged tip `db29346` (lane `5764fe8` GAP-H3 + lane `db29346` MISS-1), per permanent owner rule OD-PRACTICAL-REVIEW-1. Local-only: no push, no tag, no publish, main untouched.
 - **Drive implementation**:

@@ -197,6 +197,12 @@ describe('ProjectPage helpers', () => {
     expect(computeRunStatusPill(RUNNING_RUN, null)).toBe('running');
     expect(computeRunStatusPill(AWAITING_GATE_RUN, ALL_PENDING_GATES[0])).toBe('waiting');
     expect(computeRunStatusPill(FAILED_RUN, null)).toBe('failed');
+    expect(computeRunStatusPill({ ...FAILED_RUN, status: 'cancelled' }, null)).toBe('paused');
+
+    const cancelledStages = buildSimpleStepperStages({ ...RUNNING_RUN, status: 'cancelled' }, (k) => k);
+    expect(cancelledStages.map((s) => s.state)).toEqual(['done', 'done', 'current', 'todo', 'todo']);
+    const failedStages = buildSimpleStepperStages(FAILED_RUN, (k) => k);
+    expect(failedStages.find((s) => s.state === 'failed')).toBeDefined();
 
     const artifacts: RunArtifact[] = [
       {
@@ -454,5 +460,29 @@ describe('ProjectPage component', () => {
     const chip = screen.getByTestId('runmode-chip');
     expect(chip).toBeDefined();
     expect(chip.getAttribute('data-runmode')).toBe('plan');
+  });
+
+  it('labels a cancelled run Cancelled with a paused pill, and a failed run Failed', async () => {
+    const cancelledClient = createMockClient({
+      listRuns: vi.fn().mockResolvedValue([{ ...RUNNING_RUN, status: 'cancelled' }]),
+    });
+    const { unmount } = renderProject(cancelledClient);
+    await waitFor(() => {
+      expect(screen.getByTestId('project-status-pill')).toBeDefined();
+    });
+    const cancelledPill = screen.getByTestId('project-status-pill');
+    expect(cancelledPill.textContent).toBe('Cancelled');
+    expect(cancelledPill.getAttribute('data-status')).toBe('paused');
+    expect(cancelledPill.getAttribute('data-status')).not.toBe('failed');
+    unmount();
+
+    const failedClient = createMockClient({
+      listRuns: vi.fn().mockResolvedValue([FAILED_RUN]),
+    });
+    renderProject(failedClient);
+    await waitFor(() => {
+      expect(screen.getByTestId('project-status-pill').textContent).toBe('Failed');
+    });
+    expect(screen.getByTestId('project-status-pill').getAttribute('data-status')).toBe('failed');
   });
 });

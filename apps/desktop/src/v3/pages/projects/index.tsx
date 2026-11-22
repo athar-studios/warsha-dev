@@ -348,7 +348,14 @@ export default function ProjectsPage(): React.ReactElement {
               {latestRun?.runMode && toRunModeChip(latestRun.runMode) !== 'agent' ? (
                 <RunModeChip runMode={latestRun.runMode} />
               ) : null}
-              <StatusPill status={status} label={statusLabels[status]} />
+              <StatusPill
+                status={status}
+                label={
+                  runs?.[0]?.status === 'cancelled' && status === 'paused'
+                    ? t('projects.status_cancelled')
+                    : statusLabels[status]
+                }
+              />
             </span>
           );
         },
@@ -562,7 +569,14 @@ export default function ProjectsPage(): React.ReactElement {
                       {runs?.[0]?.runMode && toRunModeChip(runs[0].runMode) !== 'agent' ? (
                         <RunModeChip runMode={runs[0].runMode} />
                       ) : null}
-                      <StatusPill status={status} label={statusLabels[status]} />
+                      <StatusPill
+                        status={status}
+                        label={
+                          runs?.[0]?.status === 'cancelled' && status === 'paused'
+                            ? t('projects.status_cancelled')
+                            : statusLabels[status]
+                        }
+                      />
                     </span>
                   </div>
 
