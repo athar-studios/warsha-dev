@@ -1,4 +1,9 @@
 
+## 2026-11-20 — D-RN-UX-CODE-STAGE-1: Stage::Code context hand-off, worktree persistence, and fail-loud error recording
+- **Decision**: The Code stage guarantees full context hand-off of the plan and architecture to both CLI coding backends and the routed provider fallback prompt. In `render_prompt`, architecture and implementation plan sections are appended if templates lack `{{architecture}}` / `{{task}}` placeholders. In `code_stage_completion`, `plan` is inserted into `task.context`. In `warshad/src/lib.rs`, `runs.start` records and persists `run.worktree_path` and `run.worktree_branch` to the store. Missing backends, missing repositories, and CLI execution errors fail loudly, record `RunStatus::Failed`, and emit error events naming the exact cause.
+- **Reason**: Per owner order m08378 / m00411, a run reaching Stage::Code must actually execute or fail loudly; it must never silently succeed or drop the plan. Harness templates such as `autonomous-factory` did not contain `{{task}}` placeholders, causing the plan to be dropped and the model to ask what to implement. In addition, unpersisted worktree paths caused daemon runs to fail with "run has no assigned worktree".
+- **Record**: `crates/warsha-pipeline/src/lib.rs`, `crates/warsha-pipeline/src/code_stage_tests.rs`, `crates/warshad/src/lib.rs`.
+
 ## 2026-11-20 — D-RN-REL-AARCH64-1: 0.3.0 ships x86_64-only; aarch64 verifier checks informational only
 - **Decision**: 0.3.0 ships x86_64-only per pipeline matrix; verifier requires x86_64 hard, aarch64 informational only; future aarch64 legs are a separate decision.
 - **Reason**: Draft 452168316 holds 15 x86_64-only assets (6 rust binaries, 6 desktop installers, 2 SBOMs, checksums.sha256). `release.yml` rust-build matrix (lines 128-138) and desktop matrix (lines 232-246) target x86_64 only by pipeline design. The promotion gate verifier previously hard-failed on missing aarch64 CLI/daemon assets.

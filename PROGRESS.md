@@ -1,5 +1,30 @@
 # PROGRESS.md — Warsha Build Log
 
+## Run 2026-11-20 — FIX-UX-4: Code stage execution & context hand-off (D-RN-UX-CODE-STAGE-1)
+- **Scope**: Fix real UX issue 4 of 4: "code stage". Hand-off of plan/architecture to coding backend and routed provider fallback, daemon worktree path persistence, and truthful failure/success recording without silent fallback.
+- **Root cause**: 
+  1. Harness stage templates (like `autonomous-factory`) lacked `{{task}}` placeholders, so `render_prompt` silently dropped the plan and architecture, causing the model to ask what to implement instead of writing code.
+  2. `warshad/src/lib.rs` `runs.start` created a worktree but never populated `run.worktree_path` or `run.worktree_branch` and never persisted it to the store, causing "run has no assigned worktree" when coding backends ran under the daemon.
+- **Fix**:
+  1. `crates/warsha-pipeline/src/lib.rs`:
+     - In `render_prompt`: replaced `{{design}}` and `{{architecture}}`, and appended `## Architecture / Design Spec` if the template mentions architecture but lacked the substitution. Replaced `{{task}}` and `{{plan}}`, and appended `## Implementation Plan / Tasks` if not already present in the prompt.
+     - In `code_stage_completion`: retrieved plan text from `run.artifacts` (`plan_tasks` or `plan` or `brief`) and added it to `task.context["plan"]`.
+  2. `crates/warshad/src/lib.rs`:
+     - In `runs.start`: populated `run.worktree_path` and `run.worktree_branch` and persisted to store with `store.update_run(&run).await`.
+  3. `crates/warsha-pipeline/src/code_stage_tests.rs`:
+     - Added comprehensive unit tests proving:
+       - `code_stage_receives_plan_in_prompt_and_context`: mock CLI backend receives plan in both `task.description` and `task.context["plan"]`.
+       - `code_stage_env_provider_receives_plan_in_prompt`: provider fallback receives plan and architecture in prompt.
+       - `code_stage_missing_backend_records_error_naming_backend`: missing backend fails loudly, records `RunStatus::Failed`, and records error event naming backend.
+       - `code_stage_missing_repo_records_error`: missing repository fails loudly, records `RunStatus::Failed`, and records error event.
+       - `code_stage_cli_failure_records_run_failure`: CLI execution failure fails loudly, records `RunStatus::Failed`, and records error event with failure detail.
+       - `code_stage_success_records_completion`: successful CLI execution records completion artifact and advances run.
+- **Verification**:
+  - `cargo fmt --check`: PASSED.
+  - `cargo clippy -p warsha-pipeline -p warsha-core --all-targets -- -D warnings`: PASSED.
+  - `cargo test -p warsha-core`: 35 passed; 0 failed.
+  - `cargo test -p warsha-pipeline --lib`: 538 passed; 0 failed.
+
 ## Run 2026-11-20 — Pre-release gate matrix (r-next/integration@d2a4e3d)
 - **Commands**:
   - `cargo fmt --all -- --check`: exit 0
