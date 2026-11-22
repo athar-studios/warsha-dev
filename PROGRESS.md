@@ -1,5 +1,26 @@
 # PROGRESS.md — Warsha Build Log
 
+## Run 2026-11-20 — Fix UX Issue 1 of 4: "add provider" in desktop UI (D-UX-PROVIDER-1)
+- **Scope**: `apps/desktop/src/v3/pages/settings/sections/ModelsSection.tsx`, `apps/desktop/src/v3/app/ClientContext.tsx`, `crates/warshad/src/api.rs`, `crates/warshad/src/lib.rs`, `packages/i18n/src/v3/{ar,en}/settings.ts`, `apps/desktop/src/v3/pages/settings/Settings.test.tsx`, `crates/warshad/tests/provider_persistence.rs`.
+- **Root causes**:
+  1. `apps/desktop/src/v3/app/ClientContext.tsx` invoked undefined Tauri command `daemon_url` instead of `(key) => invoke('get_config', { key })`, leaving `client = null`.
+  2. `ModelsSection.tsx` silently skipped `client.addProvider` when `client` was null, showed premature green success toast, and swallowed RPC errors without setting `formError` on the dialog.
+  3. `crates/warshad/src/lib.rs` and `crates/warshad/src/api.rs` rejected standard vendor kinds (`openai`, `anthropic`, `ollama`) when `api_base` was not explicitly provided.
+- **Fixes**:
+  - Added `default_base_url_for_kind` mapping canonical endpoints for `openai`, `anthropic`, and `ollama` in `api.rs` and `lib.rs`.
+  - Added localized strings for empty name, empty key, and disconnected client in `settings.ts` (both Arabic and English).
+  - Fixed `ClientContext.tsx` to read daemon endpoint via `get_config`.
+  - Updated `ModelsSection.tsx` with discrete validation, error trapping that surfaces directly on the dialog banner, keeping the dialog open on failure, and only closing and reloading on success.
+  - Ensured write-only secret contract: key is password-masked in UI, sent once over RPC, never returned on `providers.list` or persisted in plain SQLite.
+- **Gates**:
+  - `cargo fmt --check`: PASSED.
+  - `cargo clippy -p warshad --all-targets -- -D warnings`: PASSED.
+  - `cargo test -p warshad --test provider_persistence`: 7/7 PASSED.
+  - `cargo test -p warshad --lib a_providers_endpoint`: 1/1 PASSED.
+  - `pnpm --filter warsha-desktop typecheck`: PASSED.
+  - `pnpm --filter warsha-desktop test src/v3/pages/settings/Settings.test.tsx`: 39/39 PASSED.
+  - `pnpm vitest run packages/i18n`: 58/58 PASSED.
+
 ## Run 2026-11-20 — Pre-release gate matrix (r-next/integration@d2a4e3d)
 - **Commands**:
   - `cargo fmt --all -- --check`: exit 0

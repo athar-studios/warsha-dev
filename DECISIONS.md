@@ -1,4 +1,13 @@
 
+## 2026-11-20 — D-UX-PROVIDER-1: Fix add provider flow in desktop UI and daemon RPC
+- **Decision**: 
+  1. Default base URLs for standard vendor kinds (`openai`, `anthropic`, `ollama`) added to `warshad::api::default_base_url_for_kind` and wired into `providers.add` RPC and `provider_endpoint`.
+  2. Fixed desktop `ClientContext.tsx` daemon endpoint discovery to use `get_config` command rather than invoking undefined `daemon_url`.
+  3. In `ModelsSection.tsx`, validate empty name and key independently with specific localized strings (`settings.providers.validation.name_required`, `settings.providers.validation.key_required`), guard against missing client with localized error (`settings.providers.error.no_client`), and catch RPC errors to surface directly on the dialog banner with dialog remaining open, preventing premature success toasts.
+  4. Ensure provider API key is write-only over RPC, never returned on `providers.list` or stored in database, and password-masked in the UI.
+- **Reason**: Fixes UX issue 1 of 4 (order m08378) where adding a provider in desktop settings either showed a false success toast without saving (when client was null or RPC failed silently) or refused standard vendor kinds without explicit `api_base`.
+- **Record**: Changes in `apps/desktop/src/v3/pages/settings/sections/ModelsSection.tsx`, `apps/desktop/src/v3/app/ClientContext.tsx`, `crates/warshad/src/api.rs`, `crates/warshad/src/lib.rs`, `packages/i18n/src/v3/{ar,en}/settings.ts`, and test coverage in `Settings.test.tsx` and `provider_persistence.rs`.
+
 ## 2026-11-20 — D-RN-REL-AARCH64-1: 0.3.0 ships x86_64-only; aarch64 verifier checks informational only
 - **Decision**: 0.3.0 ships x86_64-only per pipeline matrix; verifier requires x86_64 hard, aarch64 informational only; future aarch64 legs are a separate decision.
 - **Reason**: Draft 452168316 holds 15 x86_64-only assets (6 rust binaries, 6 desktop installers, 2 SBOMs, checksums.sha256). `release.yml` rust-build matrix (lines 128-138) and desktop matrix (lines 232-246) target x86_64 only by pipeline design. The promotion gate verifier previously hard-failed on missing aarch64 CLI/daemon assets.
