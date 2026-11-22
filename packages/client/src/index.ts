@@ -2734,15 +2734,19 @@ export class WarshaClient
     projectId: ProjectId,
     idea: string,
     runMode?: 'agent' | 'plan' | 'spec-file' | 'ask',
-    specFilePath?: string
+    specFilePath?: string,
+    budgetCents?: number
   ): Promise<RunSummary> {
-    // D4: the wire keeps the daemon's positional shape — trailing optional
-    // params serialise as absent fields, never as a params object.
+    // Trailing optional params serialise as absent fields. `budgetCents` is a
+    // direct key — a spread would hide it from the wire-contract check — and is
+    // sent only when the caller passed a number, including 0. `undefined`
+    // stringifies as absent, so an omitted argument still inherits.
     const row = await this.rpc<unknown>('runs.start', {
       projectId,
       idea,
       runMode,
       specFilePath,
+      budgetCents: typeof budgetCents === 'number' ? budgetCents : undefined,
     });
     return decodeRunSummary(row);
   }

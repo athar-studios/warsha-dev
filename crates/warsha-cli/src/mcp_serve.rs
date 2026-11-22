@@ -151,6 +151,11 @@ pub fn tool_definitions() -> Vec<Value> {
                     "spec_file_path": {
                         "type": "string",
                         "description": "Spec-file mode: path of the spec file inside the repository, taken as the run's brief (treated as untrusted data)."
+                    },
+                    "budget_cents": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Optional per-run budget in cents. Omit to inherit the project's current budget. An explicit value replaces that inherited cap and is not refused because the previous run already spent its own cap."
                     }
                 },
                 "required": ["project_id", "idea"]
@@ -360,8 +365,17 @@ async fn call_start_run(client: &HttpClient, args: &Value) -> Value {
         .get("spec_file_path")
         .and_then(Value::as_str)
         .map(str::to_string);
+    // Absent or JSON null inherits. `budgetCents` is the same field jsonrpsee
+    // already aliases; a present non-integer is a tool error, not a silent drop.
+    let budget_cents = match optional_budget_cents(args) {
+        Ok(cents) => cents,
+        Err(msg) => return tool_error(msg),
+    };
     match client
-        .request::<Run, _>("runs.start", (project_id, idea, run_mode, spec_file_path))
+        .request::<Run, _>(
+            "runs.start",
+            (project_id, idea, run_mode, spec_file_path, budget_cents),
+        )
         .await
     {
         Ok(run) => tool_ok_json(&run),
@@ -391,6 +405,27 @@ fn parse_run_id(args: &Value) -> std::result::Result<RunId, String> {
     Ulid::from_string(raw)
         .map(RunId)
         .map_err(|err| format!("Invalid `run_id` ULID `{raw}`: {err}"))
+}
+
+/// `budget_cents` or `budgetCents` when the tool call named one.
+///
+/// Missing and JSON null both mean inherit (`None`). A negative, a fraction,
+/// or a non-number is an error — never clamped, and never replaced with the
+/// inherited budget.
+fn optional_budget_cents(args: &Value) -> std::result::Result<Option<u64>, String> {
+    let value = args.get("budget_cents").or_else(|| args.get("budgetCents"));
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let Some(cents) = value.as_u64() else {
+        return Err(
+            "Argument `budget_cents` must be a non-negative integer number of cents".to_string(),
+        );
+    };
+    Ok(Some(cents))
 }
 
 fn parse_non_empty_string(args: &Value, field: &str) -> std::result::Result<String, String> {

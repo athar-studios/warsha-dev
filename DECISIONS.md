@@ -1,6 +1,11 @@
 
 # DECISIONS.md — Architecture and Design Decisions
 
+## 2026-11-23 — D-BUDGET-START-1: runs.start takes a trailing optional budget_cents
+- **Decision**: `runs.start` gains a trailing `budget_cents: Option<u64>` (`budgetCents` on the wire). Omitted inherits the newest run's cap, and a pending budget set before any run still applies. Present overrides both the pending value and the inherited cap, and is not refused because the previous run already spent its own cap. Invalid values are JSON-RPC `-32602` and create no run. JSON `null` is omit, not an error.
+- **Reason**: The method dropped an unknown `budget_cents` and stored the inherited budget with no error. An explicit cap the caller sent was indistinguishable from one they did not.
+- **Scope**: `crates/warshad`, `crates/warsha-pipeline`, `crates/warsha-cli`, `packages/client`. Local-only; no push.
+
 ## 2026-11-22 — D-R9-DRIVE-1: Practical UI Drive Proof for R9 (GAP-H3 Fast Failover + MISS-1 Greenfield Git Auto-Init)
 - **Decision**:
   1. Automated practical drive script `scripts/ui-drive-r9-failover-autoinit.mjs` orchestrating a real `warshad` daemon and headless Chromium in Arabic locale (`ar-EG`, RTL, dark theme) exercising both R9 fixes end-to-end:

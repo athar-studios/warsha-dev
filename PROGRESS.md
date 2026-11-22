@@ -1,5 +1,9 @@
 # PROGRESS.md — Warsha Build Log
 
+## Run 2026-11-23 — runs.start honors an explicit budget_cents (WIP finished)
+- **Scope**: Finish `d0a1136` on `swarm-budget`. `runs.start` now takes a trailing optional `budget_cents`. Present is stored as sent and is not overwritten by the pending map or refused because the previous run spent its cap. Omitted still inherits, and the pending budget still applies. Invalid values are JSON-RPC `-32602` and create no run.
+- **Status**: WIP finished. Local-only; no push.
+
 ## Run 2026-11-22 — Practical UI drive proof for R9 (GAP-H3 + MISS-1) (D-R9-DRIVE-1)
 - **Scope**: Practical end-to-end UI drive on `r-next/integration` for merged tip `db29346` (lane `5764fe8` GAP-H3 + lane `db29346` MISS-1), per permanent owner rule OD-PRACTICAL-REVIEW-1. Local-only: no push, no tag, no publish, main untouched.
 - **Drive implementation**:

@@ -3305,6 +3305,69 @@ mod tests {
             assert_eq!(second.budget_cents, None);
         }
 
+        /// An explicit cap is stored as sent, even when the newest run carries 700.
+        #[tokio::test]
+        async fn start_run_in_mode_stores_explicit_budget_cents_over_inherited_700() {
+            let store = temp_store().await;
+            let engine =
+                PipelineEngine::new(store.clone(), setup_providers_with_mock(), setup_settings());
+            let project = project();
+            store.create_project(&project).await.unwrap();
+            let mut first = engine
+                .start_run(project.id, "Build a todo app")
+                .await
+                .unwrap();
+            first.budget_cents = Some(700);
+            first.spent_cents = 10;
+            store.update_run(&first).await.unwrap();
+
+            let second = engine
+                .start_run_in_mode(
+                    project.id,
+                    "Build a second app",
+                    warsha_core::RunMode::Agent,
+                    None,
+                    Some(5),
+                )
+                .await
+                .expect("an explicit cap starts");
+            assert_eq!(second.budget_cents, Some(5));
+            let stored = store.get_run(second.id).await.unwrap();
+            assert_eq!(stored.budget_cents, Some(5));
+        }
+
+        /// An explicit cap is not refused because the newest run already spent its own.
+        #[tokio::test]
+        async fn start_run_in_mode_explicit_budget_cents_succeeds_when_newest_is_exhausted() {
+            let store = temp_store().await;
+            let engine =
+                PipelineEngine::new(store.clone(), setup_providers_with_mock(), setup_settings());
+            let project = project();
+            store.create_project(&project).await.unwrap();
+            let mut first = engine
+                .start_run(project.id, "Build a todo app")
+                .await
+                .unwrap();
+            first.budget_cents = Some(100);
+            first.spent_cents = 100;
+            store.update_run(&first).await.unwrap();
+
+            let second = engine
+                .start_run_in_mode(
+                    project.id,
+                    "Build a second app",
+                    warsha_core::RunMode::Agent,
+                    None,
+                    Some(5),
+                )
+                .await
+                .expect("an explicit cap is not the exhausted inherited cap");
+            assert_eq!(second.budget_cents, Some(5));
+            assert_eq!(second.spent_cents, 0);
+            let stored = store.get_run(second.id).await.unwrap();
+            assert_eq!(stored.budget_cents, Some(5));
+        }
+
         #[tokio::test]
         async fn a_run_without_a_budget_advances() {
             let store = temp_store().await;

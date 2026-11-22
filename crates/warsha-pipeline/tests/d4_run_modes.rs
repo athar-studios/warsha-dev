@@ -155,7 +155,13 @@ async fn plan_run_stops_at_gateb_with_zero_workspace_changes() {
 
     let run = fx
         .engine
-        .start_run_in_mode(fx.project.id, "Plan only for now", RunMode::Plan, None, None)
+        .start_run_in_mode(
+            fx.project.id,
+            "Plan only for now",
+            RunMode::Plan,
+            None,
+            None,
+        )
         .await
         .expect("plan run starts");
 
@@ -345,7 +351,13 @@ async fn specfile_refusals_are_named() {
     fx.store.create_project(&detached).await.expect("project");
     let err = fx
         .engine
-        .start_run_in_mode(detached.id, "brief", RunMode::SpecFile, Some("packet.md"), None)
+        .start_run_in_mode(
+            detached.id,
+            "brief",
+            RunMode::SpecFile,
+            Some("packet.md"),
+            None,
+        )
         .await
         .expect_err("refused: no repo");
     let msg = err.to_string();

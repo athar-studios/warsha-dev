@@ -615,16 +615,26 @@ impl WarshaApiServer for WarshaRpc {
         idea: String,
         run_mode: Option<String>,
         spec_file_path: Option<String>,
+        budget_cents: Option<u64>,
     ) -> RpcResult<Run> {
         self.authorize(ext, "runs.start").await?;
         let run_mode = run_mode
             .and_then(|m| warsha_core::RunMode::from_str(&m).ok())
             .unwrap_or_default();
 
+        // An explicit `budget_cents` is written on the new row by the pipeline.
+        // A failure to store it is the call's error: the inherited cap is not a
+        // substitute. Omitted still inherits, and the pending map may apply later.
         let mut run = self
             .state
             .pipeline
-            .start_run_in_mode(project_id, &idea, run_mode, spec_file_path.as_deref())
+            .start_run_in_mode(
+                project_id,
+                &idea,
+                run_mode,
+                spec_file_path.as_deref(),
+                budget_cents,
+            )
             .await
             .map_err(|e| ErrorObject::owned(-32000, e.to_string(), None::<()>))?;
 
@@ -635,26 +645,8 @@ impl WarshaApiServer for WarshaRpc {
         if run.run_mode == warsha_core::RunMode::Plan
             || run.run_mode == warsha_core::RunMode::SpecFile
         {
-            let pending_budget = match PENDING_PROJECT_BUDGETS.write() {
-                Ok(mut pending) => pending.remove(&project_id),
-                Err(poisoned) => poisoned.into_inner().remove(&project_id),
-            };
-            if let Some(cents) = pending_budget {
-                match self.state.pipeline.set_run_budget(run.id, cents).await {
-                    Ok(updated) => {
-                        run = updated;
-                    }
-                    Err(e) => {
-                        warn!(
-                            run_id = %run.id.0,
-                            project_id = %project_id.0,
-                            error = %e,
-                            "failed to apply pending project budget to newly created run"
-                        );
-                    }
-                }
-            }
-            return Ok(run);
+            return finish_start_with_pending_budget(&self.state, project_id, run, budget_cents)
+                .await;
         }
 
         // Wire active harness + enabled skills + enabled plugins into run start context (F2)
@@ -795,27 +787,7 @@ impl WarshaApiServer for WarshaRpc {
             warn!(run_id = %run.id.0, "the run already had an agent session");
         }
 
-        let pending_budget = match PENDING_PROJECT_BUDGETS.write() {
-            Ok(mut pending) => pending.remove(&project_id),
-            Err(poisoned) => poisoned.into_inner().remove(&project_id),
-        };
-        if let Some(cents) = pending_budget {
-            match self.state.pipeline.set_run_budget(run.id, cents).await {
-                Ok(updated) => {
-                    run = updated;
-                }
-                Err(e) => {
-                    warn!(
-                        run_id = %run.id.0,
-                        project_id = %project_id.0,
-                        error = %e,
-                        "failed to apply pending project budget to newly created run"
-                    );
-                }
-            }
-        }
-
-        Ok(run)
+        finish_start_with_pending_budget(&self.state, project_id, run, budget_cents).await
     }
 
     async fn run_worktree(
@@ -4353,6 +4325,52 @@ impl warsha_pipeline::RunLiveness for StoreRunLiveness {
             Err(_) => false,
         }
     }
+}
+
+/// Apply a budget the owner set before any run existed.
+///
+/// An explicit `runs.start` cap already sits on `run` and wins: the pending
+/// entry is dropped and never written over it. When the caller omitted the
+/// cap, the pending value is stored with `set_run_budget` and then removed.
+/// A failed store of that pending value is a warning, matching the previous
+/// behavior — the run keeps the inherited cap. A failed store of an explicit
+/// cap never reaches here; `start_run_in_mode` already returned it.
+///
+/// The map guard is dropped before any `.await`: an `RwLockWriteGuard` is not
+/// `Send`, so it cannot be held across the pipeline call inside the trait impl.
+async fn finish_start_with_pending_budget(
+    state: &AppState,
+    project_id: ProjectId,
+    mut run: Run,
+    budget_cents: Option<u64>,
+) -> RpcResult<Run> {
+    let pending_budget = {
+        let mut pending = match PENDING_PROJECT_BUDGETS.write() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        // Present wins over a cap parked before this run existed. Drop the parked
+        // entry either way so a later omitted start does not revive it.
+        pending
+            .remove(&project_id)
+            .filter(|_| budget_cents.is_none())
+    };
+    if let Some(cents) = pending_budget {
+        match state.pipeline.set_run_budget(run.id, cents).await {
+            Ok(updated) => {
+                run = updated;
+            }
+            Err(e) => {
+                warn!(
+                    run_id = %run.id.0,
+                    project_id = %project_id.0,
+                    error = %e,
+                    "failed to apply pending project budget to newly created run"
+                );
+            }
+        }
+    }
+    Ok(run)
 }
 
 /// Directory under the daemon's data directory that holds handoff bundles.

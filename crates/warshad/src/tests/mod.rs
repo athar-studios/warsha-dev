@@ -344,6 +344,7 @@ async fn approved_agent_run(state: &Arc<DaemonState>, store: &Arc<Store>) -> Run
             "An agent turn".to_string(),
             None,
             None,
+            None,
         )
         .await
         .expect("the run starts");
@@ -2342,6 +2343,7 @@ async fn second_run_never_inherits_a_live_server() {
             "the first run".to_string(),
             None,
             None,
+            None,
         )
         .await
         .expect("run A starts");
@@ -2355,6 +2357,7 @@ async fn second_run_never_inherits_a_live_server() {
             &owner_ext(),
             project.id,
             "the second run".to_string(),
+            None,
             None,
             None,
         )
@@ -2415,7 +2418,14 @@ async fn terminal_advance_stops_the_owned_server() {
     let rpc = WarshaRpc::new(state.clone());
 
     let run = rpc
-        .start_run(&owner_ext(), project.id, "a run".to_string(), None, None)
+        .start_run(
+            &owner_ext(),
+            project.id,
+            "a run".to_string(),
+            None,
+            None,
+            None,
+        )
         .await
         .expect("the run starts");
     let started = rpc
@@ -2466,7 +2476,14 @@ async fn cancel_stops_the_owned_server() {
     let rpc = WarshaRpc::new(state.clone());
 
     let run = rpc
-        .start_run(&owner_ext(), project.id, "a run".to_string(), None, None)
+        .start_run(
+            &owner_ext(),
+            project.id,
+            "a run".to_string(),
+            None,
+            None,
+            None,
+        )
         .await
         .expect("the run starts");
     let started = rpc
@@ -2511,6 +2528,7 @@ async fn dead_run_entry_swept_lazily() {
             "the run that dies".to_string(),
             None,
             None,
+            None,
         )
         .await
         .expect("the run starts");
@@ -2550,6 +2568,7 @@ async fn dead_run_entry_swept_lazily() {
             "the next run".to_string(),
             None,
             None,
+            None,
         )
         .await
         .expect("the next run starts");
@@ -2580,7 +2599,14 @@ async fn a_run_closes_even_when_its_server_is_already_down() {
     let rpc = WarshaRpc::new(state.clone());
 
     let run = rpc
-        .start_run(&owner_ext(), project.id, "a run".to_string(), None, None)
+        .start_run(
+            &owner_ext(),
+            project.id,
+            "a run".to_string(),
+            None,
+            None,
+            None,
+        )
         .await
         .expect("the run starts");
     let started = rpc
@@ -3819,6 +3845,7 @@ mod runs_resume {
                 "Idea for resume auth".to_string(),
                 None,
                 None,
+                None,
             )
             .await
             .expect("run started");
@@ -3869,6 +3896,7 @@ mod runs_resume {
                 &owner,
                 project.id,
                 "Clinic booking app".to_string(),
+                None,
                 None,
                 None,
             )
@@ -3953,6 +3981,7 @@ mod runs_resume {
                 &owner,
                 project.id,
                 "Web application".to_string(),
+                None,
                 None,
                 None,
             )
@@ -4085,6 +4114,7 @@ mod runs_resume {
                 &owner,
                 project.id,
                 "Budgeted project".to_string(),
+                None,
                 None,
                 None,
             )
@@ -4224,6 +4254,7 @@ mod runs_start_budget {
                 "Budgeted project".to_string(),
                 None,
                 None,
+                None,
             )
             .await
             .expect("first run starts");
@@ -4237,7 +4268,14 @@ mod runs_start_budget {
 
         // runs.start is refused with the pipeline's message naming both numbers.
         let err = rpc
-            .start_run(&owner, project.id, "Second run".to_string(), None, None)
+            .start_run(
+                &owner,
+                project.id,
+                "Second run".to_string(),
+                None,
+                None,
+                None,
+            )
             .await
             .expect_err("runs.start must refuse an over-budget project");
         assert!(
@@ -4257,11 +4295,322 @@ mod runs_start_budget {
             .await
             .expect("budget.set succeeds");
         let second = rpc
-            .start_run(&owner, project.id, "Second run".to_string(), None, None)
+            .start_run(
+                &owner,
+                project.id,
+                "Second run".to_string(),
+                None,
+                None,
+                None,
+            )
             .await
             .expect("runs.start succeeds after budget.set");
         assert_eq!(second.budget_cents, Some(500));
         assert_eq!(second.spent_cents, 0);
+    }
+
+    /// An explicit `budget_cents` is the new run's cap, not the inherited 700.
+    #[tokio::test]
+    async fn runs_start_budget_cents_is_stored_exactly() {
+        let temp = crate::test_util::fresh_tempdir();
+        let (state, store) = test_state(temp.path()).await;
+        let rpc = WarshaRpc::new(state);
+        let owner = owner_ext();
+        let project = budget_project(&rpc, &owner, "Explicit Cap").await;
+        let first = rpc
+            .start_run(&owner, project.id, "First".to_string(), None, None, None)
+            .await
+            .expect("first run starts");
+        let (mut stored, version) = store.get_run_versioned(first.id).await.unwrap();
+        stored.budget_cents = Some(700);
+        stored.spent_cents = 10;
+        store.update_run_cas(&stored, version).await.unwrap();
+
+        let started = rpc
+            .start_run(
+                &owner,
+                project.id,
+                "Second".to_string(),
+                None,
+                None,
+                Some(5),
+            )
+            .await
+            .expect("explicit budget starts");
+        assert_eq!(started.budget_cents, Some(5));
+        let stored = store.get_run(started.id).await.unwrap();
+        assert_eq!(stored.budget_cents, Some(5));
+        assert_ne!(stored.budget_cents, Some(700));
+    }
+
+    /// Omitting `budget_cents` still inherits the newest run's 700.
+    #[tokio::test]
+    async fn runs_start_without_budget_cents_inherits_700() {
+        let temp = crate::test_util::fresh_tempdir();
+        let (state, store) = test_state(temp.path()).await;
+        let rpc = WarshaRpc::new(state);
+        let owner = owner_ext();
+        let project = budget_project(&rpc, &owner, "Inherit Cap").await;
+        let first = rpc
+            .start_run(&owner, project.id, "First".to_string(), None, None, None)
+            .await
+            .expect("first run starts");
+        let (mut stored, version) = store.get_run_versioned(first.id).await.unwrap();
+        stored.budget_cents = Some(700);
+        stored.spent_cents = 10;
+        store.update_run_cas(&stored, version).await.unwrap();
+
+        let started = rpc
+            .start_run(&owner, project.id, "Second".to_string(), None, None, None)
+            .await
+            .expect("omitted budget inherits");
+        assert_eq!(started.budget_cents, Some(700));
+        let stored = store.get_run(started.id).await.unwrap();
+        assert_eq!(stored.budget_cents, Some(700));
+    }
+
+    /// A negative and a string are `-32602` from the JSON-RPC parser, and neither
+    /// creates a run. JSON `null` is omit, not an error.
+    #[tokio::test]
+    async fn runs_start_invalid_budget_cents_is_32602_and_creates_no_run() {
+        let daemon = BudgetDaemon::start().await;
+        let port = daemon.port;
+        let project_id = daemon.project_id.clone();
+
+        let before = rpc_ok(
+            port,
+            "runs.list",
+            serde_json::json!({ "projectId": project_id }),
+        )
+        .await;
+        let before_len = before.as_array().map(Vec::len).unwrap_or(0);
+
+        for bad in [serde_json::json!(-1), serde_json::json!("5")] {
+            let body = rpc_call(
+                port,
+                serde_json::json!({
+                    "projectId": project_id,
+                    "idea": "should not start",
+                    "budgetCents": bad,
+                }),
+            )
+            .await;
+            let code = body["error"]["code"].as_i64();
+            assert_eq!(code, Some(-32602), "invalid budget was not -32602: {body}");
+            assert!(
+                body.get("result").is_none(),
+                "invalid budget created a run: {body}"
+            );
+        }
+
+        let after = rpc_ok(
+            port,
+            "runs.list",
+            serde_json::json!({ "projectId": project_id }),
+        )
+        .await;
+        assert_eq!(
+            after.as_array().map(Vec::len).unwrap_or(0),
+            before_len,
+            "invalid budget_cents created a run"
+        );
+
+        let inherited = rpc_ok(
+            port,
+            "runs.start",
+            serde_json::json!({
+                "projectId": project_id,
+                "idea": "null inherits",
+                "budgetCents": serde_json::Value::Null,
+            }),
+        )
+        .await;
+        assert!(
+            inherited.get("id").is_some(),
+            "null budget was refused: {inherited}"
+        );
+        daemon.shutdown().await;
+    }
+
+    /// An explicit cap on an exhausted project starts the run with that cap.
+    /// Omitting the field on the same project still refuses.
+    #[tokio::test]
+    async fn runs_start_explicit_budget_cents_overrides_exhausted_project() {
+        let temp = crate::test_util::fresh_tempdir();
+        let (state, store) = test_state(temp.path()).await;
+        let rpc = WarshaRpc::new(state);
+        let owner = owner_ext();
+        let project = budget_project(&rpc, &owner, "Exhausted Cap").await;
+        let first = rpc
+            .start_run(&owner, project.id, "First".to_string(), None, None, None)
+            .await
+            .expect("first run starts");
+        let (mut stored, version) = store.get_run_versioned(first.id).await.unwrap();
+        stored.budget_cents = Some(100);
+        stored.spent_cents = 100;
+        stored.status = RunStatus::Paused;
+        store.update_run_cas(&stored, version).await.unwrap();
+
+        let refused = rpc
+            .start_run(&owner, project.id, "Omitted".to_string(), None, None, None)
+            .await
+            .expect_err("omitted budget on an exhausted project must refuse");
+        assert!(
+            refused.message().contains("Project budget exhausted"),
+            "unexpected error: {}",
+            refused.message()
+        );
+        let runs_after_refusal = store.list_runs(project.id).await.unwrap();
+        assert_eq!(runs_after_refusal.len(), 1, "the refusal created a run");
+
+        let started = rpc
+            .start_run(
+                &owner,
+                project.id,
+                "Explicit".to_string(),
+                None,
+                None,
+                Some(5),
+            )
+            .await
+            .expect("explicit budget on an exhausted project starts");
+        assert_eq!(started.budget_cents, Some(5));
+        assert_eq!(started.spent_cents, 0);
+        let stored = store.get_run(started.id).await.unwrap();
+        assert_eq!(stored.budget_cents, Some(5));
+    }
+
+    /// A pending cap parked before any run must not replace an explicit one.
+    #[tokio::test]
+    async fn runs_start_explicit_budget_cents_beats_pending_budget() {
+        let temp = crate::test_util::fresh_tempdir();
+        let (state, store) = test_state(temp.path()).await;
+        let rpc = WarshaRpc::new(state);
+        let owner = owner_ext();
+        let project = budget_project(&rpc, &owner, "Pending Versus Explicit").await;
+        rpc.set_budget(&owner, project.id, 700)
+            .await
+            .expect("pending budget parks");
+
+        let started = rpc
+            .start_run(
+                &owner,
+                project.id,
+                "Explicit wins".to_string(),
+                None,
+                None,
+                Some(5),
+            )
+            .await
+            .expect("explicit budget starts");
+        assert_eq!(started.budget_cents, Some(5));
+        let stored = store.get_run(started.id).await.unwrap();
+        assert_eq!(stored.budget_cents, Some(5));
+    }
+
+    async fn budget_project(rpc: &WarshaRpc, owner: &RpcExtensions, name: &str) -> Project {
+        rpc.create_project(
+            owner,
+            name.to_string(),
+            "budget_cents".to_string(),
+            "en".to_string(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("project created")
+    }
+
+    struct BudgetDaemon {
+        handle: crate::DaemonHandle,
+        port: u16,
+        project_id: String,
+        _dir: tempfile::TempDir,
+    }
+
+    impl BudgetDaemon {
+        async fn start() -> Self {
+            let dir = crate::test_util::fresh_tempdir();
+            let config = DaemonConfig {
+                data_dir: dir.path().to_path_buf(),
+                auth_token: "budget-cents-token".to_string(),
+                http_port: 0,
+                ws_port: 0,
+                ..Default::default()
+            };
+            let handle = start_daemon_with_secrets(config, Arc::new(InMemorySecretStore::new()))
+                .await
+                .expect("the daemon starts");
+            let port = handle.rpc_port();
+            let created = rpc_ok(
+                port,
+                "projects.create",
+                serde_json::json!({
+                    "name": "Wire Budget",
+                    "description": "invalid budget_cents",
+                    "language": "en",
+                }),
+            )
+            .await;
+            let project_id = created["id"]
+                .as_str()
+                .expect("projects.create returns an id")
+                .to_string();
+            Self {
+                handle,
+                port,
+                project_id,
+                _dir: dir,
+            }
+        }
+
+        async fn shutdown(self) {
+            self.handle.shutdown().await;
+        }
+    }
+
+    async fn rpc_call(port: u16, params: serde_json::Value) -> serde_json::Value {
+        let response = reqwest::Client::new()
+            .post(format!("http://127.0.0.1:{port}"))
+            .header("Authorization", "Bearer budget-cents-token")
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "runs.start",
+                "params": params,
+            }))
+            .send()
+            .await
+            .expect("the daemon answers");
+        response
+            .json::<serde_json::Value>()
+            .await
+            .unwrap_or_else(|_| serde_json::json!({}))
+    }
+
+    async fn rpc_ok(port: u16, method: &str, params: serde_json::Value) -> serde_json::Value {
+        let response = reqwest::Client::new()
+            .post(format!("http://127.0.0.1:{port}"))
+            .header("Authorization", "Bearer budget-cents-token")
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": method,
+                "params": params,
+            }))
+            .send()
+            .await
+            .expect("the daemon answers");
+        let body = response
+            .json::<serde_json::Value>()
+            .await
+            .unwrap_or_else(|_| serde_json::json!({}));
+        assert!(
+            body.get("result").is_some(),
+            "{method} returned an error: {body}"
+        );
+        body["result"].clone()
     }
 
     /// N2 fix: `budget.set` and `budget.show` on a brand-new project with no runs
@@ -4319,6 +4668,7 @@ mod runs_start_budget {
                 "Build an online bookstore".to_string(),
                 None,
                 None,
+                None,
             )
             .await
             .expect("start_run must succeed");
@@ -4370,7 +4720,14 @@ mod runs_followup {
             .await
             .expect("project created");
         let run = rpc
-            .start_run(&owner, project.id, "Initial idea".to_string(), None, None)
+            .start_run(
+                &owner,
+                project.id,
+                "Initial idea".to_string(),
+                None,
+                None,
+                None,
+            )
             .await
             .expect("run started");
 
@@ -4448,6 +4805,7 @@ mod runs_followup {
                 "In-flight cancel signal test".to_string(),
                 None,
                 None,
+                None,
             )
             .await
             .expect("run2 started");
@@ -4510,6 +4868,7 @@ mod provider_truth {
                 &owner,
                 project.id,
                 "Task tracker app".to_string(),
+                None,
                 None,
                 None,
             )
@@ -4586,6 +4945,7 @@ mod provider_truth {
                 "Followup test idea".to_string(),
                 None,
                 None,
+                None,
             )
             .await
             .expect("run started");
@@ -4648,6 +5008,7 @@ mod provider_truth {
                 "Explicit routing idea".to_string(),
                 None,
                 None,
+                None,
             )
             .await
             .expect("run started");
@@ -4688,7 +5049,14 @@ mod provider_truth {
             .await
             .expect("project created");
         let run = rpc
-            .start_run(&owner, project.id, "Resume idea".to_string(), None, None)
+            .start_run(
+                &owner,
+                project.id,
+                "Resume idea".to_string(),
+                None,
+                None,
+                None,
+            )
             .await
             .expect("run started");
 
@@ -6696,6 +7064,7 @@ mod agent_tool_events {
                 "an agent turn".to_string(),
                 None,
                 None,
+                None,
             )
             .await
             .expect("the run starts");
@@ -7141,6 +7510,7 @@ mod agent_tool_events {
                 "a run".to_string(),
                 None,
                 None,
+                None,
             )
             .await
             .expect("the run starts");
@@ -7203,6 +7573,7 @@ mod agent_tool_events {
                 &owner_ext(),
                 failing_project.id,
                 "a run".to_string(),
+                None,
                 None,
                 None,
             )
@@ -7503,6 +7874,7 @@ async fn cancel_during_hung_stage_stops_promptly() {
             &owner_ext(),
             project.id,
             "test cancel while hanging".to_string(),
+            None,
             None,
             None,
         )
