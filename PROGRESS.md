@@ -1,6 +1,23 @@
 # PROGRESS.md — Warsha Build Log
 
+## Run 2026-11-20 — FIX-UX-UPTIME: Fix real UX issue F5 (uptime_seconds always 0 in Warsha 0.3.0)
+
+- **Root cause**: `crates/warshad/src/http.rs` hardcoded `uptime_seconds: 0`. `DaemonState` lacked a `start_time` field; only `WarshaRpc` held a `start_time` instance (created upon RPC construction rather than daemon startup). Furthermore, `@warsha/client` omitted `uptime_seconds` from `HealthReport` and `client.health()`, and desktop `AboutSection.tsx` did not display uptime.
+- **Fix**:
+  - Rust: Added `pub start_time: std::time::Instant` to `DaemonState`. Updated HTTP `health_handler` to report `state.start_time.elapsed().as_secs()`. Updated `WarshaRpc` to initialize its start time from `DaemonState.start_time`. Added proving tests verifying monotonic growth on HTTP health and truthful uptime on RPC health.
+  - TS Client: Added `uptimeSeconds?: number` to `HealthReport` and decoded `uptime_seconds` in `client.health()`. Added unit tests in `packages/client/src/index.test.ts`.
+  - i18n: Added `settings.about.uptime` translation key in `packages/i18n/src/v3/en/settings.ts` ('Uptime') and `ar/settings.ts` ('مدة التشغيل').
+  - Desktop: Added `uptimeSeconds?: number` to `HealthInfo` in `apps/desktop/src/v3/data/useHealth.ts`. Added safe duration formatting `formatUptime` in `apps/desktop/src/date.ts` with tests in `apps/desktop/src/date.test.ts`. Displayed uptime in `AboutSection.tsx` and included it in system info copy. Added tests in `apps/desktop/src/v3/pages/settings/Settings.test.tsx` and `useHealth.test.ts`.
+- **Verification**:
+  - `cargo fmt --check`: exit 0
+  - `cargo clippy -p warshad --all-targets -- -D warnings`: exit 0
+  - `cargo test -p warshad`: all tests passed (including `http_health_reports_monotonic_uptime_growth`, `rpc_health_reports_truthful_uptime_from_state_start_time`)
+  - `pnpm -r typecheck`: exit 0 (all 7 workspace packages)
+  - `pnpm -r lint`: exit 0
+  - `vitest run` on client, i18n, and desktop (all 79 test files, 668 tests passed)
+
 ## Run 2026-11-20 — Pre-release gate matrix (r-next/integration@d2a4e3d)
+
 - **Commands**:
   - `cargo fmt --all -- --check`: exit 0
   - `cargo clippy --workspace --all-targets -- -D warnings`: exit 0
@@ -11,17 +28,17 @@
   - `node scripts/check-wire-contract.mjs`: 11 checks 0 violations
   - `node scripts/check-engineering-policy.mjs`: 8 checks 0 failures
 
-| Severity | Finding |
-| :--- | :--- |
-| HIGH | None (deny 0, no secret exfiltration paths found) |
-| MEDIUM | None |
-| LOW | 2 gitleaks generic-secret hits in `docs/book/run-modes.html:338` and `docs/book/print.html:5701`, both literal `<redacted>` placeholder in docs text, false positives, no remediation. |
-
+| Severity | Finding                                                                                                                                                                                |
+| :------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| HIGH     | None (deny 0, no secret exfiltration paths found)                                                                                                                                      |
+| MEDIUM   | None                                                                                                                                                                                   |
+| LOW      | 2 gitleaks generic-secret hits in `docs/book/run-modes.html:338` and `docs/book/print.html:5701`, both literal `<redacted>` placeholder in docs text, false positives, no remediation. |
 
 ## Run 2026-11-20 — R2 FIX-LANE INTEGRATION
+
 - **Changes**: Merged lanes H1, H2, M1, SYM, M5.
 - **Risky Commands**: Unified H1/H2 policies in `crates/warsha-pipeline/src/risky_commands.rs`.
-- **Verification**: 
+- **Verification**:
   - `cargo fmt --check`: PASSED.
   - `cargo clippy -p warsha-pipeline --all-targets -- -D warnings`: PASSED.
   - `cargo clippy -p warshad --all-targets -- -D warnings`: PASSED.
@@ -31,6 +48,7 @@
 - **Decisions**: D-RN-R2-H1, D-RN-R2-H2, D-RN-R2-M1, D-RN-R2-M2-M4, D-RN-R2-M5 (see DECISIONS.md).
 
 ## Run 2026-11-20 — FIX-RELEASE: verifier x86_64-only (D-RN-REL-AARCH64-1)
+
 - **Root cause**: `scripts/verify-release-artifacts.mjs` lines 90-93 hard-failed with `missing CLI asset for aarch64` and `missing daemon asset for aarch64`. However, `release.yml` rust-build matrix (lines 128-138) and desktop matrix (lines 232-246) build x86_64 only by pipeline design (`x86_64-unknown-linux-gnu`, `x86_64-apple-darwin`, `x86_64-pc-windows-msvc`). Draft 452168316 holds 15 x86_64-only assets (6 rust binaries, 6 desktop installers, 2 SBOMs, checksums.sha256). No aarch64 assets exist. This was the second and remaining promotion blocker after the checksum scoping fix.
 - **Fix**: Updated `scripts/verify-release-artifacts.mjs` to keep x86_64 CLI and daemon checks as hard fail-closed failures (`problems.push`), while downgrading the missing aarch64 CLI/daemon checks to non-blocking informational notes (`report.arch = "x86_64-only"` and `report.notes`). All other checks (tag/version identity, non-empty assets, checksums listed and matching in both directions, desktop installers, SBOMs, signing scope) remain strictly unchanged and fail-closed.
 - **Verification**:
@@ -62,34 +80,40 @@
 - **Status**: uncommitted on `r-next/integration` pending PM review to land together with checksum fix (D-RN-REL-CHECKSUM-1).
 
 ## Run 2026-11-20 — FIX-RELEASE: scope checksums to shipped artifacts (D-RN-REL-CHECKSUM-1)
+
 - **Root cause**: Release job `find . -type f` hashed merged download tree (docs, internal payloads, etc.), creating ~458 non-shipped checksum names; verifier FAILED (aarch64 required but matrix x86_64-only; checksums 471 lines vs 15 shipped; sha256sum -c hundreds FAILED open-or-read — from worker report, mark as worker-reported not re-run). Verifier aarch64 evidence: verifier required aarch64 CLI/daemon assets (`missing CLI asset for aarch64`, `missing daemon asset for aarch64`), but `release.yml` matrix is x86_64-only and draft 452168316 holds 15 x86_64-only assets.
 - **Fix**: Scoped checksum generation to 6 rust binaries, 6 desktop installers, 2 SBOMs (14 hashed files; draft holds 15 assets incl. checksums.sha256 itself).
 - **Verification**: Verified scoped logic on dist-verify-44654484785/ (14 assets found, missing aarch64 assets are only reported issues); YAML_OK; policy 8/0 pass.
 - **Status**: uncommitted pending commit/push.
 
 ## Run 2026-11-20 — FIX-RELEASE: Guard repo context, pin draft target, scope placeholder grep (D-RN-REL-DRAFT-1, D-RN-REL-PLACEHOLDER-1)
+
 - **Root cause**: Guard without repo context (`release` job has no checkout step, so `gh release view` could not resolve repository and the guard never fired) + unpinned target (`softprops/action-gh-release@v2` defaulted target to `main`, reusing stale polluted draft 452058329 containing 267 junk payload assets including AppRun and .so files) + binary grep (`Verify no placeholders in all artifacts` grep scanned binary payloads under `release/desktop/appimage/Warsha.AppDir/...` causing false positives on nested bundles retained on disk for the count assertion).
 - **Fix**: Added `GH_REPO: ${{ github.repository }}` env to guard step; added `target_commitish: ${{ github.sha }}` to draft release action; updated verifier to `grep -rI --exclude-dir="*AppDir*" "PLACEHOLDER" release/`. Stale draft 452058329 deleted before re-run so the action starts clean.
 - **Status**: committed 8e244fc, pushed r-next/integration, tag v0.3.0 moved to 8e244fc, run 44654484785 success, stale draft 452058329 deleted, new draft 452168316 target=8e244fc 15 assets.
 
 ## Run 2026-11-20 — FIX-RELEASE: Nested bundle upload collisions (D-RN-REL-DESKTOP-1)
+
 - **Root cause**: After the organizer flatten was dropped, `release/desktop/**/*` in `Create draft release` included hundreds of same-basename payload files (`copyright`, `Warsha.desktop`, `.so` files), causing `HttpError: Not Found` on `releases/assets#delete-a-release-asset` as the uploader's overwrite-by-name logic failed.
 - **Fix**: Replaced recursive glob with explicit installer-only glob list. Added installer-count assertion to `Organize release files`.
 - **Verification**: Installer-count assertion added and verified to match expected count.
 - **Status**: uncommitted pending commit/push.
 
 ## Run 2026-11-20 — FIX-RELEASE: Organize desktop bundles (D-RN-REL-ORGANIZE-1)
+
 - **Root cause**: `find release/desktop -mindepth 2 -type f -exec mv -t release/desktop/ {} +` caused collisions because Ubuntu `bundle/**/*` upload preserves nested directories (deb/, rpm/, AppImage/, nsis/, msi/, dmg/), leading to hundreds of same-name payload files (copyright, Warsha.desktop, .so files) clobbering at the top level.
 - **Fix**: Removed the flatten step. Desktop bundles remain nested per-OS (`release/desktop/<os>/...`). Updated `Create draft release` to use `release/desktop/**/*` recursive glob for upload.
 - **Verification**: `test -n "$(find release/desktop -mindepth 2 -type f -print -quit)"` ensures nested files are present.
 - **Status**: uncommitted pending commit/push.
 
 ## Run 2026-11-20 — FIX-RELEASE: Verifier grep quoting (D-RN-REL-VERIFY-1)
+
 - **Root cause**: run 44627337731 `Verify no placeholders` failed `homebrew formula has no real sha256` even though the generated formula carries a valid 64-hex sha256 (`6fac12…`, downloaded from `package-manifests` artifact and inspected). The verifier's homebrew/scoop greps used single-quoted DOUBLE-backslash `\\{64\\}`; in single quotes the shell passes both backslashes literally, so grep matched literal backslash + `{64}` and never the hash. Winget (double-quoted `\\{64\\}`) was unaffected.
 - **Fix**: `release.yml` homebrew/scoop verifier greps → single-backslash BRE `\{64\}`; winget untouched. Proved locally: old patterns FAIL / new patterns PASS on the real CI-generated files; `YAML_OK`; `check-engineering-policy.mjs` 8/0.
 - **Status**: uncommitted pending commit/push/retag/CI.
 
 ## Run 2026-11-20 — FIX-RELEASE: Hash Homebrew formula and Scoop manifest
+
 - **Delivered**:
   1. `.github/workflows/release.yml`: Rewrote `Create Homebrew formula` step to download the source tarball, compute sha256, and use that hash instead of grepping `artifacts/checksums.sha256`.
   2. `.github/workflows/release.yml`: Fixed `Create Scoop manifest` to use `ARTIFACT="warsha-x86_64-pc-windows-msvc.exe"` instead of `warsha-windows.exe`.
@@ -102,10 +126,10 @@
 - [x] REL-SCOOP: Fix Scoop manifest generation (uncommitted — pending CI)
 
 ## Run 2026-11-20 — Unsigned desktop builds for 0.3.0
+
 - Build unsigned installers on all OSes by gating secret envs and using tauri.ci.unsigned.json override.
 - Defaulted `signing_scope` to `unsigned` in `release.yml` and `promote` job.
 - Verification commands pass.
-
 
 - [x] P10 Hardening: Claude Review §P10 hardening items (rel-p10-harden)
 - [x] FIX-MISC: Advisory debt, P9 manifests, UI drift, Records, Relay lints (merged ed08b2c)
@@ -155,6 +179,7 @@
 - **Status**: Left uncommitted on branch `rel-p11-final` for review.
 
 ## Run 2026-11-19 — P10 Hardening (Claude Review §P10)
+
 - **Delivered**:
   1. Token length enforcement: `crates/warshad/src/startup.rs` enforces ≥32-character `WARSHA_AUTH_TOKEN` when binding to non-loopback addresses with clear error `DaemonError::Config`. Added unit test `tests::auth_token_must_be_long_enough_for_non_loopback` in `crates/warshad/src/tests/mod.rs`.
   2. Dev-server origin trust gating: `apps/desktop/src-tauri/src/lib.rs` gates `http://localhost:5173` behind `#[cfg(debug_assertions)]`. `docker/entrypoint.sh` gates dev server CORS trust behind `WARSHA_DEV=true` (or `1`).
@@ -195,15 +220,17 @@
 - **Measured** (`target/discrimination/R-EXT-4/`, reverse-patched and restored — `git diff` empty after each): `connect_with` back on `is_wired()` → **11 of 14 pipeline HTTP tests fail** (the 3 that pass are exactly the recorded-default ones); the `404`-expiry branch disabled → the daemon session test fails (12 pass); `recorded = kind !== 'stdio'` → **2 UI tests fail** (15 pass). Greens: 14/14, 13/13, 17/17. No internet and no fixture file: every daemon proof is a real axum server on `127.0.0.1:0` read by the real `reqwest` client, with the server's own header transcript as the evidence; the pipeline half is proved with a trait fake and **no socket at all**.
 - **Gates**: fmt 0; clippy `-D warnings` 0; `cargo test -p warsha-pipeline --all-targets` 0 (546 passed, 7 ignored); `cargo test -p warshad --all-targets` 0; `cargo test --workspace --all-targets` **0 (1,129 passed, 0 failed)**; wire **11 checks / 0 violations** + self-test green (unchanged from base); arch 5/0 + self-test; policy 8/0 + self-test; `cargo deny check` 0; client 193; `warsha-desktop` ConnectionsSection 17; i18n 58 (ar/en parity with the one new key); actions 12; ds-v3 0; `pnpm -r typecheck && pnpm -r lint` 0 (one pre-existing `inbox/index.tsx` warning).
 - **Packet corrections**: the planner's `@warsha/desktop` is **`warsha-desktop`** in `apps/desktop/package.json` (`@warsha/client` and `@warsha/i18n` were right).
-- **Deviation, recorded**: `crates/warshad/tests/security_identity.rs` asserted that `mcp.connect` with `https://mcp.example/mcp` is *recorded* — the exact behaviour this packet ends, so `cargo test -p warshad --all-targets` could not be green with it as written. The secure-url half moved onto a `web_socket` config (same url-policy function, nothing dials it, no network); the plain-`http` refusal is untouched and nothing is weakened. Only edit outside the packet's allowed files.
+- **Deviation, recorded**: `crates/warshad/tests/security_identity.rs` asserted that `mcp.connect` with `https://mcp.example/mcp` is _recorded_ — the exact behaviour this packet ends, so `cargo test -p warshad --all-targets` could not be green with it as written. The secure-url half moved onto a `web_socket` config (same url-policy function, nothing dials it, no network); the plain-`http` refusal is untouched and nothing is weakened. Only edit outside the packet's allowed files.
 - **Pre-existing red flake, named not fixed**: `process_spawn::k5_repair::stderr_secret_spawned_child_redacts_sentinel_from_ring_and_tracing` fails when run alone on the untouched base (`cargo test -p warsha-pipeline --lib process_spawn::k5_repair` at `1b9bc69` → 9 passed / 1 failed, "tracing event must contain masked output: "), passed in the final two full-suite runs, and failed once mid-branch. Order/timing dependent; `process_spawn.rs` is out of scope.
 - **Carried**: remote credentials (bearer/OAuth) stay out of scope — a `401` is reported, never solved; SSRF hardening for an owner-chosen `https` host resolving to a private address is unchanged from the recorded-only surface (`DECISIONS.md`); `docs/DAEMON.md`'s `mcp.disconnect` row still describes only the child stop, because only the `mcp.connect` row was in the packet's allowed list.
 
 ## Run 2026-11-17 — B2 (Permission Enforcement)
+
 - 2026-11-17: Initialized B2 packet, defined todo list, investigated `build_agent_loop_in` injection points, updated receipt schema and tests, started B2-report.md and DECISIONS.md.
 - Cumulative spend: 5 units (of 20).
 
 ## Run 2026-11-17 — N3 (CLI run isolation)
+
 - 2026-11-17: Initialized N3, investigated implementation requirements, created `RunReceipt` struct, updated `code_stage_report` to include worktree path, branch, and timeout, and added `commit_run_worktree` call after CLI stage success.
 - Cumulative spend: ~40 units (of 400).
 
@@ -305,7 +332,7 @@
 ## Run 2026-11-13 — R-SEC-1 + R-SEC-2: DONE, merged, full gate table green (PM-verified)
 
 - **R-SEC-1 (CSP surface — checkpoint rows 8+9)**: Coder commits `b495226` + `66c0012` + `ce237fb`, merged at `5145040`. The policy is now one `pub const REMOTE_CSP` (warshad lib.rs:5966) with `object-src 'none'; base-uri 'self';` appended — 337 chars, byte-identical daemon↔remote meta, directive-parity with tauri.conf.json; app assembly extracted into `http_app` so the new test `the_http_listener_sends_the_canonical_csp_and_framing_headers` drives the real router and asserts CSP == REMOTE_CSP + nosniff + DENY on /health and the static fallback; SECURITY.md quotes the canonical string; new **W11 `csp-parity`** check in check-wire-contract.mjs (now 11 checks) compares all three surfaces every gate run with 4 self-test mutants. Worker discrimination: dropping the `.layer()` → test FAILED; removing nosniff → FAILED; restored → green. Accepted deviation (investigated): in-process router test instead of a socket — the socket form made `the_startup_listener_lines_are_written_once` flaky (2/3 runs; second caller of the startup `info!` callsite), and changing that original test was forbidden. Limit: `pnpm --filter warsha-remote build` not run (worktree has no node_modules; the meta is plain HTML covered by W11).
-- **R-SEC-2 (process policy edges — checkpoint rows 3+4)**: Coder commits `e5d0771` + `ab2f2ac`, merged at `55d4230`. (M3) new git argument grammar: `-c`/`--config`/`--config-env` (separate + attached) refused when the config key names a program/hook (alias.*, filter.*, core.pager/editor/fsmonitor/fsmonitorHook, diff.external, credential.helper, core.hooksPath, core.attributesFile, sequence.editor, interactive.diffFilter — case-insensitive) AND the value is non-empty; empty values stay allowed so the evidence neutralization `git -c core.fsmonitor= diff --no-ext-diff` keeps passing (both evidence tests green); `--exec-path` refused outright; check_command/check_invocation/execute share one judgement; the overpromising refusal text fixed. (M4) `InMemoryProcessManager` holds `Arc<CommandPolicy>` (no policy-less manager; `new()`/`shared()` install the shipped safe list), `restart` re-checks before touching the child → `ProcessError::PolicyRefused`; the daemon's two construction sites pass the configured list. Worker discrimination: disabling the config-key refusal → exactly the 4 new M3 tests failed; disabling the restart re-check → the new M4 test failed; restored → green. Three original restart tests moved to a `shell_manager()` harness — assertions untouched (fail-closed, not weakening). Open remainder: the K8/SECURITY.md trust-boundary doc half of M3 (docs packet).
+- **R-SEC-2 (process policy edges — checkpoint rows 3+4)**: Coder commits `e5d0771` + `ab2f2ac`, merged at `55d4230`. (M3) new git argument grammar: `-c`/`--config`/`--config-env` (separate + attached) refused when the config key names a program/hook (alias._, filter._, core.pager/editor/fsmonitor/fsmonitorHook, diff.external, credential.helper, core.hooksPath, core.attributesFile, sequence.editor, interactive.diffFilter — case-insensitive) AND the value is non-empty; empty values stay allowed so the evidence neutralization `git -c core.fsmonitor= diff --no-ext-diff` keeps passing (both evidence tests green); `--exec-path` refused outright; check_command/check_invocation/execute share one judgement; the overpromising refusal text fixed. (M4) `InMemoryProcessManager` holds `Arc<CommandPolicy>` (no policy-less manager; `new()`/`shared()` install the shipped safe list), `restart` re-checks before touching the child → `ProcessError::PolicyRefused`; the daemon's two construction sites pass the configured list. Worker discrimination: disabling the config-key refusal → exactly the 4 new M3 tests failed; disabling the restart re-check → the new M4 test failed; restored → green. Three original restart tests moved to a `shell_manager()` harness — assertions untouched (fail-closed, not weakening). Open remainder: the K8/SECURITY.md trust-boundary doc half of M3 (docs packet).
 - **PM gate runs on the merged tree (`55d4230`)**: `cargo test --workspace --all-targets --no-fail-fast` → **941 passed / 0 failed / 10 ignored** (935 + 6 new); fmt/clippy/deny 0; arch 5 rules 0 violations; policy 8 checks 0 failures; **wire 11 checks 0 violations** (was 10; W11 added). Both warshad-touching branches merged clean (disjoint regions).
 - **R-SEC backlog remaining**: M5 (keychain account scoping) + M6 (mcp.call/send permission-table consultation) + M7 (vacuous auto-discovery test) — packet R-SEC-3 next; then L10-L13 hygiene (basename allow-list, deny_all default, second allow-list parity, vacuous allow test), the ACL test + 2 stale docs, and the M3 docs half.
 
@@ -823,18 +850,19 @@ visual 308/308, flows 30/30, layout 12/12, onboarding 3/3), remote 91 listed / *
 G0's verdict is `fail` by design: it records the baseline rather than claiming green. The 8 desktop
 failures were all `settings` failing axe `aria-required-children [critical]`.
 
-| Packet | Merged | Review | Verification |
-| --- | --- | --- | --- |
-| **W8** G0 truth repair (a11y) | C0 `5abe5ef` | APPROVE | 8/8 worktree gates (446 >= 444) + **G8.4 = 793/0, 0 snapshot writes** |
-| **W1** README truth (docs) | C1 `99a7c03` | APPROVE | **13/13** (re-derived by the integrator) |
-| **W6** pipeline hardening (Rust) | C1 | APPROVE | **9/9** — 352 >= 350 and 743 >= 734, recomputed from raw `test result: ok.` lines |
-| **W7** Android signed APK | C1 | APPROVE | gates green incl. a **byte-reproducible** APK: two clean rebuilds, identical SHA-256 `ce60f2bd…01ff`, 840,513 B |
-| **W4** wire/client/harness | C1 | REQUEST-CHANGES -> repair -> APPROVE | **13/13** — `RPC_METHODS` 75 (bijection), `wire: 9 checks, 0 violations` |
-| **W3** DS v2 in `packages/ui` | C1.5 `406240a` | APPROVE | **12/12** + G3.8 **793/0**; ui 181, desktop 446, remote 221 |
-| **W2** canonical docs | C2a `c2709169` + C2b/C2c | RC -> repair -> APPROVE (twice) | **10/10**; `mdbook test` 0 |
-| **W5** apps adoption + wiring | C2d `77a02c1` | APPROVE (after repair 2) | **14/14** worktree gates (desktop 464, budget-0 ratchet 181) + **G5.10 = 793/0, 0 snapshot writes** |
+| Packet                           | Merged                   | Review                               | Verification                                                                                                    |
+| -------------------------------- | ------------------------ | ------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| **W8** G0 truth repair (a11y)    | C0 `5abe5ef`             | APPROVE                              | 8/8 worktree gates (446 >= 444) + **G8.4 = 793/0, 0 snapshot writes**                                           |
+| **W1** README truth (docs)       | C1 `99a7c03`             | APPROVE                              | **13/13** (re-derived by the integrator)                                                                        |
+| **W6** pipeline hardening (Rust) | C1                       | APPROVE                              | **9/9** — 352 >= 350 and 743 >= 734, recomputed from raw `test result: ok.` lines                               |
+| **W7** Android signed APK        | C1                       | APPROVE                              | gates green incl. a **byte-reproducible** APK: two clean rebuilds, identical SHA-256 `ce60f2bd…01ff`, 840,513 B |
+| **W4** wire/client/harness       | C1                       | REQUEST-CHANGES -> repair -> APPROVE | **13/13** — `RPC_METHODS` 75 (bijection), `wire: 9 checks, 0 violations`                                        |
+| **W3** DS v2 in `packages/ui`    | C1.5 `406240a`           | APPROVE                              | **12/12** + G3.8 **793/0**; ui 181, desktop 446, remote 221                                                     |
+| **W2** canonical docs            | C2a `c2709169` + C2b/C2c | RC -> repair -> APPROVE (twice)      | **10/10**; `mdbook test` 0                                                                                      |
+| **W5** apps adoption + wiring    | C2d `77a02c1`            | APPROVE (after repair 2)             | **14/14** worktree gates (desktop 464, budget-0 ratchet 181) + **G5.10 = 793/0, 0 snapshot writes**             |
 
 Notable corrections made during the run, kept visible rather than tidied away:
+
 - W7's original G7.5 verdict ("not reproducible") was **wrong**: the APK v2 signature is deterministic
   (`0x0104` PKCS#1 v1.5); the real drift was AGP's encrypted dependency-metadata block
   (`0x504b4453`) plus non-reproducible source maps. Both were fixed inside `apps/mobile/**`.
@@ -910,7 +938,7 @@ Re-audited the repository via `egm-bootstrap-orchestrator` after Qoder landed co
   - Stubbed 4 Wave 2 mount-time read RPCs (`files.tree`, `integrations.list`, `plugins.list`, `skills.list`) in `apps/desktop/e2e/harness.ts` (`RPC_METHODS`: 40 → 44) and added `apps/desktop/real-acceptance.cjs`.
 - **Remaining Documentation & Contract Gaps**:
   - **5 of the 19 new `README.md` files carry factual drift**: `crates/warsha-remote/README.md` (claims paired phone speaks without daemon token and encrypts payload via `EncryptedChannel`, whereas `process_handshake` at `lib.rs:653` is a stub returning `Ok(false)`), `crates/warsha-git/README.md` (claims pipeline calls it during runs), `templates/README.md` (omits the 4 templates embedded in `crates/warsha-git/src/lib.rs:950-1049`), `apps/desktop/README.md` (omits the 45 behavioral E2E tests and `real-acceptance.cjs`), and `crates/warsha-pipeline/README.md` (lists 11 of 25 submodules).
-  - **`README.md:93-95` & `README.ar.md:93-94`**: Still falsely state *"the mobile app registers no service worker"* (contradicting `registerShellWorker` in `apps/remote/src/main.tsx:44` and `dist/sw.js`) and keep *"Planned:"* at line 153; Roadmap table omits M10–M20 and Wave 2.
+  - **`README.md:93-95` & `README.ar.md:93-94`**: Still falsely state _"the mobile app registers no service worker"_ (contradicting `registerShellWorker` in `apps/remote/src/main.tsx:44` and `dist/sw.js`) and keep _"Planned:"_ at line 153; Roadmap table omits M10–M20 and Wave 2.
   - **Untouched Stale Docs**: `docs/ARCHITECTURE.md` (§1 omits `apps/mobile`, `docker/`, `deploy/`; §2.3 still claims only 2 crates have submodules and lists 16 instead of 25 for `warsha-pipeline`), `docs/DEPLOY.md:79-91` (still claims `warshad` does not serve static remote assets), `docs/VERIFY.md:268-277` (old `INSTALL.md` hash), `docs/src/architecture.md:202-280` (claims no service worker, no Docker/compose, `127.0.0.1` only), `SECURITY.md:69-71, 165-166` (claims no `bind_host` and no `deny.toml`), `docs/DEVELOPERS.md:18-39` (claims `octocrab`), `docs/ARCH_RULES.md:132, 351-355` (16 modules / 60 RPCs instead of 25 / 68), `docs/designs/SITEMAP.md`, `docs/src/SUMMARY.md`, and `_agents/skills/warsha_elephant/SKILL.md`.
 - **Remaining Codebase, Wire Contract, UI, Mobile & Pipeline Gaps**:
   - **Wire & Harness**: Stale `REQUIRE_NO_KNOWN_DRIFT = false` comments in `scripts/check-wire-contract.mjs` and `packages/client/src/index.ts`; 15 remaining Wave 2 mutation/detail RPCs (`harness.get|import|select|delete`, `skills.import|toggle|delete`, `plugins.install|toggle|configure|remove`, `models.add|remove`, `integrations.connect|disconnect|test`, `files.read`) and 4 Wave 2 screens (`harnesses`, `skills`, `plugins`, `models`) still missing from `apps/desktop/e2e/harness.ts`; 27 daemon-registered RPCs (`routines.*`, `backend.get|set`, `runmode.*`, `preferences.*`, `pairing.*`, `preview.*`, `process.*`, `mcp.*`, `providers.check_models`) still lack `WarshaClient` wrappers.
@@ -936,11 +964,11 @@ Executed an EGM Bootstrap audit across the entire Warsha repository (`crates/`, 
 
 After the Wave 2 harness stub fix (`08d61af`) and the authorized baseline refreshes, the desktop E2E matrix was rerun end to end on the Linux x86_64 capture host (`/root/warsha-visual`, chromium, pinned IBM Plex faces and the pinned AA config). Real exit codes were captured for each run:
 
-| Suite | Scope | Result |
-|---|---|---|
-| states | 21 screens × 3 viewports × 2 locales × 2 themes | **252 passed (6.2m)**, exit 0 |
-| visual | 77 screen×viewport pairs × 2 locales × 2 themes | **308 passed (4.9m)**, exit 0 |
-| a11y | 22 screens × 2 viewports × 2 locales × 2 themes + 4 landmark cases | **180 passed (4.3m)**, exit 0 |
+| Suite    | Scope                                                                                          | Result                        |
+| -------- | ---------------------------------------------------------------------------------------------- | ----------------------------- |
+| states   | 21 screens × 3 viewports × 2 locales × 2 themes                                                | **252 passed (6.2m)**, exit 0 |
+| visual   | 77 screen×viewport pairs × 2 locales × 2 themes                                                | **308 passed (4.9m)**, exit 0 |
+| a11y     | 22 screens × 2 viewports × 2 locales × 2 themes + 4 landmark cases                             | **180 passed (4.3m)**, exit 0 |
 | behavior | `flows.spec.ts` + `layout.spec.ts` + `onboarding.spec.ts` (real interactions, not screenshots) | **45 passed (47.4s)**, exit 0 |
 
 - 100 states baselines were refreshed on the same host in `41f67f8`; the 120 visual baselines were refreshed in this round and were still uncommitted when this entry was written.
@@ -975,15 +1003,15 @@ Orchestrator-managed execution across seven strict file-isolated workstreams (`W
 
 ### Task DAG (Workstreams W1–W7)
 
-| id | workstream | files owned | depends on | acceptance criteria | status | dispatches |
-|---|---|---|---|---|---|---|
-| W7 | Repo hygiene | `.gitignore`, `deny.toml`, `.gitleaks.toml`, `Cargo.lock`, `apps/desktop/src-tauri/Cargo.lock` | — (runs alone first) | `cargo-deny --manifest-path Cargo.toml --all-features check` exit 0; `cargo-deny --manifest-path apps/desktop/src-tauri/Cargo.toml --all-features check --config deny.toml` exit 0; `gitleaks detect --source . --config .gitleaks.toml --no-banner --redact --exit-code 1` exit 0; `git ls-files --error-unmatch Cargo.lock` exit 0 (`5040b46`) | completed | 1 |
-| W3 | Daemon event stream | `crates/warshad/**`, `crates/warsha-remote/**`, `packages/client/**`, `apps/desktop/e2e/harness.ts` | W7 | `cargo test -p warshad -p warsha-remote --all-targets --no-fail-fast` exit 0 (covering `runs.subscribe`, `/events` monotonic `seq`, `since_seq` / `Last-Event-ID`, gap detection & full resync, secret redaction, subscribe/unsubscribe, daemon restart, dropped socket, slow consumer, two clients receiving identical order, `0.0.0.0` + `advertised_host`, `runs.advance`, `runs.cancel`, `runs.followup`, `runs.artifacts`); `node scripts/check-wire-contract.mjs` exit 0 (`b18bf80`) | completed | 1 |
-| W5 | Fake provider | `crates/warsha-providers/**`, `crates/warsha-pipeline/**` | W7 | `cargo test -p warsha-providers -p warsha-pipeline --all-targets --no-fail-fast` exit 0 (covering deterministic `FakeProvider` multi-stage run execution, `WARSHA_LLM_BASE_URL` default `https://router.sayl.site/v1`, `WARSHA_LLM_API_KEY`, `WARSHA_LLM_MODEL` default `bzl/deepseek-v4-flash-0731free`, fallback to `FakeProvider` when no key/routing is set) (`9e93909`) | completed | 1 |
-| W6 | Deploy/Docker | `docker/**`, `deploy/**`, `docs/DEPLOY.md` | W7 | Multi-stage `docker/Dockerfile` (`warshad` + `warsha-cli`, non-root user `warsha` UID 10001), `docker/compose.yml` + `deploy/docker-compose.yml` + `deploy/Caddyfile` (internal network, Caddy TLS termination, persistent volume, healthcheck, restart policy, env-only config, one-time bootstrap admin token, no direct daemon port exposure), `docs/DEPLOY.md` (prerequisites, ports, DNS/TLS, Tailscale/Cloudflare Tunnel, backup/restore, upgrade, secret rotation); `mdbook build docs` exit 0 (`30feff3`) | completed | 1 |
-| W4 | Remote UI parity | `apps/remote/**`, `packages/i18n/**` | W3, W5 | `pnpm --filter warsha-remote lint && pnpm --filter warsha-remote typecheck && pnpm --filter warsha-remote test && pnpm --filter warsha-remote build` exit 0 (169/169 tests across 14 files); independent tests verifying all P0 capabilities (QR deep-link pairing + manual pairing entry, RFC1918/Tailscale cleartext guard, list runs, open run, live stage progress, create project, start run, advance run, follow-up prompt, cancel run, view artifacts, approve/reject changes, handoff create/apply, paired devices list/revoke, no-LLM-keys notice, connection-state UI with auto-reconnect + sequence gap detection + full resync) (`99d9927`) | completed | 1 |
-| W1 | Windows packaging | `apps/desktop/src-tauri/**`, `docs/INSTALL.md` | W3, W5 | `tauri.conf.json` (`bundle.createUpdaterArtifacts = false`, `plugins = {}`), NSIS `.exe` installer built (`apps/desktop/src-tauri/target/release/bundle/nsis/Warsha_0.2.0_x64-setup.exe`, 6,487,879 bytes, SHA-256 `7e9c35d99fe9f346b9228bf25e7a480a710a6ab426a4708a3dbcb3d06262369e`), `warsha-desktop.exe --self-check --data-dir <temp>` exit 0 proving `/health`, `/rpc`, CORS, and zero-key `FakeProvider` multi-stage run (`projects.create` -> `runs.start` -> `gates.approve` -> `runs.advance` -> `runs.artifacts`) + restart lock safety (`09e1269`) | completed | 1 |
-| W2 | Android shell | `apps/mobile/**`, `scripts/generate-android-keystore.sh` | W4 | Native Android WebView shell (`WarshaNative` `@JavascriptInterface` backed by `AndroidKeyStore` AES-256-GCM, `warsha://pair` deep-link `<intent-filter>`, `network_security_config.xml` restricting cleartext HTTP to RFC1918/Tailscale/loopback, runtime `CAMERA` permission with manual fallback); external keystore generated at `~/.warsha/signing/warsha-release.jks`; signed release APK built (`apps/mobile/android/app/build/outputs/apk/release/warsha-remote-release.apk`, 1,280,713 bytes, RSA-4096 SHA-256 `ad2708e486a68590db9b1ee54e7dfad547759b20f399c16cc6eaad059ce7f3c3`) and verified with `apksigner verify` (`0cd5ce8`) | completed | 1 |
+| id  | workstream          | files owned                                                                                         | depends on           | acceptance criteria                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | status    | dispatches |
+| --- | ------------------- | --------------------------------------------------------------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- | ---------- |
+| W7  | Repo hygiene        | `.gitignore`, `deny.toml`, `.gitleaks.toml`, `Cargo.lock`, `apps/desktop/src-tauri/Cargo.lock`      | — (runs alone first) | `cargo-deny --manifest-path Cargo.toml --all-features check` exit 0; `cargo-deny --manifest-path apps/desktop/src-tauri/Cargo.toml --all-features check --config deny.toml` exit 0; `gitleaks detect --source . --config .gitleaks.toml --no-banner --redact --exit-code 1` exit 0; `git ls-files --error-unmatch Cargo.lock` exit 0 (`5040b46`)                                                                                                                                                                                                                                                                                                        | completed | 1          |
+| W3  | Daemon event stream | `crates/warshad/**`, `crates/warsha-remote/**`, `packages/client/**`, `apps/desktop/e2e/harness.ts` | W7                   | `cargo test -p warshad -p warsha-remote --all-targets --no-fail-fast` exit 0 (covering `runs.subscribe`, `/events` monotonic `seq`, `since_seq` / `Last-Event-ID`, gap detection & full resync, secret redaction, subscribe/unsubscribe, daemon restart, dropped socket, slow consumer, two clients receiving identical order, `0.0.0.0` + `advertised_host`, `runs.advance`, `runs.cancel`, `runs.followup`, `runs.artifacts`); `node scripts/check-wire-contract.mjs` exit 0 (`b18bf80`)                                                                                                                                                              | completed | 1          |
+| W5  | Fake provider       | `crates/warsha-providers/**`, `crates/warsha-pipeline/**`                                           | W7                   | `cargo test -p warsha-providers -p warsha-pipeline --all-targets --no-fail-fast` exit 0 (covering deterministic `FakeProvider` multi-stage run execution, `WARSHA_LLM_BASE_URL` default `https://router.sayl.site/v1`, `WARSHA_LLM_API_KEY`, `WARSHA_LLM_MODEL` default `bzl/deepseek-v4-flash-0731free`, fallback to `FakeProvider` when no key/routing is set) (`9e93909`)                                                                                                                                                                                                                                                                            | completed | 1          |
+| W6  | Deploy/Docker       | `docker/**`, `deploy/**`, `docs/DEPLOY.md`                                                          | W7                   | Multi-stage `docker/Dockerfile` (`warshad` + `warsha-cli`, non-root user `warsha` UID 10001), `docker/compose.yml` + `deploy/docker-compose.yml` + `deploy/Caddyfile` (internal network, Caddy TLS termination, persistent volume, healthcheck, restart policy, env-only config, one-time bootstrap admin token, no direct daemon port exposure), `docs/DEPLOY.md` (prerequisites, ports, DNS/TLS, Tailscale/Cloudflare Tunnel, backup/restore, upgrade, secret rotation); `mdbook build docs` exit 0 (`30feff3`)                                                                                                                                       | completed | 1          |
+| W4  | Remote UI parity    | `apps/remote/**`, `packages/i18n/**`                                                                | W3, W5               | `pnpm --filter warsha-remote lint && pnpm --filter warsha-remote typecheck && pnpm --filter warsha-remote test && pnpm --filter warsha-remote build` exit 0 (169/169 tests across 14 files); independent tests verifying all P0 capabilities (QR deep-link pairing + manual pairing entry, RFC1918/Tailscale cleartext guard, list runs, open run, live stage progress, create project, start run, advance run, follow-up prompt, cancel run, view artifacts, approve/reject changes, handoff create/apply, paired devices list/revoke, no-LLM-keys notice, connection-state UI with auto-reconnect + sequence gap detection + full resync) (`99d9927`) | completed | 1          |
+| W1  | Windows packaging   | `apps/desktop/src-tauri/**`, `docs/INSTALL.md`                                                      | W3, W5               | `tauri.conf.json` (`bundle.createUpdaterArtifacts = false`, `plugins = {}`), NSIS `.exe` installer built (`apps/desktop/src-tauri/target/release/bundle/nsis/Warsha_0.2.0_x64-setup.exe`, 6,487,879 bytes, SHA-256 `7e9c35d99fe9f346b9228bf25e7a480a710a6ab426a4708a3dbcb3d06262369e`), `warsha-desktop.exe --self-check --data-dir <temp>` exit 0 proving `/health`, `/rpc`, CORS, and zero-key `FakeProvider` multi-stage run (`projects.create` -> `runs.start` -> `gates.approve` -> `runs.advance` -> `runs.artifacts`) + restart lock safety (`09e1269`)                                                                                          | completed | 1          |
+| W2  | Android shell       | `apps/mobile/**`, `scripts/generate-android-keystore.sh`                                            | W4                   | Native Android WebView shell (`WarshaNative` `@JavascriptInterface` backed by `AndroidKeyStore` AES-256-GCM, `warsha://pair` deep-link `<intent-filter>`, `network_security_config.xml` restricting cleartext HTTP to RFC1918/Tailscale/loopback, runtime `CAMERA` permission with manual fallback); external keystore generated at `~/.warsha/signing/warsha-release.jks`; signed release APK built (`apps/mobile/android/app/build/outputs/apk/release/warsha-remote-release.apk`, 1,280,713 bytes, RSA-4096 SHA-256 `ad2708e486a68590db9b1ee54e7dfad547759b20f399c16cc6eaad059ce7f3c3`) and verified with `apksigner verify` (`0cd5ce8`)             | completed | 1          |
 
 ### Ship Run Verification Ledger (Measured on 2026-11-05)
 
@@ -1008,14 +1036,14 @@ Closed all 5 operational gaps and resolved the P0 black screen root cause on `sh
 
 ### Gap Closure Ledger
 
-| Gap | Objective | Implementation | Verification & Evidence | Status |
-|---|---|---|---|---|
-| **P0** | Fix desktop black screen (`#0c0d10`) | Wire contract deserializer decoding snake_case Rust responses in `@warsha/client`; safe date parsing in `apps/desktop/src/date.ts`; guarded `InstrumentStrip.tsx`; top-level `ErrorBoundary.tsx` | All 41 desktop test files passing (387 tests); zero unhandled date or stage render exceptions | **completed** |
-| **GAP 1** | Static remote UI serving in `warshad` | Added `remote_assets_dir` behind `WARSHA_REMOTE_ASSETS_DIR` in `crates/warshad/src/lib.rs` with SPA fallback, MIME types, cache-control (`immutable` vs `no-cache`), traversal guard; updated `deploy/Caddyfile` | 6 real socket integration tests passing in `crates/warshad/tests/static_serving.rs` | **completed** |
-| **GAP 2** | Docker build & container verification | Upgraded Rust toolchain builder to `rust:1-bookworm` in `docker/Dockerfile`; built `warsha/warshad:0.1.0`; deployed `deploy/docker-compose.yml` | Verified: `/health` 200 JSON; `/` SPA index.html; bootstrap token prints once and suppressed on restart; container UID 10001; 0 ports published on host; client paired and completed 4-gate run on FakeProvider | **completed** |
-| **GAP 3** | Real LLM failure path | Implemented `scrub_llm_error` in `crates/warsha-pipeline/src/lib.rs`; transitions run to `RunStatus::Failed`; appends `EventKind::Error` with action `stage_failed`; no hang/retry storms; zero key leaks | Verified by integration test `crates/warsha-pipeline/tests/real_llm_failure.rs` | **completed** |
-| **GAP 4** | Documentation correctness | Aligned Android app ID `dev.warsha.remote` in `apps/mobile/README.md`; corrected binary references to `warsha-desktop.exe` in `docs/INSTALL.md`; updated updater docs in `docs/src/known-limitations.md` and `docs/src/security.md` to reflect `createUpdaterArtifacts=false` and `plugins={}`; created `docs/VERIFY.md` | `mdbook build docs` clean; zero broken doc links | **completed** |
-| **GAP 5** | Verification & deferred emulator items | Created comprehensive verification guide in `docs/VERIFY.md` documenting PWA, APK signing, NSIS installer testing, and explicit technical rationale for deferred emulator items | Documented in `docs/VERIFY.md` | **completed** |
+| Gap       | Objective                              | Implementation                                                                                                                                                                                                                                                                                                           | Verification & Evidence                                                                                                                                                                                         | Status        |
+| --------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| **P0**    | Fix desktop black screen (`#0c0d10`)   | Wire contract deserializer decoding snake_case Rust responses in `@warsha/client`; safe date parsing in `apps/desktop/src/date.ts`; guarded `InstrumentStrip.tsx`; top-level `ErrorBoundary.tsx`                                                                                                                         | All 41 desktop test files passing (387 tests); zero unhandled date or stage render exceptions                                                                                                                   | **completed** |
+| **GAP 1** | Static remote UI serving in `warshad`  | Added `remote_assets_dir` behind `WARSHA_REMOTE_ASSETS_DIR` in `crates/warshad/src/lib.rs` with SPA fallback, MIME types, cache-control (`immutable` vs `no-cache`), traversal guard; updated `deploy/Caddyfile`                                                                                                         | 6 real socket integration tests passing in `crates/warshad/tests/static_serving.rs`                                                                                                                             | **completed** |
+| **GAP 2** | Docker build & container verification  | Upgraded Rust toolchain builder to `rust:1-bookworm` in `docker/Dockerfile`; built `warsha/warshad:0.1.0`; deployed `deploy/docker-compose.yml`                                                                                                                                                                          | Verified: `/health` 200 JSON; `/` SPA index.html; bootstrap token prints once and suppressed on restart; container UID 10001; 0 ports published on host; client paired and completed 4-gate run on FakeProvider | **completed** |
+| **GAP 3** | Real LLM failure path                  | Implemented `scrub_llm_error` in `crates/warsha-pipeline/src/lib.rs`; transitions run to `RunStatus::Failed`; appends `EventKind::Error` with action `stage_failed`; no hang/retry storms; zero key leaks                                                                                                                | Verified by integration test `crates/warsha-pipeline/tests/real_llm_failure.rs`                                                                                                                                 | **completed** |
+| **GAP 4** | Documentation correctness              | Aligned Android app ID `dev.warsha.remote` in `apps/mobile/README.md`; corrected binary references to `warsha-desktop.exe` in `docs/INSTALL.md`; updated updater docs in `docs/src/known-limitations.md` and `docs/src/security.md` to reflect `createUpdaterArtifacts=false` and `plugins={}`; created `docs/VERIFY.md` | `mdbook build docs` clean; zero broken doc links                                                                                                                                                                | **completed** |
+| **GAP 5** | Verification & deferred emulator items | Created comprehensive verification guide in `docs/VERIFY.md` documenting PWA, APK signing, NSIS installer testing, and explicit technical rationale for deferred emulator items                                                                                                                                          | Documented in `docs/VERIFY.md`                                                                                                                                                                                  | **completed** |
 
 ---
 
@@ -1025,16 +1053,16 @@ Executed Wave 2 Full-Stack Implementation across `warsha-core`, `warsha-store`, 
 
 ### Wave 2 Implementation Ledger
 
-| Area | Scope & Components | Implementation Details | Verification & Evidence | Status |
-|---|---|---|---|---|
-| **Harness System** | `crates/warsha-core/src/harness.rs`, `crates/warsha-store/src/persistence.rs`, `crates/warshad/src/wave2.rs`, `@warsha/client`, `apps/desktop/src/screens/HarnessesSettings.tsx` | Schema `warsha.harness/v1` with SQLite persistence; RPCs `harness.list`, `harness.get`, `harness.import`, `harness.select`, `harness.delete`; bundled 7 factory presets (`complex-workbench`, `autonomous-factory`, `ticket-to-pr`, `graph-gated`, `fleet-worktrees`, `sealed-envelope`, `solo-bench`); active harness selection and JSON/YAML import form | `HarnessesSettings.test.tsx` (5/5 tests passing); unit tests in `crates/warshad/src/wave2.rs` verifying preset seeding and parsing | **completed** |
-| **Skills System** | `crates/warsha-core/src/skill.rs`, `crates/warsha-store/src/persistence.rs`, `crates/warshad/src/wave2.rs`, `@warsha/client`, `apps/desktop/src/screens/SkillsSettings.tsx` | SQLite-persisted `SkillRegistry`; RPCs `skills.list`, `skills.import`, `skills.toggle`, `skills.delete`; bundled 12 open-source skills (`superpowers` + `anthropics/skills`); SKILL.md and URL import; license detection | `SkillsSettings.test.tsx` (6/6 tests passing); `warshad` tests verifying bundled skills catalog resolution | **completed** |
-| **Plugins System** | `crates/warsha-core/src/plugin.rs`, `crates/warsha-store/src/persistence.rs`, `crates/warshad/src/wave2.rs`, `@warsha/client`, `apps/desktop/src/screens/PluginsSettings.tsx` | SQLite-persisted `PluginRegistry`; RPCs `plugins.list`, `plugins.install`, `plugins.toggle`, `plugins.configure`, `plugins.remove`; bundled 7 MCP packs (`github-mcp`, `slack-mcp`, `filesystem-mcp`, `git-mcp`, `memory-mcp`, `sequential-thinking-mcp`, `security-strix-pack`); manifest import; environment variable configuration with `${secrets:...}` references | `PluginsSettings.test.tsx` (6/6 tests passing); `uvx strix` Docker sandbox verification | **completed** |
-| **Providers & Models** | `crates/warshad/src/wave2.rs`, `crates/warshad/src/settings.rs`, `@warsha/client`, `apps/desktop/src/screens/ModelsSettings.tsx`, `apps/desktop/src/screens/SettingsProviders.tsx` | Keychain & SQLite-persisted custom providers (`providers.add`, `list`, `remove`, `test`) supporting OpenAI-compatible `api_base`, Anthropic, Ollama, DeepSeek; custom model catalog (`models.list`, `add`, `remove`); role routing mapping (`roles.list`, `roles.set`) | `ModelsSettings.test.tsx` (7/7 tests passing); `SettingsProvidersCustom.test.tsx` (5/5 tests passing) | **completed** |
-| **Live Connectors** | `crates/warshad/src/wave2.rs`, `@warsha/client`, `apps/desktop/src/screens/SettingsScreen.tsx` | Backed by OS keychain and SQLite; RPCs `integrations.list`, `connect`, `disconnect`, `test`; GitHub PAT/token validation; Slack webhook and bot token configuration; zero secret leaks in UI or logs; graceful offline fallback | `SettingsScreenIntegrations.test.tsx` (6/6 tests passing) | **completed** |
-| **Project Filesystem Access** | `crates/warshad/src/wave2.rs`, `@warsha/client` | Safe project-scoped RPCs `files.tree` and `files.read`; strict path traversal defense rejecting `..`, absolute paths, NUL bytes, and symlink escapes outside the project directory; UTF-8 text and binary detection | 10 unit tests in `crates/warshad/src/wave2.rs` covering list, read, traversal rejection, and binary files | **completed** |
-| **Dual-Mode UI: Complex Mode** | `apps/desktop/src/screens/AdvancedMode.tsx`, `apps/desktop/src/screens/AdvancedMode.test.tsx` | Qoder IDE Workbench: lazy workspace file tree, active context pills, multi-tab Code/Diff/Plan/Stream viewer, run-control bar (`advanceRun`, `cancelRun`, `followupRun`) beside read-only TerminalDock, collapsible 12-role Subagent Swarm matrix | `AdvancedMode.test.tsx` (27/27 tests passing) | **completed** |
-| **Dual-Mode UI: Hard Mode** | `apps/desktop/src/screens/SimpleMode.tsx`, `apps/desktop/src/screens/SimpleMode.test.tsx` | Grokbot/Openbot Autonomous Factory: 1-click mode toggle, Mission Briefing Composer with harness/model/budget pills, live 9-stage autonomous pipeline, press-metal GateCards with rationale and safety checks, artifact shelf, verification receipt card with cryptographic seal | `SimpleMode.test.tsx` (19/19 tests passing) | **completed** |
+| Area                           | Scope & Components                                                                                                                                                                 | Implementation Details                                                                                                                                                                                                                                                                                                                                                 | Verification & Evidence                                                                                                            | Status        |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| **Harness System**             | `crates/warsha-core/src/harness.rs`, `crates/warsha-store/src/persistence.rs`, `crates/warshad/src/wave2.rs`, `@warsha/client`, `apps/desktop/src/screens/HarnessesSettings.tsx`   | Schema `warsha.harness/v1` with SQLite persistence; RPCs `harness.list`, `harness.get`, `harness.import`, `harness.select`, `harness.delete`; bundled 7 factory presets (`complex-workbench`, `autonomous-factory`, `ticket-to-pr`, `graph-gated`, `fleet-worktrees`, `sealed-envelope`, `solo-bench`); active harness selection and JSON/YAML import form             | `HarnessesSettings.test.tsx` (5/5 tests passing); unit tests in `crates/warshad/src/wave2.rs` verifying preset seeding and parsing | **completed** |
+| **Skills System**              | `crates/warsha-core/src/skill.rs`, `crates/warsha-store/src/persistence.rs`, `crates/warshad/src/wave2.rs`, `@warsha/client`, `apps/desktop/src/screens/SkillsSettings.tsx`        | SQLite-persisted `SkillRegistry`; RPCs `skills.list`, `skills.import`, `skills.toggle`, `skills.delete`; bundled 12 open-source skills (`superpowers` + `anthropics/skills`); SKILL.md and URL import; license detection                                                                                                                                               | `SkillsSettings.test.tsx` (6/6 tests passing); `warshad` tests verifying bundled skills catalog resolution                         | **completed** |
+| **Plugins System**             | `crates/warsha-core/src/plugin.rs`, `crates/warsha-store/src/persistence.rs`, `crates/warshad/src/wave2.rs`, `@warsha/client`, `apps/desktop/src/screens/PluginsSettings.tsx`      | SQLite-persisted `PluginRegistry`; RPCs `plugins.list`, `plugins.install`, `plugins.toggle`, `plugins.configure`, `plugins.remove`; bundled 7 MCP packs (`github-mcp`, `slack-mcp`, `filesystem-mcp`, `git-mcp`, `memory-mcp`, `sequential-thinking-mcp`, `security-strix-pack`); manifest import; environment variable configuration with `${secrets:...}` references | `PluginsSettings.test.tsx` (6/6 tests passing); `uvx strix` Docker sandbox verification                                            | **completed** |
+| **Providers & Models**         | `crates/warshad/src/wave2.rs`, `crates/warshad/src/settings.rs`, `@warsha/client`, `apps/desktop/src/screens/ModelsSettings.tsx`, `apps/desktop/src/screens/SettingsProviders.tsx` | Keychain & SQLite-persisted custom providers (`providers.add`, `list`, `remove`, `test`) supporting OpenAI-compatible `api_base`, Anthropic, Ollama, DeepSeek; custom model catalog (`models.list`, `add`, `remove`); role routing mapping (`roles.list`, `roles.set`)                                                                                                 | `ModelsSettings.test.tsx` (7/7 tests passing); `SettingsProvidersCustom.test.tsx` (5/5 tests passing)                              | **completed** |
+| **Live Connectors**            | `crates/warshad/src/wave2.rs`, `@warsha/client`, `apps/desktop/src/screens/SettingsScreen.tsx`                                                                                     | Backed by OS keychain and SQLite; RPCs `integrations.list`, `connect`, `disconnect`, `test`; GitHub PAT/token validation; Slack webhook and bot token configuration; zero secret leaks in UI or logs; graceful offline fallback                                                                                                                                        | `SettingsScreenIntegrations.test.tsx` (6/6 tests passing)                                                                          | **completed** |
+| **Project Filesystem Access**  | `crates/warshad/src/wave2.rs`, `@warsha/client`                                                                                                                                    | Safe project-scoped RPCs `files.tree` and `files.read`; strict path traversal defense rejecting `..`, absolute paths, NUL bytes, and symlink escapes outside the project directory; UTF-8 text and binary detection                                                                                                                                                    | 10 unit tests in `crates/warshad/src/wave2.rs` covering list, read, traversal rejection, and binary files                          | **completed** |
+| **Dual-Mode UI: Complex Mode** | `apps/desktop/src/screens/AdvancedMode.tsx`, `apps/desktop/src/screens/AdvancedMode.test.tsx`                                                                                      | Qoder IDE Workbench: lazy workspace file tree, active context pills, multi-tab Code/Diff/Plan/Stream viewer, run-control bar (`advanceRun`, `cancelRun`, `followupRun`) beside read-only TerminalDock, collapsible 12-role Subagent Swarm matrix                                                                                                                       | `AdvancedMode.test.tsx` (27/27 tests passing)                                                                                      | **completed** |
+| **Dual-Mode UI: Hard Mode**    | `apps/desktop/src/screens/SimpleMode.tsx`, `apps/desktop/src/screens/SimpleMode.test.tsx`                                                                                          | Grokbot/Openbot Autonomous Factory: 1-click mode toggle, Mission Briefing Composer with harness/model/budget pills, live 9-stage autonomous pipeline, press-metal GateCards with rationale and safety checks, artifact shelf, verification receipt card with cryptographic seal                                                                                        | `SimpleMode.test.tsx` (19/19 tests passing)                                                                                        | **completed** |
 
 ### Wave 2 Quality & Verification Ledger
 
@@ -1065,23 +1093,24 @@ section is a completion claim. `DECISIONS.md` holds the reasoning; this holds th
 
 ### Definition of done, and current state of each item
 
-| # | Requirement | Owner | Evidence that closes it | Status |
-|---|---|---|---|---|
-| 1 | PC: desktop bundle builds | lane `pc-artifact` (`aCoder-5350e33fd5199f67`) | `apps/desktop/src-tauri/target/release/bundle/**` listing w/ byte sizes | **open** — no bundle dir exists yet; load 8.0 on 2 CPUs |
-| 2 | PC: the built app actually starts | same lane | process reaches daemon-spawn path; `/health` JSON on test ports | **open** |
-| 3 | PC: CLI works against a real daemon | lanes `cli-auth`(stopped, my bad precondition) → `cli-auth-2` (`aCoder-a22023bb857635e6`) | live: `warsha providers list` returns `[]` not 401; `warsha status` not `NotConnected`; new tests fail-before/pass-after | **open**, two defects confirmed by measurement (#14 no bearer on RPC, #15 health probe GETs the RPC port → 405) |
-| 4 | Android: reachable daemon | lane `android-daemon` (`aCoder-5ac7e7c1bfc910db`) | opt-in bind, loopback **default**, startup log names resolved address | **open** |
-| 5 | Android: a pairing exists | same lane | `devices.pair-start` returns a URL the phone can open; daemon+auth+client+e2e stub all carry the name (R7 gate) | **partial as of 18:14 — plumbing yes, RPC no.** Present: `bind_host` (loopback default via `LOCALHOST_BIND`), `advertised_host`, `PairingData::pairing_link(server_origin)` carrying `secret_token()`, `qr_code_png_base64`, and a refusal-not-guess path for wildcard binds. **Absent (measured):** `devices.pair-start` is not a registered method — only `devices.list`/`devices.pair`/`devices.revoke` exist, and the diff adds **no `#[method]`**; `auth.rs` 0 hits, `packages/client/src/index.ts` 0 hits, `apps/desktop/e2e/harness.ts` 0 hits; `Devices.tsx:171` still fakes the code with `Math.random()`. **All four surfaces are required or the R7 gate goes red and the pairing is unreachable from any client.** Timestamp, not verdict — re-check at lane report. |
-| 5b | Bind default is loopback **asserted by a test** | same lane | a test naming `LOCALHOST_BIND` that fails if the default widens | **open** — the 4 `warshad/tests/*.rs` files mentioning `bind_host` are pre-existing fixtures updated so the crate compiles with a new required field; that is not an assertion about the default |
-| 5c | **Exact work left to make pairing callable** (re-checked 18:14:52: still absent; `warshad/src/lib.rs` actively growing, `devices.*` lines shifted 900→904 between checks) | next dispatch | all five, then R7 green | (1) register `#[method(name = "devices.pair-start", with_extensions)]` — daemon still has only `devices.list`/`pair`/`revoke`; (2) add its tier to `auth.rs` `METHOD_POLICIES` (owner-tier, so a paired phone cannot mint its own pairing); (3) client method in `packages/client/src/index.ts`; (4) entry in the e2e stub table `apps/desktop/e2e/harness.ts`; (5) replace `Devices.tsx:171`'s `Math.random()` with the returned link. 5c note (18:15:41): `node scripts/check-wire-contract.mjs` reports **"wire: 8 checks, 0 violations"** with `pair-start` absent from daemon, `auth.rs`, client and stub. That green is **vacuous with respect to pairing** — the gate compares names that exist on each side, so a method missing everywhere agrees perfectly and passes. It cannot tell you a capability is unimplemented, only that surfaces disagree. Do not cite R7 green as evidence pairing works; the only evidence is #13's live round trip. Registration still absent at 18:15:41; file still growing (`devices.*` lines 904→922). Any follow-up that lands `devices.pair-start` should also record this limitation in the gate's own docs, so the next reader does not mistake agreement for presence. |
-| 6 | Android: installable PWA | lane `android-pwa` (`aCoder-b18d7c65def8ff4e`) | built `dist/` contains manifest + SW + icons; `getRegistration()` resolves against served `localhost` | **artifacts proven (18:13)** — `dist/` = `manifest.webmanifest` 904 B, `sw.js` 1,543 B (real Workbox bootstrap, not a stub), `workbox-146ffa86.js` 14,894 B, `icons/` with all 5 files; `dist/index.html` keeps the manifest link. **Still open:** a served-build `getRegistration()` proof (`apps/remote/scripts/verify-pwa.mjs` just written, not yet run by me) |
-| 6c | SW registration is real code, not just a file | verified by me at 18:16 | registration call + build wiring + generator existence | **done (code-level)** — `main.tsx:44` calls `registerShellWorker({ prod: import.meta.env.PROD })`; `offline.ts` reads prod from the caller rather than from `import.meta.env` internally (which is what makes both directions testable), treats an absent `navigator.serviceWorker` as normal rather than an error, and returns a typed outcome `'registered' \| 'skipped-build' \| 'skipped-platform' \| 'failed'`. Build chain confirmed real: `package.json:8` = `tsc && vite build && node scripts/generate-service-worker.mjs`, and that script exists (2,022 B). Its stated policy — never show the owner a registration failure — is deliberate and documented, and correctly separates "worker refused" from "daemon unreachable on an insecure origin". **Checked for the `make-icons.py` path defect and it is NOT present here:** the cited generator resolves. Still open: the served-browser `getRegistration()` proof, which is behavior, not code. |
-| 6b | Android: icons are real, correctly sized | verified by me, not the lane | PIL dims vs manifest `sizes` claims | **done** — 192², 512², maskable 512², apple-touch 180², favicon 32², all RGBA PNG; the manifest's 404-on-missing-icon failure was **not** reproduced one layer down |
-| 7 | Android: app is served at the pairing origin | **unassigned** (task #16, decided in DECISIONS) | daemon serves `apps/remote` dist same-origin; SPA deep links resolve; no traversal to `config.toml`/`warsha.db` | **open** — closes the seam where a correct pairing link still 404s |
-| 8 | Live round trip, no stubs | **unassigned** (task #13) | real daemon → `pairing_link` → phone session established → a gate read succeeds over the wire | **open** — this is the only item that proves Android at all |
-| 9 | TLS boundary named honestly | decided (task #11) | prose in `docs/`/`DECISIONS.md` | **decided** — same-origin ≠ secure-origin; a LAN-IP link opens in a tab but is not installable |
+| #   | Requirement                                                                                                                                                               | Owner                                                                                     | Evidence that closes it                                                                                                  | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | PC: desktop bundle builds                                                                                                                                                 | lane `pc-artifact` (`aCoder-5350e33fd5199f67`)                                            | `apps/desktop/src-tauri/target/release/bundle/**` listing w/ byte sizes                                                  | **open** — no bundle dir exists yet; load 8.0 on 2 CPUs                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 2   | PC: the built app actually starts                                                                                                                                         | same lane                                                                                 | process reaches daemon-spawn path; `/health` JSON on test ports                                                          | **open**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 3   | PC: CLI works against a real daemon                                                                                                                                       | lanes `cli-auth`(stopped, my bad precondition) → `cli-auth-2` (`aCoder-a22023bb857635e6`) | live: `warsha providers list` returns `[]` not 401; `warsha status` not `NotConnected`; new tests fail-before/pass-after | **open**, two defects confirmed by measurement (#14 no bearer on RPC, #15 health probe GETs the RPC port → 405)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 4   | Android: reachable daemon                                                                                                                                                 | lane `android-daemon` (`aCoder-5ac7e7c1bfc910db`)                                         | opt-in bind, loopback **default**, startup log names resolved address                                                    | **open**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 5   | Android: a pairing exists                                                                                                                                                 | same lane                                                                                 | `devices.pair-start` returns a URL the phone can open; daemon+auth+client+e2e stub all carry the name (R7 gate)          | **partial as of 18:14 — plumbing yes, RPC no.** Present: `bind_host` (loopback default via `LOCALHOST_BIND`), `advertised_host`, `PairingData::pairing_link(server_origin)` carrying `secret_token()`, `qr_code_png_base64`, and a refusal-not-guess path for wildcard binds. **Absent (measured):** `devices.pair-start` is not a registered method — only `devices.list`/`devices.pair`/`devices.revoke` exist, and the diff adds **no `#[method]`**; `auth.rs` 0 hits, `packages/client/src/index.ts` 0 hits, `apps/desktop/e2e/harness.ts` 0 hits; `Devices.tsx:171` still fakes the code with `Math.random()`. **All four surfaces are required or the R7 gate goes red and the pairing is unreachable from any client.** Timestamp, not verdict — re-check at lane report.                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 5b  | Bind default is loopback **asserted by a test**                                                                                                                           | same lane                                                                                 | a test naming `LOCALHOST_BIND` that fails if the default widens                                                          | **open** — the 4 `warshad/tests/*.rs` files mentioning `bind_host` are pre-existing fixtures updated so the crate compiles with a new required field; that is not an assertion about the default                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 5c  | **Exact work left to make pairing callable** (re-checked 18:14:52: still absent; `warshad/src/lib.rs` actively growing, `devices.*` lines shifted 900→904 between checks) | next dispatch                                                                             | all five, then R7 green                                                                                                  | (1) register `#[method(name = "devices.pair-start", with_extensions)]` — daemon still has only `devices.list`/`pair`/`revoke`; (2) add its tier to `auth.rs` `METHOD_POLICIES` (owner-tier, so a paired phone cannot mint its own pairing); (3) client method in `packages/client/src/index.ts`; (4) entry in the e2e stub table `apps/desktop/e2e/harness.ts`; (5) replace `Devices.tsx:171`'s `Math.random()` with the returned link. 5c note (18:15:41): `node scripts/check-wire-contract.mjs` reports **"wire: 8 checks, 0 violations"** with `pair-start` absent from daemon, `auth.rs`, client and stub. That green is **vacuous with respect to pairing** — the gate compares names that exist on each side, so a method missing everywhere agrees perfectly and passes. It cannot tell you a capability is unimplemented, only that surfaces disagree. Do not cite R7 green as evidence pairing works; the only evidence is #13's live round trip. Registration still absent at 18:15:41; file still growing (`devices.*` lines 904→922). Any follow-up that lands `devices.pair-start` should also record this limitation in the gate's own docs, so the next reader does not mistake agreement for presence. |
+| 6   | Android: installable PWA                                                                                                                                                  | lane `android-pwa` (`aCoder-b18d7c65def8ff4e`)                                            | built `dist/` contains manifest + SW + icons; `getRegistration()` resolves against served `localhost`                    | **artifacts proven (18:13)** — `dist/` = `manifest.webmanifest` 904 B, `sw.js` 1,543 B (real Workbox bootstrap, not a stub), `workbox-146ffa86.js` 14,894 B, `icons/` with all 5 files; `dist/index.html` keeps the manifest link. **Still open:** a served-build `getRegistration()` proof (`apps/remote/scripts/verify-pwa.mjs` just written, not yet run by me)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 6c  | SW registration is real code, not just a file                                                                                                                             | verified by me at 18:16                                                                   | registration call + build wiring + generator existence                                                                   | **done (code-level)** — `main.tsx:44` calls `registerShellWorker({ prod: import.meta.env.PROD })`; `offline.ts` reads prod from the caller rather than from `import.meta.env` internally (which is what makes both directions testable), treats an absent `navigator.serviceWorker` as normal rather than an error, and returns a typed outcome `'registered' \| 'skipped-build' \| 'skipped-platform' \| 'failed'`. Build chain confirmed real: `package.json:8` = `tsc && vite build && node scripts/generate-service-worker.mjs`, and that script exists (2,022 B). Its stated policy — never show the owner a registration failure — is deliberate and documented, and correctly separates "worker refused" from "daemon unreachable on an insecure origin". **Checked for the `make-icons.py` path defect and it is NOT present here:** the cited generator resolves. Still open: the served-browser `getRegistration()` proof, which is behavior, not code.                                                                                                                                                                                                                                                       |
+| 6b  | Android: icons are real, correctly sized                                                                                                                                  | verified by me, not the lane                                                              | PIL dims vs manifest `sizes` claims                                                                                      | **done** — 192², 512², maskable 512², apple-touch 180², favicon 32², all RGBA PNG; the manifest's 404-on-missing-icon failure was **not** reproduced one layer down                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 7   | Android: app is served at the pairing origin                                                                                                                              | **unassigned** (task #16, decided in DECISIONS)                                           | daemon serves `apps/remote` dist same-origin; SPA deep links resolve; no traversal to `config.toml`/`warsha.db`          | **open** — closes the seam where a correct pairing link still 404s                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 8   | Live round trip, no stubs                                                                                                                                                 | **unassigned** (task #13)                                                                 | real daemon → `pairing_link` → phone session established → a gate read succeeds over the wire                            | **open** — this is the only item that proves Android at all                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 9   | TLS boundary named honestly                                                                                                                                               | decided (task #11)                                                                        | prose in `docs/`/`DECISIONS.md`                                                                                          | **decided** — same-origin ≠ secure-origin; a LAN-IP link opens in a tab but is not installable                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 ### Known-truthful statements, so nothing here is overclaimed
+
 - **Android means the `apps/remote` PWA** in this repo (`PLAN.md:229`,`:269`); no JDK/Gradle/SDK/adb/emulator
   exists on this host, so no APK is produced here and none is claimed.
 - **No Android device or emulator is attached.** Cross-device pairing is therefore **not verifiable**
@@ -1119,6 +1148,7 @@ and had not reported; their edits are on disk, their conclusions are not — tre
 prose as unverified until re-measured.
 
 **Concrete next step, in order (one lane each, serialized by file, one heavy build at a time):**
+
 1. Finish the pairing contract (daemon lane's file set: `auth.rs` + client + e2e stub + `Devices.tsx`),
    then require `check-wire-contract.mjs` green **and** a test asserting the bind default is loopback
    (ledger item 5b — currently protected only by comments and compile-driven fixture edits).
@@ -1181,13 +1211,13 @@ No snapshots were updated. Nothing was committed, pushed, or deployed.
 
 Bridge run 14 is the acceptance evidence. All 14 checks PASS:
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` | PASS |
-| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
-| `cargo test --workspace` | PASS — 50 tests (core 8, git 13, store 6, remote 4, providers 4, pipeline 4, backends 2, relay 1, cli 1, warshad 1) |
-| `pnpm install` / `-r typecheck` / `-r build` / `-r test` | PASS — 40 tests (client 12, i18n 12, ui 8, desktop 4, remote 4) |
-| `actionlint .github/workflows/ci.yml` | PASS |
+| Check                                                    | Result                                                                                                              |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `cargo fmt --all --check`                                | PASS                                                                                                                |
+| `cargo clippy --workspace --all-targets -- -D warnings`  | PASS                                                                                                                |
+| `cargo test --workspace`                                 | PASS — 50 tests (core 8, git 13, store 6, remote 4, providers 4, pipeline 4, backends 2, relay 1, cli 1, warshad 1) |
+| `pnpm install` / `-r typecheck` / `-r build` / `-r test` | PASS — 40 tests (client 12, i18n 12, ui 8, desktop 4, remote 4)                                                     |
+| `actionlint .github/workflows/ci.yml`                    | PASS                                                                                                                |
 
 Total: 90 tests, 0 failures, 0 ignored. `RESULT: M0 validation PASSED — all checks green.`
 
@@ -1214,25 +1244,26 @@ The defects that had to be cleared to get here, in the order the bridge exposed 
 
 The defects that had to be cleared to get here, in the order the bridge exposed them:
 
-| # | Defect | Root cause | Fix |
-|---|---|---|---|
-| 1 | `jsonrpsee` feature resolve error | `proc_macros` is not a `jsonrpsee` feature in 0.26 | `macros` |
-| 2 | `E0252 TokenUsage defined multiple times` | `warsha_core::*` glob plus a redundant `use` and two duplicate `pub use` re-exports | single glob import |
-| 3 | `no method named split for WebSocket` | axum 0.7.9 has no inherent `split`; `WebSocket` is `Stream + Sink` | `use futures::{SinkExt, StreamExt}` + new `futures` dep |
-| 4 | `useless_conversion` on `Message::Binary(vec.into())` | axum 0.7.9's `Binary` holds `Vec<u8>` (verified at `axum-0.7.9/src/extract/ws.rs:570`) | pass `vec` directly |
-| 5 | unclosed delimiter in `warsha-providers` | a dropped `}` for the `for` loop during the `TokenUsage` cleanup | brace restored |
-| 6 | 17 × `E0195` on every RPC method | jsonrpsee 0.26 generates `#[async_trait] pub trait WarshaApiServer`, so a plain `async fn` impl cannot match it | `#[async_trait]` on the impl block |
-| 7 | `ServerHandle` is not a future | `start()` is synchronous in 0.26 | `let handle = server.start(..)` then `handle.stopped().await` in a task |
-| 8 | `Option<&Path>` vs `Option<&PathBuf>`, and `E0716` temporary dropped | `PathBuf`-typed param and `unwrap_or(&config_dir.join(..))` | `Option<&Path>` + named `default_path` binding |
-| 9 | no `map_err` on `keyring::Entry` | keyring 1.2's `Entry::new` is infallible — it returns `Entry` | drop the `?` |
-| 10 | `suspicious_open_options` | `create(true)` with no `truncate` | `.truncate(false)` with a comment on lock semantics |
-| 11 | 16 × `no method named request` | `ClientT` trait not in scope | `use jsonrpsee::core::client::ClientT` |
-| 12 | 4 × `ToRpcParams` not implemented for `()` | `()` has no impl | `rpc_params![]` |
-| 13 | 53 × `ToRpcParams`/`E0308` across every call site | `request<R, Params>` takes the **return type first**; `request::<_, X>` left `R` inferred and put `X` in the Params slot | `request::<X, _>(..)` at all 16 sites |
-| 14 | 21 × `clippy::result_large_err` | `warshad::DaemonError` aggregates six crate error enums and crosses the 128-byte `Err` threshold | `Daemon(#[source] Box<warshad::DaemonError>)` + manual `From` impl |
-| 15 | `getByText` found multiple elements | `t('app.name')` renders in both header and dashboard title | `getAllByText('ورشة')` with `toHaveLength(2)` |
+| #   | Defect                                                               | Root cause                                                                                                               | Fix                                                                     |
+| --- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| 1   | `jsonrpsee` feature resolve error                                    | `proc_macros` is not a `jsonrpsee` feature in 0.26                                                                       | `macros`                                                                |
+| 2   | `E0252 TokenUsage defined multiple times`                            | `warsha_core::*` glob plus a redundant `use` and two duplicate `pub use` re-exports                                      | single glob import                                                      |
+| 3   | `no method named split for WebSocket`                                | axum 0.7.9 has no inherent `split`; `WebSocket` is `Stream + Sink`                                                       | `use futures::{SinkExt, StreamExt}` + new `futures` dep                 |
+| 4   | `useless_conversion` on `Message::Binary(vec.into())`                | axum 0.7.9's `Binary` holds `Vec<u8>` (verified at `axum-0.7.9/src/extract/ws.rs:570`)                                   | pass `vec` directly                                                     |
+| 5   | unclosed delimiter in `warsha-providers`                             | a dropped `}` for the `for` loop during the `TokenUsage` cleanup                                                         | brace restored                                                          |
+| 6   | 17 × `E0195` on every RPC method                                     | jsonrpsee 0.26 generates `#[async_trait] pub trait WarshaApiServer`, so a plain `async fn` impl cannot match it          | `#[async_trait]` on the impl block                                      |
+| 7   | `ServerHandle` is not a future                                       | `start()` is synchronous in 0.26                                                                                         | `let handle = server.start(..)` then `handle.stopped().await` in a task |
+| 8   | `Option<&Path>` vs `Option<&PathBuf>`, and `E0716` temporary dropped | `PathBuf`-typed param and `unwrap_or(&config_dir.join(..))`                                                              | `Option<&Path>` + named `default_path` binding                          |
+| 9   | no `map_err` on `keyring::Entry`                                     | keyring 1.2's `Entry::new` is infallible — it returns `Entry`                                                            | drop the `?`                                                            |
+| 10  | `suspicious_open_options`                                            | `create(true)` with no `truncate`                                                                                        | `.truncate(false)` with a comment on lock semantics                     |
+| 11  | 16 × `no method named request`                                       | `ClientT` trait not in scope                                                                                             | `use jsonrpsee::core::client::ClientT`                                  |
+| 12  | 4 × `ToRpcParams` not implemented for `()`                           | `()` has no impl                                                                                                         | `rpc_params![]`                                                         |
+| 13  | 53 × `ToRpcParams`/`E0308` across every call site                    | `request<R, Params>` takes the **return type first**; `request::<_, X>` left `R` inferred and put `X` in the Params slot | `request::<X, _>(..)` at all 16 sites                                   |
+| 14  | 21 × `clippy::result_large_err`                                      | `warshad::DaemonError` aggregates six crate error enums and crosses the 128-byte `Err` threshold                         | `Daemon(#[source] Box<warshad::DaemonError>)` + manual `From` impl      |
+| 15  | `getByText` found multiple elements                                  | `t('app.name')` renders in both header and dashboard title                                                               | `getAllByText('ورشة')` with `toHaveLength(2)`                           |
 
 #### Decisions Made
+
 - License: **PolyForm Noncommercial 1.0.0** (owner decision 2026-10-28, overrides BUILD_PROMPT.md §1). Never revert.
 - Workspace structure: Follow BUILD_PROMPT.md §4 exactly
 - Goose integration: Pinned git tag in Cargo.toml (commented placeholder), fallback to goosed sidecar
@@ -1243,9 +1274,11 @@ The defects that had to be cleared to get here, in the order the bridge exposed 
 - `CliError::Daemon` carries `#[source] Box<DaemonError>` — boxing keeps the variant pointer-sized while preserving the error chain
 
 #### M1 – Daemon core + state store ✅ DONE
+
 Acceptance: integration tests create a project, append events, survive a daemon restart with state intact, and reject unauthenticated calls. All ACs met via `crates/warshad/tests/m1_daemon.rs` (3 tests: restart survival, unauthenticated rejection, second-instance lockout).
 
 #### M2 – Provider layer ✅ DONE (validated 2026-10-29T09:39:08, all 14 checks green)
+
 Bridge run 17 is the acceptance evidence. All 14 checks PASS with M2 complete:
 
 - **OpenAI-compatible adapter** (`OpenAIProvider`) — supports OpenAI, Azure, DeepSeek, OpenRouter, custom endpoints; Bearer token auth; streaming via SSE; model pricing for cost accounting
@@ -1258,6 +1291,7 @@ Bridge run 17 is the acceptance evidence. All 14 checks PASS with M2 complete:
 - **Budget enforcement** — `set_budget(project_id, cents)`, `record_cost(project_id, cost)`, `budget_exceeded(project_id)` — test with canary key verifies no secrets in logs
 
 #### M3 – Pipeline engine + gates ✅ DONE (validated 2026-10-29T11:22:01, all 14 checks green)
+
 Bridge run 18 is the acceptance evidence. All 14 checks PASS with M3 complete:
 
 - **Role prompts as versioned files** — 12 prompt templates in `crates/warsha-pipeline/src/prompts/` (Intake, Researcher, PM, Designer, Architect, Coder, Reviewer, QA, Security, Release, Marketer, Feedback) loaded at runtime via `prompts.rs`
@@ -1268,6 +1302,7 @@ Bridge run 18 is the acceptance evidence. All 14 checks PASS with M3 complete:
 - **6 pipeline tests pass** — `test_pipeline_start_run`, `test_gate_approval`, `test_gate_rejection`, `test_gate_b_blocks_advance_to_design`, plus prompt loading tests
 
 #### M4 – CLI (`warsha`) ✅ DONE (validated 2026-10-29T11:43:54, all 14 checks green)
+
 Bridge run 19 is the acceptance evidence. All 14 checks PASS with M4 complete:
 
 - **Commands implemented** — `init`, `new "<idea>"`, `run`, `status`, `logs -f`, `gates`, `approve <gate>`, `reject <gate> --reason`, `providers add|list|test|remove`, `roles set`, `budget set`, `doctor`, `pair`, `devices list|revoke`
@@ -1278,6 +1313,7 @@ Bridge run 19 is the acceptance evidence. All 14 checks PASS with M4 complete:
 - **RPC methods added** — `providers.remove`, `roles.list`, `roles.set`, `budget.show`, `budget.set` in `warshad`
 
 #### M5 – Desktop app (Tauri 2) ✅ DONE (validated 2026-10-29T12:52:29, all 14 checks green)
+
 Bridge run 20 is the acceptance evidence. All 14 checks PASS with M5 complete:
 
 - **Tauri 2 app structure** — `apps/desktop/` with `src-tauri/` (Rust backend), `src/` (React/TypeScript frontend), `tauri.conf.json` (window config, permissions, bundle settings)
@@ -1295,6 +1331,7 @@ Bridge run 20 is the acceptance evidence. All 14 checks PASS with M5 complete:
 - **TypeScript types** — Added `gate_a`, `gate_b` to Stage type, `RoleRoutingConfig` for role routing
 
 #### M6 – Remote PWA + secure pairing ✅ DONE (validated 2026-10-29T13:05:38, all 14 checks green)
+
 Bridge run 21 is the acceptance evidence. All 14 checks PASS with M6 complete:
 
 - **Crypto package** — `@warsha/crypto` with X25519 key exchange, ChaCha20-Poly1305 encryption, HKDF key derivation, replay protection, device registry
@@ -1307,6 +1344,7 @@ Bridge run 21 is the acceptance evidence. All 14 checks PASS with M6 complete:
 - **Crypto tests** — 13 passing tests covering key exchange, encryption, pairing, replay protection, device registry, frame serialization
 
 #### M7 – Coding backends + GitHub ✅ DONE (validated 2026-10-29T13:10:04, all 14 checks green)
+
 Bridge run 22 is the acceptance evidence. All 14 checks PASS with M7 complete:
 
 - **Backend crate** — `crates/warsha-backends/` with `CodingBackend` trait, `BuiltinBackend` (test double), `CliBackend` (runs external CLIs), `BackendFactory` for creating all adapters
@@ -1323,6 +1361,7 @@ Bridge run 22 is the acceptance evidence. All 14 checks PASS with M7 complete:
 - **Git/GitHub tests** — 20 tests covering repo init/open, templates, slugify, branch names, validation, GitHub client auth/headers
 
 #### M8 – i18n ar/en + RTL ✅ DONE (validated 2026-10-29T13:12:45, all 14 checks green)
+
 Bridge run 23 is the acceptance evidence. All 14 checks PASS with M8 complete:
 
 - **Complete i18n catalog** — `@warsha/i18n` with 80+ message keys covering all UI strings in Arabic (canonical) and English
@@ -1339,6 +1378,7 @@ Bridge run 23 is the acceptance evidence. All 14 checks PASS with M8 complete:
 - **Direction hook** — `useDirection()` returns 'rtl' for Arabic, 'ltr' for English, applied to all components via `dir` prop
 
 #### M9 – Packaging, releases, docs ✅ DONE (validated 2026-10-29T13:22:51, all 14 checks green)
+
 Bridge run 24 is the acceptance evidence. All 14 checks PASS with M9 complete:
 
 - **Release workflow** — `.github/workflows/release.yml` triggers on tag push (v*), builds CLI/daemon for 3 OSes, builds Tauri desktop installers, generates SHA256 checksums and CycloneDX SBOM, creates draft GitHub Release
@@ -1364,6 +1404,7 @@ FAIL  pnpm -r test  (exit 1)
 ```
 
 Actual state of the work:
+
 - `crates/warsha-pipeline` fails to compile with 27 clippy/test errors: duplicate `mod orchestrator;` (`lib.rs:762` plus `lib.rs:14`), unused `pub use` re-exports (`lib.rs:25-28`), private `orchestrator.questions`, `Role::Pm`/`Role::Qa` (the enum has `PM`/`QA`), missing `serde_yaml` dependency, `scout::ScoutSource` without `Hash`, and a `scout::LicenseClass` vs `skills::LicenseClass` type mismatch.
 - `pnpm install` breaks because `docs/package.json` declared `mdbook`/`mdbook-mermaid` as npm dependencies; they are cargo binaries.
 - `pnpm -r typecheck` fails on `ProjectsBoard` missing the `onProjectSelect` prop, a possibly-null `RunSummary` passed to child screens, and `Box` requiring `children` in two self-closing swatch/dot usages.
@@ -1373,6 +1414,7 @@ Actual state of the work:
 Repair is in flight (Rust crate and TypeScript app dispatched separately). Until a run reports `RESULT: … PASSED`, M10–M13 stay unvalidated.
 
 #### M10 – Orchestrator agent + Discovery interview — ⛔ IMPLEMENTED, NOT VALIDATED
+
 Was previously recorded as "DONE (validated 2026-10-29T13:40:37)". That timestamp came from the stale `final.txt`; no run ever validated this milestone.
 
 - **Orchestrator module** — `crates/warsha-pipeline/src/orchestrator.rs` with `Orchestrator`, `OrchestratorConfig`, `OrchestratorState`
@@ -1384,6 +1426,7 @@ Was previously recorded as "DONE (validated 2026-10-29T13:40:37)". That timestam
 - **Known blockers** — `orchestrator.questions` is private at the `lib.rs` call site; the 4 tests have never been executed by a real `cargo test`.
 
 #### M11 – Skills system + Role packs — ⛔ IMPLEMENTED, NOT VALIDATED
+
 Was previously recorded as "DONE (validated 2026-10-29T13:46:20)" from the stale `final.txt`.
 
 - **Skills module** — `crates/warsha-pipeline/src/skills.rs` with `SkillManifest`, `Skill`, `SkillRegistry`, `RolePack`, `SkillsLockfile`
@@ -1394,6 +1437,7 @@ Was previously recorded as "DONE (validated 2026-10-29T13:46:20)" from the stale
 - **Known blockers** — uses `Role::Pm`/`Role::Qa` which do not exist (enum has `PM`/`QA`); `serde_yaml` is not a dependency; unused `ulid::Ulid` and `PathBuf` imports fail `-D warnings`.
 
 #### M12 – MCP support + Scout — ⛔ IMPLEMENTED, NOT VALIDATED
+
 Was previously recorded as "DONE (validated 2026-10-29T13:58:56)" from the stale `final.txt`.
 
 - **MCP module** — `crates/warsha-pipeline/src/mcp.rs` with `McpServerConfig`, `McpRegistry`, `McpClient`, `ToolPermission` (Allowed/Denied/Pending/Revoked)
@@ -1407,6 +1451,7 @@ Was previously recorded as "DONE (validated 2026-10-29T13:58:56)" from the stale
 - **Tests** — 3 tests: server config, registry permission flow, scout license filtering
 
 #### M13 – Desktop UI, two modes with one toggle ✅ DONE (validated 2026-10-29T16:56:59, exit=0, all 18 checks green)
+
 Was previously recorded as "DONE (validated 2026-10-29T15:26:43)" from the stale `final.txt`, then downgraded. Now genuinely validated.
 
 - **Simple mode** — `apps/desktop/src/screens/SimpleMode.tsx`: sidebar of the 12 agent roles with avatar/status/unread, chat with the selected agent or Orchestrator, gate approval cards wired to `client.approveGate`/`rejectGate`, right panel with live team activity and a plain-language summary
@@ -1418,6 +1463,7 @@ Was previously recorded as "DONE (validated 2026-10-29T15:26:43)" from the stale
 - **Known blockers** — `ProjectsBoard` does not accept the new `onProjectSelect` prop; `App.tsx` passes a possibly-null `RunSummary` to the run screens; `Box` requires `children`, which two self-closing status dots violate; `docs/package.json` declares `mdbook` as an npm dependency and breaks `pnpm install`.
 
 #### M14 – Agent safety and quality layer ✅ DONE (validated 2026-10-29T16:56:59, exit=0, all 18 checks green)
+
 Bridge run at 2026-10-29T16:56:59 (done.flag exit=0) is the acceptance evidence; every check passed.
 
 - **Guardrails module** — `crates/warsha-pipeline/src/guardrails.rs`: `InputOrigin`, `Guardrails::inspect`/`scan` covering 14 injection phrases in English and Arabic, `wrap_untrusted` (escapes `</untrusted-data>`), `SensitiveAction`/`classify_action`, `mask_secrets` (sk-, ghp_, xoxb-, Bearer, 32+ char base64/hex, emails, phones).
@@ -1428,18 +1474,19 @@ Bridge run at 2026-10-29T16:56:59 (done.flag exit=0) is the acceptance evidence;
 - **Verification procedure corrected** — `bridge-io/final.txt` stopped being rewritten at 11:44 on 2026-10-29, so earlier "DONE" claims were stale. The authoritative evidence is `bridge-io/result.log`/`run-output.log` plus a done.flag newer than the run.flag that triggered it. `scripts/wsl-setup.sh` gained an mdbook install step; `ci.yml` pins mdbook to 0.5.4.
 
 #### M14a – Work protection ✅ DONE (validated 2026-10-29T14:12:40Z, exit=0, all check groups green)
+
 Rust module, two desktop components and one docs chapter. No dependency added, no `Cargo.toml`
 edited, no `.github/workflows/**` change. LingCode-inspired ideas only: no code, text or asset
 was copied from it.
 
-| Deliverable | Path | What landed |
-|---|---|---|
-| Work protection module | `crates/warsha-pipeline/src/work_protection.rs` (new) + `lib.rs` `mod`/`pub use` | `PermissionMode` (`ask_always`/`ask_for_risky`/`auto_inside_project`, serde `snake_case`), `WorkProtectionPolicy` (default `AskForRisky`, `snapshot_before_edit: true`, `worktree_isolation: false`, `read_before_write: true`), `Snapshot`/`SnapshotFile`, `SnapshotStore` trait (`create`/`restore`/`list`), `InMemorySnapshotStore` (creation order, duplicate/empty-id/unknown-id errors), `ReadBeforeWriteGuard` (`record_read`/`may_write`/`has_read`, `./`-normalised), `UndoEntry`/`UndoStack` (LIFO, `MAX_UNDO_ENTRIES` = 50, `with_limit`, `clear`), `WorkProtectionError` via thiserror |
-| Permission mode chip | `apps/desktop/src/components/PermissionModeChip.tsx` (new) | Renders the current mode as a chip, click cycles ask always → ask for risky → auto inside → ask always, calls `onChange`; label/hint come from `t()` with local ar/en fallbacks when the catalog has no key |
-| Snapshot restore button | `apps/desktop/src/components/SnapshotRestoreButton.tsx` (new) | "Restore snapshot", disabled when the run has no snapshot id, calls `onRestore(snapshotId)` |
-| Status-strip wiring | `apps/desktop/src/App.tsx` | `permissionMode` state (default `ask_for_risky`) + the chip in the top bar; no other App change |
-| UI tests | `apps/desktop/src/components/WorkProtection.test.tsx` (new) | 5 tests: cycle forward, wrap-around, label render, restore disabled without a snapshot, restore calls back with the id |
-| Docs chapter | `docs/src/work-protection.md` (new) + `docs/src/SUMMARY.md` | Arabic-first RTL block plus English spec: snapshot/restore, per-hunk keep/revert (existing diff viewer), undo stack, worktree isolation, read-before-write, the three permission modes, and an explicit "what is not here yet" section. SUMMARY entry is a top-level path, no anchors |
+| Deliverable             | Path                                                                             | What landed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Work protection module  | `crates/warsha-pipeline/src/work_protection.rs` (new) + `lib.rs` `mod`/`pub use` | `PermissionMode` (`ask_always`/`ask_for_risky`/`auto_inside_project`, serde `snake_case`), `WorkProtectionPolicy` (default `AskForRisky`, `snapshot_before_edit: true`, `worktree_isolation: false`, `read_before_write: true`), `Snapshot`/`SnapshotFile`, `SnapshotStore` trait (`create`/`restore`/`list`), `InMemorySnapshotStore` (creation order, duplicate/empty-id/unknown-id errors), `ReadBeforeWriteGuard` (`record_read`/`may_write`/`has_read`, `./`-normalised), `UndoEntry`/`UndoStack` (LIFO, `MAX_UNDO_ENTRIES` = 50, `with_limit`, `clear`), `WorkProtectionError` via thiserror |
+| Permission mode chip    | `apps/desktop/src/components/PermissionModeChip.tsx` (new)                       | Renders the current mode as a chip, click cycles ask always → ask for risky → auto inside → ask always, calls `onChange`; label/hint come from `t()` with local ar/en fallbacks when the catalog has no key                                                                                                                                                                                                                                                                                                                                                                                        |
+| Snapshot restore button | `apps/desktop/src/components/SnapshotRestoreButton.tsx` (new)                    | "Restore snapshot", disabled when the run has no snapshot id, calls `onRestore(snapshotId)`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Status-strip wiring     | `apps/desktop/src/App.tsx`                                                       | `permissionMode` state (default `ask_for_risky`) + the chip in the top bar; no other App change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| UI tests                | `apps/desktop/src/components/WorkProtection.test.tsx` (new)                      | 5 tests: cycle forward, wrap-around, label render, restore disabled without a snapshot, restore calls back with the id                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Docs chapter            | `docs/src/work-protection.md` (new) + `docs/src/SUMMARY.md`                      | Arabic-first RTL block plus English spec: snapshot/restore, per-hunk keep/revert (existing diff viewer), undo stack, worktree isolation, read-before-write, the three permission modes, and an explicit "what is not here yet" section. SUMMARY entry is a top-level path, no anchors                                                                                                                                                                                                                                                                                                              |
 
 Tests added — 15 new, all passing: 10 in `work_protection` (default policy, snapshot
 create/restore roundtrip, run-scoped `list` ordering, duplicate/unknown/empty-id errors,
@@ -1450,16 +1497,16 @@ serde) and 5 desktop component tests.
 Verification run for this milestone (WSL Ubuntu, Node 20.20.2, pnpm 9.0.0, `mdbook` 0.5.4, synced
 copy of the working tree):
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` | PASS |
-| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
-| `cargo test --workspace` | PASS — 124 tests, 0 failed |
-| `pnpm install` | PASS |
-| `pnpm -r typecheck` | PASS (TS strict, no `any` added) |
-| `pnpm -r build` | PASS |
-| `pnpm -r test` | PASS — 84 tests (crypto 22, client 32, ui 8, i18n 12, remote 4, desktop 6) incl. `mdbook test` on the new chapter |
-| `actionlint .github/workflows/ci.yml` | PASS |
+| Check                                                   | Result                                                                                                            |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `cargo fmt --all --check`                               | PASS                                                                                                              |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS                                                                                                              |
+| `cargo test --workspace`                                | PASS — 124 tests, 0 failed                                                                                        |
+| `pnpm install`                                          | PASS                                                                                                              |
+| `pnpm -r typecheck`                                     | PASS (TS strict, no `any` added)                                                                                  |
+| `pnpm -r build`                                         | PASS                                                                                                              |
+| `pnpm -r test`                                          | PASS — 84 tests (crypto 22, client 32, ui 8, i18n 12, remote 4, desktop 6) incl. `mdbook test` on the new chapter |
+| `actionlint .github/workflows/ci.yml`                   | PASS                                                                                                              |
 
 Defect found and fixed inside a file this milestone created: the first run failed `pnpm -r test`
 because `mdbook test` runs rustdoc over every ` ```rust ` fence, and the three illustrative
@@ -1493,20 +1540,21 @@ Pre-existing failures found, not touched:
 - `apps/desktop/tauri.conf.json` is modified in the working tree by someone else; left untouched.
 
 #### M14b – Router additions ✅ DONE (validated 2026-10-29T18:30:10, exit=0, all checks green)
+
 Two Rust modules, three desktop components and one docs chapter. No dependency added, no
 `Cargo.toml` edited, no `.github/workflows/**` change, no `package.json` change. LingCode-inspired
 ideas only: no code, text or asset was copied from it.
 
-| Deliverable | Path | What landed |
-|---|---|---|
-| Router additions | `crates/warsha-pipeline/src/router_quality.rs` (extended) + `lib.rs` `pub use` | `TargetKind` (`Local`/`Cloud`, serde `snake_case`), `RouterTarget { name, kind, model }` (`new`/`is_local`/`badge`), `EcoMode { enabled, battery_threshold_pct, fallback_to_local }` with `Default` (false/20/true) + builders + `decide(is_battery, battery_pct, network_ok) -> EcoModeDecision { use_local, reason }`, `PerTaskDefault` + `PerTaskDefaults` (`set`/`set_default`/`get`/`remove`/`model_for`/`len`/`is_empty`/`defaults` sorted, serde-transparent map), `LocalFallbackPolicy { enabled, max_retries }` (`Default` true/1) + `should_fallback(&str)` |
-| Provider setup (implementation) | `crates/warsha-providers/src/provider_setup.rs` (new) + `lib.rs` `mod`/`pub use` | `ConnectionTestResult { url_ok, key_ok, model_ok, url_reason, key_reason, model_reason }` with `all_ok`/`failures`, `ProviderSetupWizard::test_connection(url, key, model)` (no network), hand-rolled URL/key/model validators, `OneClickProvider` (`OpenRouter`/`DeepSeek`/`Kimi`/`Glm`/`Qwen`/`Custom`) with `all`/`as_str`/`default_base_url` (`None` for `Custom`) |
-| Provider setup (pipeline seam) | `crates/warsha-pipeline/src/provider_setup.rs` (new) + `lib.rs` `mod`/`pub use` | Re-exports the three provider-setup types from `warsha-providers`, so the daemon and the desktop reach one implementation instead of two copies |
-| Local/cloud badge | `apps/desktop/src/components/LocalCloudBadge.tsx` (new) | `kind` pill, ar/en labels via `t()` with local fallbacks, target name + model in `title`/`aria-label`, `data-kind` for styling |
-| Eco mode toggle | `apps/desktop/src/components/EcoModeToggle.tsx` (new) | `role="switch"` + `aria-checked` bound to `onChange(enabled)`, shows the battery/network values the decision uses, optional router `reason` in the tooltip |
-| Provider setup wizard | `apps/desktop/src/components/ProviderSetupWizard.tsx` (new) | Provider picker prefilling the default URL, URL/key/model fields, "Test connection" showing three checkmarks with a per-field reason, `onSave` disabled until all three pass; exported `testConnection()` mirrors the Rust rules and the snake_case result shape |
-| UI tests | `apps/desktop/src/components/RouterAdditions.test.tsx` (new) | 15 tests: badge (4), Eco toggle (4), `testConnection` (3), wizard (4) |
-| Docs chapter | `docs/src/router-additions.md` (new) + `docs/src/SUMMARY.md` | Arabic-first RTL block plus the English spec: badge, Eco mode decision order, per-task defaults, fallback policy, the six one-click providers, the three error classes, and an explicit "what is not here yet" section. Rust fences are ` ```rust,ignore ` because `mdbook test` runs rustdoc over them |
+| Deliverable                     | Path                                                                             | What landed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ------------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Router additions                | `crates/warsha-pipeline/src/router_quality.rs` (extended) + `lib.rs` `pub use`   | `TargetKind` (`Local`/`Cloud`, serde `snake_case`), `RouterTarget { name, kind, model }` (`new`/`is_local`/`badge`), `EcoMode { enabled, battery_threshold_pct, fallback_to_local }` with `Default` (false/20/true) + builders + `decide(is_battery, battery_pct, network_ok) -> EcoModeDecision { use_local, reason }`, `PerTaskDefault` + `PerTaskDefaults` (`set`/`set_default`/`get`/`remove`/`model_for`/`len`/`is_empty`/`defaults` sorted, serde-transparent map), `LocalFallbackPolicy { enabled, max_retries }` (`Default` true/1) + `should_fallback(&str)` |
+| Provider setup (implementation) | `crates/warsha-providers/src/provider_setup.rs` (new) + `lib.rs` `mod`/`pub use` | `ConnectionTestResult { url_ok, key_ok, model_ok, url_reason, key_reason, model_reason }` with `all_ok`/`failures`, `ProviderSetupWizard::test_connection(url, key, model)` (no network), hand-rolled URL/key/model validators, `OneClickProvider` (`OpenRouter`/`DeepSeek`/`Kimi`/`Glm`/`Qwen`/`Custom`) with `all`/`as_str`/`default_base_url` (`None` for `Custom`)                                                                                                                                                                                                |
+| Provider setup (pipeline seam)  | `crates/warsha-pipeline/src/provider_setup.rs` (new) + `lib.rs` `mod`/`pub use`  | Re-exports the three provider-setup types from `warsha-providers`, so the daemon and the desktop reach one implementation instead of two copies                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Local/cloud badge               | `apps/desktop/src/components/LocalCloudBadge.tsx` (new)                          | `kind` pill, ar/en labels via `t()` with local fallbacks, target name + model in `title`/`aria-label`, `data-kind` for styling                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Eco mode toggle                 | `apps/desktop/src/components/EcoModeToggle.tsx` (new)                            | `role="switch"` + `aria-checked` bound to `onChange(enabled)`, shows the battery/network values the decision uses, optional router `reason` in the tooltip                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Provider setup wizard           | `apps/desktop/src/components/ProviderSetupWizard.tsx` (new)                      | Provider picker prefilling the default URL, URL/key/model fields, "Test connection" showing three checkmarks with a per-field reason, `onSave` disabled until all three pass; exported `testConnection()` mirrors the Rust rules and the snake_case result shape                                                                                                                                                                                                                                                                                                      |
+| UI tests                        | `apps/desktop/src/components/RouterAdditions.test.tsx` (new)                     | 15 tests: badge (4), Eco toggle (4), `testConnection` (3), wizard (4)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Docs chapter                    | `docs/src/router-additions.md` (new) + `docs/src/SUMMARY.md`                     | Arabic-first RTL block plus the English spec: badge, Eco mode decision order, per-task defaults, fallback policy, the six one-click providers, the three error classes, and an explicit "what is not here yet" section. Rust fences are ` ```rust,ignore ` because `mdbook test` runs rustdoc over them                                                                                                                                                                                                                                                               |
 
 Tests added — 29 new, all passing: 14 Rust (6 in `router_quality`: `TargetKind` serde + badges,
 `EcoMode` defaults incl. missing-field deserialisation, `decide` across mains/battery/offline,
@@ -1517,16 +1565,16 @@ fallback policy keyword matching; 7 in `warsha-providers::provider_setup`: all-o
 
 Verification run for this milestone (WSL Ubuntu, Node 20.20.2, pnpm 9.0.0, `mdbook` 0.5.4):
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` | PASS |
-| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
-| `cargo test --workspace` | PASS — 138 tests, 0 failed, 0 ignored |
-| `pnpm install` | PASS |
-| `pnpm -r typecheck` | PASS (TS strict, no `any` added) |
-| `pnpm -r build` | PASS |
-| `pnpm -r test` | PASS — 99 tests (client 32, crypto 22, i18n 12, ui 8, desktop 21, remote 4) incl. `mdbook test` over the new chapter |
-| `actionlint .github/workflows/ci.yml` | PASS |
+| Check                                                   | Result                                                                                                               |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `cargo fmt --all --check`                               | PASS                                                                                                                 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS                                                                                                                 |
+| `cargo test --workspace`                                | PASS — 138 tests, 0 failed, 0 ignored                                                                                |
+| `pnpm install`                                          | PASS                                                                                                                 |
+| `pnpm -r typecheck`                                     | PASS (TS strict, no `any` added)                                                                                     |
+| `pnpm -r build`                                         | PASS                                                                                                                 |
+| `pnpm -r test`                                          | PASS — 99 tests (client 32, crypto 22, i18n 12, ui 8, desktop 21, remote 4) incl. `mdbook test` over the new chapter |
+| `actionlint .github/workflows/ci.yml`                   | PASS                                                                                                                 |
 
 Bridge evidence (per the corrected verification rule — `result.log`, not `final.txt`): run requested
 2026-10-29T18:30:10 via `bridge-io/run.flag`; `bridge-io/done.flag` says `exit=0 finished
@@ -1569,29 +1617,31 @@ Environment notes (this host, not defects in the tree):
   fails there; all Rust validation ran in WSL, as in previous milestones.
 - `pnpm` is not installed on Windows. `apps/desktop` typecheck ran locally with the repo's
   `node_modules/.bin/tsc` (PASS); `vitest` could not load `@testing-library/jest-dom` from the
-  Windows `node_modules/.pnpm` layout for *any* desktop test file, so the TS test run is the WSL
+  Windows `node_modules/.pnpm` layout for _any_ desktop test file, so the TS test run is the WSL
   one above.
 
 Pre-existing, not touched: `apps/desktop/tauri.conf.json` and `apps/desktop/src/App.tsx` carry
 another session's uncommitted changes.
 
 #### M15 – Marketing + Social + Launch assets ✅ DONE (validated 2026-10-29T17:24:32, exit=0, all 18 checks green)
+
 Content, docs and small config only: no `.rs` file, no `crates/**`, no `.github/**`, root
 `package.json` and `pnpm-workspace.yaml` untouched. Per the corrected verification rule, M15 is not
 DONE until a bridge run reports `RESULT: … PASSED` in `result.log`.
 
-| Deliverable | Path | What landed |
-|---|---|---|
-| Landing page (mdBook home) | `docs/src/index.md` | Arabic-first RTL-isolated sections plus an English fallback block: hero with tagline «ورشة: مصنع برمجيات بالذكاء الاصطناعي», value proposition, the 12 agent roles, the 14-stage pipeline with the four gates, bring-your-own-provider, human gates, screenshots placeholder, quickstart CTA, PolyForm license note |
-| Gates page + Gate D enforcement | `docs/src/gates.md` | The four gates, approval mechanics, `warsha gates/approve/reject`, why agents can never approve a gate, no auto-posting, audit trail |
-| Chapter list | `docs/src/SUMMARY.md` | `Landing` first (so `index.md` is the book home) and `Gates and Approvals` added; top-level paths only, no `#` anchors |
-| Store listing texts | `docs/store/README.md` + `microsoft-store.md`, `winget.md`, `homebrew.md`, `scoop.md`, `crates-io.md`, `npm.md` | Title, short description (≤ 80 chars), long description, keywords/categories, privacy note and a `not yet submitted` status line each, English primary with the Arabic tagline |
-| Social posts calendar | `docs/social/calendar.md` | Weeks −1/0/+1/+2 (D−7 … D+20), 43 posts — 28 X (every X body ≤ 280 chars, verified), 9 LinkedIn, 6 forum — each with channel, date offset, headline, body, CTA, the line `Gate D — owner approves before posting` and status `pending approval` |
-| Launch checklist | `docs/launch/checklist.md` | Installers per OS, checksums, SBOM, draft GitHub Release, prepared-but-unsubmitted winget/Homebrew/Scoop manifests, docs site, `warsha doctor` smoke, demo link, human-only steps, Gate D sign-off, rollback |
-| Demo video script | `docs/launch/demo-script.md` | 3-minute shot list, recording setup, do-not-show list, screenshot pulls (the "demo video script link" the checklist needs) |
-| Feedback → backlog loop | `docs/launch/feedback-loop.md` | Data sources (issues, opt-in telemetry, crash reports, in-app feedback, evals), allowed/forbidden payload, triage steps, weighted ranking rubric with must-fix overrides, gate points, re-entry at Spec → Gate B → Gate C, privacy and failure modes |
+| Deliverable                     | Path                                                                                                            | What landed                                                                                                                                                                                                                                                                                                         |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Landing page (mdBook home)      | `docs/src/index.md`                                                                                             | Arabic-first RTL-isolated sections plus an English fallback block: hero with tagline «ورشة: مصنع برمجيات بالذكاء الاصطناعي», value proposition, the 12 agent roles, the 14-stage pipeline with the four gates, bring-your-own-provider, human gates, screenshots placeholder, quickstart CTA, PolyForm license note |
+| Gates page + Gate D enforcement | `docs/src/gates.md`                                                                                             | The four gates, approval mechanics, `warsha gates/approve/reject`, why agents can never approve a gate, no auto-posting, audit trail                                                                                                                                                                                |
+| Chapter list                    | `docs/src/SUMMARY.md`                                                                                           | `Landing` first (so `index.md` is the book home) and `Gates and Approvals` added; top-level paths only, no `#` anchors                                                                                                                                                                                              |
+| Store listing texts             | `docs/store/README.md` + `microsoft-store.md`, `winget.md`, `homebrew.md`, `scoop.md`, `crates-io.md`, `npm.md` | Title, short description (≤ 80 chars), long description, keywords/categories, privacy note and a `not yet submitted` status line each, English primary with the Arabic tagline                                                                                                                                      |
+| Social posts calendar           | `docs/social/calendar.md`                                                                                       | Weeks −1/0/+1/+2 (D−7 … D+20), 43 posts — 28 X (every X body ≤ 280 chars, verified), 9 LinkedIn, 6 forum — each with channel, date offset, headline, body, CTA, the line `Gate D — owner approves before posting` and status `pending approval`                                                                     |
+| Launch checklist                | `docs/launch/checklist.md`                                                                                      | Installers per OS, checksums, SBOM, draft GitHub Release, prepared-but-unsubmitted winget/Homebrew/Scoop manifests, docs site, `warsha doctor` smoke, demo link, human-only steps, Gate D sign-off, rollback                                                                                                        |
+| Demo video script               | `docs/launch/demo-script.md`                                                                                    | 3-minute shot list, recording setup, do-not-show list, screenshot pulls (the "demo video script link" the checklist needs)                                                                                                                                                                                          |
+| Feedback → backlog loop         | `docs/launch/feedback-loop.md`                                                                                  | Data sources (issues, opt-in telemetry, crash reports, in-app feedback, evals), allowed/forbidden payload, triage steps, weighted ranking rubric with must-fix overrides, gate points, re-entry at Spec → Gate B → Gate C, privacy and failure modes                                                                |
 
 #### M15 — docs build fixes applied (pre-existing defects, `docs/book.toml` is untracked)
+
 `mdbook build` (v0.5.4, the version CI pins) was **ERRORing** before this milestone touched anything:
 
 1. `curly-quotes` is an mdBook 0.4 key → replaced with `smart-punctuation`; the HTML backend failed
@@ -1624,19 +1674,20 @@ Environment note: the Windows `mdbook.exe` on this host dies with `0xC0000005` e
 so docs validation is run through WSL's `mdbook v0.5.4` against `/mnt/c/.../docs`.
 
 #### M16 – Continuous development loop automation ✅ DONE (validated 2026-10-29T17:47:43, exit=0, all 18 checks green)
+
 Rust modules, config and docs only: no dependency added, no `Cargo.toml` edited, no TypeScript changed
 (`apps/desktop/tauri.conf.json` is JSON consumed by Tauri, not typechecked).
 
-| Deliverable | Path | What landed |
-|---|---|---|
-| Routines abstraction | `crates/warsha-pipeline/src/routines.rs` (new) + `lib.rs` `mod`/`pub use` | `RoutineId` (String), `Routine`, `RoutineSchedule` (`Cron(String)`/`IntervalSeconds(u64)`/`Manual`), `RoutineState` (Idle/Running/Paused/Failed(String)), `RoutineAction` (RunNow/Pause/Resume), `RoutineRunner` trait (`run` required, `pause`/`resume` default to `Ok(())`), `RoutineRegistry` (`register`/`list`/`get`/`remove`/`tick`/`apply`/`complete`), `RoutineError` via thiserror, `MockRoutineRunner` |
-| Minimal cron | same file | `every N seconds\|minutes\|hours` and `daily at HH:MM` (UTC); anything else is rejected with `RoutineError::InvalidSchedule`. Full cron is deferred to the Goose-backed scheduler, which plugs in through `RoutineRunner` |
-| Provider auto-update | `crates/warsha-providers/src/provider_update.rs` (new) + `lib.rs` `mod`/`pub use` | `ProviderUpdateMode` (Off/NotifyOnly/AutoInstall), `ProviderUpdatePolicy` (per-provider opt-in map, `pinned_version`, `skip_versions`), `DetectedProvider`, `ProviderDetector`/`ProviderUpdateChecker` traits, `MockDetector`/`MockChecker`, `ProviderUpdatePlanner::plan(policy, detected, latest, run_active)` → `Notify`/`Install`/`Skip{reason}`, `latest_versions`, `ProviderUpdateError` |
-| Renovate | `.github/renovate.json` (new) | Weekly (`before 6am on monday`), minor+patch grouped, majors separate, `automerge: false` everywhere, `prCreation: "not-pending"`, `internalChecksFilter: "strict"`, required status checks, monthly `lockFileMaintenance`, a `customManagers` regex tracking the commented-out Goose tag (`github-tags`, `semver-coerced`), and package rules that label Goose bumps `dependency:goose` / `full-suite-required` |
-| Tauri updater | `apps/desktop/tauri.conf.json` | `plugins.updater.active: true`, `endpoints: ["https://github.com/Warsha/Warsha/releases/latest/download/latest.json"]`, `pubkey: ""` |
-| Third-party notices | `THIRD_PARTY_NOTICES.md` (new) | Goose Apache-2.0, Activepieces CE MIT core (with `packages/ee` never used), mdBook MPL-2.0, explicit "n8n not used", license-text links only, plus how to keep the file current |
-| Launch docs | `docs/launch/activepieces.md`, `docs/launch/provider-auto-update.md` (new) | Activepieces: MIT core only, never `packages/ee`, license recording, Gate D boundary, how to enable. Provider auto-update: off by default, the three modes, pin/skip, health check + rollback, never while a run is active, where the code lives |
-| Docs nav | `docs/src/SUMMARY.md` + `docs/src/launch/activepieces.md`, `docs/src/launch/provider-auto-update.md` | Two chapters added as plain paths, no anchors. The `src/launch/*` pages are one-line `{{#include}}` shims: mdBook writes a chapter that lives outside `src/` next to its source file, so a `../launch/*.md` SUMMARY entry published nothing into `book/` and the sidebar 404'd; the shim keeps the content in `docs/launch/` and still ships `book/launch/*.html` |
+| Deliverable          | Path                                                                                                 | What landed                                                                                                                                                                                                                                                                                                                                                                                                      |
+| -------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Routines abstraction | `crates/warsha-pipeline/src/routines.rs` (new) + `lib.rs` `mod`/`pub use`                            | `RoutineId` (String), `Routine`, `RoutineSchedule` (`Cron(String)`/`IntervalSeconds(u64)`/`Manual`), `RoutineState` (Idle/Running/Paused/Failed(String)), `RoutineAction` (RunNow/Pause/Resume), `RoutineRunner` trait (`run` required, `pause`/`resume` default to `Ok(())`), `RoutineRegistry` (`register`/`list`/`get`/`remove`/`tick`/`apply`/`complete`), `RoutineError` via thiserror, `MockRoutineRunner` |
+| Minimal cron         | same file                                                                                            | `every N seconds\|minutes\|hours` and `daily at HH:MM` (UTC); anything else is rejected with `RoutineError::InvalidSchedule`. Full cron is deferred to the Goose-backed scheduler, which plugs in through `RoutineRunner`                                                                                                                                                                                        |
+| Provider auto-update | `crates/warsha-providers/src/provider_update.rs` (new) + `lib.rs` `mod`/`pub use`                    | `ProviderUpdateMode` (Off/NotifyOnly/AutoInstall), `ProviderUpdatePolicy` (per-provider opt-in map, `pinned_version`, `skip_versions`), `DetectedProvider`, `ProviderDetector`/`ProviderUpdateChecker` traits, `MockDetector`/`MockChecker`, `ProviderUpdatePlanner::plan(policy, detected, latest, run_active)` → `Notify`/`Install`/`Skip{reason}`, `latest_versions`, `ProviderUpdateError`                   |
+| Renovate             | `.github/renovate.json` (new)                                                                        | Weekly (`before 6am on monday`), minor+patch grouped, majors separate, `automerge: false` everywhere, `prCreation: "not-pending"`, `internalChecksFilter: "strict"`, required status checks, monthly `lockFileMaintenance`, a `customManagers` regex tracking the commented-out Goose tag (`github-tags`, `semver-coerced`), and package rules that label Goose bumps `dependency:goose` / `full-suite-required` |
+| Tauri updater        | `apps/desktop/tauri.conf.json`                                                                       | `plugins.updater.active: true`, `endpoints: ["https://github.com/Warsha/Warsha/releases/latest/download/latest.json"]`, `pubkey: ""`                                                                                                                                                                                                                                                                             |
+| Third-party notices  | `THIRD_PARTY_NOTICES.md` (new)                                                                       | Goose Apache-2.0, Activepieces CE MIT core (with `packages/ee` never used), mdBook MPL-2.0, explicit "n8n not used", license-text links only, plus how to keep the file current                                                                                                                                                                                                                                  |
+| Launch docs          | `docs/launch/activepieces.md`, `docs/launch/provider-auto-update.md` (new)                           | Activepieces: MIT core only, never `packages/ee`, license recording, Gate D boundary, how to enable. Provider auto-update: off by default, the three modes, pin/skip, health check + rollback, never while a run is active, where the code lives                                                                                                                                                                 |
+| Docs nav             | `docs/src/SUMMARY.md` + `docs/src/launch/activepieces.md`, `docs/src/launch/provider-auto-update.md` | Two chapters added as plain paths, no anchors. The `src/launch/*` pages are one-line `{{#include}}` shims: mdBook writes a chapter that lives outside `src/` next to its source file, so a `../launch/*.md` SUMMARY entry published nothing into `book/` and the sidebar 404'd; the shim keeps the content in `docs/launch/` and still ships `book/launch/*.html`                                                |
 
 Tests added — 17 new, all passing: 9 in `routines` (register/list/get/remove, duplicate + bad id + bad schedule,
 `tick` hands a routine out once and needs `complete`, `tick` skips manual/paused/failed, pause/resume drive the
@@ -1647,14 +1698,14 @@ skipped version, run active skips everything, unknown channel, mocks + `latest_v
 
 Verification run for this milestone (WSL Ubuntu, `mdbook v0.5.4`, synced copy):
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` | PASS |
-| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
-| `cargo test --workspace` | PASS — 114 tests, 0 failed, 0 errors in the log |
-| `mdbook build` / `mdbook test` (docs) | PASS — both new chapters tested, `book/launch/activepieces.html` and `book/launch/provider-auto-update.html` written |
-| `actionlint .github/workflows/ci.yml` | PASS |
-| `pnpm -r build` / `-r test` / `-r typecheck` | Not run here — pnpm is not installed on this Windows host, and no `.ts`/`.tsx` file changed in M16 (the bridge runs them) |
+| Check                                                   | Result                                                                                                                    |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `cargo fmt --all --check`                               | PASS                                                                                                                      |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS                                                                                                                      |
+| `cargo test --workspace`                                | PASS — 114 tests, 0 failed, 0 errors in the log                                                                           |
+| `mdbook build` / `mdbook test` (docs)                   | PASS — both new chapters tested, `book/launch/activepieces.html` and `book/launch/provider-auto-update.html` written      |
+| `actionlint .github/workflows/ci.yml`                   | PASS                                                                                                                      |
+| `pnpm -r build` / `-r test` / `-r typecheck`            | Not run here — pnpm is not installed on this Windows host, and no `.ts`/`.tsx` file changed in M16 (the bridge runs them) |
 
 Defect found and fixed inside a file this milestone had to edit: `apps/desktop/tauri.conf.json` did not parse as
 JSON at all — the `$APPDATA` fs allowlist entry read `"recursive: true }`, a missing closing quote that swallowed
@@ -1680,18 +1731,19 @@ Settings → Providers auto-update UI, the Goose-backed scheduler itself (Goose 
 the root `Cargo.toml`) and the Activepieces connection.
 
 #### M5a – Ship status strip and delivery ✅ DONE (validated 2026-10-29T18:51:36, exit=0, all 18 checks green; live feed not wired, see below)
+
 Three new desktop components, one docs chapter and a two-line wiring in `App.tsx`. No dependency added, no
 `Cargo.toml` edited, no `.github/workflows/**` change, no `.rs` file touched. LingCode-inspired ideas only: no
 code, text or asset was copied from it.
 
-| Deliverable | Path | What landed |
-|---|---|---|
-| Status strip | `apps/desktop/src/components/StatusStrip.tsx` (new) | `StageStatus` (`pending`/`running`/`pass`/`fail`), `DeliveryStage { name, status }`, the four ship stages (`code_checks`, `builds`, `tests`, `store_ready`), `initialDeliveryStages()` (all pending), `allStagesGreen()` (non-empty and every stage passed), `normalizeStageName()` (`Store Ready` / `store-ready` → `store_ready`), and the strip itself: colour-coded pills (green pass, red fail, gray pending, blue running with an SVG/SMIL spinner), `→` separators that flip to `←` under `dir="rtl"`, `aria-label` per stage, unknown stage names rendered as given |
-| Release preflight | `apps/desktop/src/components/ReleasePreflight.tsx` (new) | The six checks (`lint`, `typecheck`, `tests`, `build`, `sbom`, `checksums`) with per-row glyphs, `overallPreflightStatus()` (any `fail` → `fail`, non-empty all-`pass` → `pass`, else `pending`), `preflightReady()`, one badge (`Ready to release` / `Blocked` / `Waiting`), an `N of 6 passed` line, and a "Run preflight" button wired to `onRun` and gated by the `disabled` prop |
-| Web deploy button | `apps/desktop/src/components/WebDeployButton.tsx` (new) | `DeployStatus` (`idle`/`deploying`/`done`/`error`), spinner while deploying, `✓`/`✗` afterwards, a `role="status"` `aria-live="polite"` description line, a busy state that disables the button and ignores clicks (no queued double deploy), and a `title` that names the blocker when `disabled`. No keychain or credential access, nothing logged |
-| App wiring | `apps/desktop/src/App.tsx` | Import + `deliveryStages` state seeded from `initialDeliveryStages()` + the strip as the middle element of the top bar. Two lines plus a four-line comment; no other change |
-| UI tests | `StatusStrip.test.tsx`, `ReleasePreflight.test.tsx`, `WebDeployButton.test.tsx` (new) | 19 tests: strip order/arrows/labels, all four statuses incl. colours and the single spinner, Arabic labels + `dir="rtl"` + `←`, unknown stage names, `initialDeliveryStages`/`allStagesGreen`/`normalizeStageName`, live re-render from a new `stages` array, the AC composition (`allStagesGreen` → deploy button off/on); preflight six rows, the three overall states with colours, `onRun` (twice), the `disabled` seam, Arabic labels and counts, `overallPreflightStatus`/`preflightReady` and an unknown check; deploy idle/deploying/done/error, the click callback, the busy state swallowing clicks, the blocked `disabled` tooltip, and all four Arabic labels |
-| Docs chapter | `docs/src/status-strip.md` (new) + `docs/src/SUMMARY.md` | Arabic-first RTL block plus the English spec: the four stages and the colour table, the SMIL spinner, the six preflight checks and the three badge states, the four deploy statuses, the gate rule (deploy off until all four stages are green), and an explicit "what is not here yet" section. TypeScript fences are ` ```ts `, so `mdbook test` only runs the existing Rust chapters |
+| Deliverable       | Path                                                                                  | What landed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ----------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Status strip      | `apps/desktop/src/components/StatusStrip.tsx` (new)                                   | `StageStatus` (`pending`/`running`/`pass`/`fail`), `DeliveryStage { name, status }`, the four ship stages (`code_checks`, `builds`, `tests`, `store_ready`), `initialDeliveryStages()` (all pending), `allStagesGreen()` (non-empty and every stage passed), `normalizeStageName()` (`Store Ready` / `store-ready` → `store_ready`), and the strip itself: colour-coded pills (green pass, red fail, gray pending, blue running with an SVG/SMIL spinner), `→` separators that flip to `←` under `dir="rtl"`, `aria-label` per stage, unknown stage names rendered as given                                                                                               |
+| Release preflight | `apps/desktop/src/components/ReleasePreflight.tsx` (new)                              | The six checks (`lint`, `typecheck`, `tests`, `build`, `sbom`, `checksums`) with per-row glyphs, `overallPreflightStatus()` (any `fail` → `fail`, non-empty all-`pass` → `pass`, else `pending`), `preflightReady()`, one badge (`Ready to release` / `Blocked` / `Waiting`), an `N of 6 passed` line, and a "Run preflight" button wired to `onRun` and gated by the `disabled` prop                                                                                                                                                                                                                                                                                     |
+| Web deploy button | `apps/desktop/src/components/WebDeployButton.tsx` (new)                               | `DeployStatus` (`idle`/`deploying`/`done`/`error`), spinner while deploying, `✓`/`✗` afterwards, a `role="status"` `aria-live="polite"` description line, a busy state that disables the button and ignores clicks (no queued double deploy), and a `title` that names the blocker when `disabled`. No keychain or credential access, nothing logged                                                                                                                                                                                                                                                                                                                      |
+| App wiring        | `apps/desktop/src/App.tsx`                                                            | Import + `deliveryStages` state seeded from `initialDeliveryStages()` + the strip as the middle element of the top bar. Two lines plus a four-line comment; no other change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| UI tests          | `StatusStrip.test.tsx`, `ReleasePreflight.test.tsx`, `WebDeployButton.test.tsx` (new) | 19 tests: strip order/arrows/labels, all four statuses incl. colours and the single spinner, Arabic labels + `dir="rtl"` + `←`, unknown stage names, `initialDeliveryStages`/`allStagesGreen`/`normalizeStageName`, live re-render from a new `stages` array, the AC composition (`allStagesGreen` → deploy button off/on); preflight six rows, the three overall states with colours, `onRun` (twice), the `disabled` seam, Arabic labels and counts, `overallPreflightStatus`/`preflightReady` and an unknown check; deploy idle/deploying/done/error, the click callback, the busy state swallowing clicks, the blocked `disabled` tooltip, and all four Arabic labels |
+| Docs chapter      | `docs/src/status-strip.md` (new) + `docs/src/SUMMARY.md`                              | Arabic-first RTL block plus the English spec: the four stages and the colour table, the SMIL spinner, the six preflight checks and the three badge states, the four deploy statuses, the gate rule (deploy off until all four stages are green), and an explicit "what is not here yet" section. TypeScript fences are ` ```ts `, so `mdbook test` only runs the existing Rust chapters                                                                                                                                                                                                                                                                                   |
 
 Tests added — 19 new desktop tests, all passing; the desktop suite went 21 → 40.
 
@@ -1700,16 +1752,16 @@ Verification run for this milestone (two runs: 18:48:04 requested → `done.flag
 `exit=0 finished 2026-10-29T18:51:36`. Per the corrected rule the evidence is `bridge-io/result.log`, and the
 figures below are from the final run):
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` | PASS |
-| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
-| `cargo test --workspace` | PASS — 138 tests, 0 failed, 0 ignored |
-| `pnpm install` | PASS |
-| `pnpm -r typecheck` | PASS (TS strict, no `any` added) |
-| `pnpm -r build` | PASS |
-| `pnpm -r test` | PASS — 118 tests (client 32, crypto 22, i18n 12, ui 8, desktop 40, remote 4) |
-| `actionlint .github/workflows/ci.yml` | PASS |
+| Check                                                   | Result                                                                       |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `cargo fmt --all --check`                               | PASS                                                                         |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS                                                                         |
+| `cargo test --workspace`                                | PASS — 138 tests, 0 failed, 0 ignored                                        |
+| `pnpm install`                                          | PASS                                                                         |
+| `pnpm -r typecheck`                                     | PASS (TS strict, no `any` added)                                             |
+| `pnpm -r build`                                         | PASS                                                                         |
+| `pnpm -r test`                                          | PASS — 118 tests (client 32, crypto 22, i18n 12, ui 8, desktop 40, remote 4) |
+| `actionlint .github/workflows/ci.yml`                   | PASS                                                                         |
 
 `result.log` ends with `RESULT: M0 validation PASSED — all checks green.` (the script's own label is still
 "M0"; the check set is the 18-item `wsl-setup.sh` list). Also verified directly on this host with the repo's
@@ -1757,16 +1809,17 @@ Pre-existing, not touched: `apps/desktop/tauri.conf.json` and the `crates/warsha
 sessions in this working tree.
 
 #### M5b – Live preview panel ✅ DONE (validated 2026-10-29T19:09:37, exit=0, all 18 checks green; web half only — the Android preview and the run-view mount are outside this batch's allowed files)
+
 Two new desktop components, two test files and one docs chapter. No dependency added, no `Cargo.toml`
 edited, no `.github/workflows/**` change, no `.rs` file touched. LingCode-inspired ideas only: no code,
 text or asset was copied from it.
 
-| Deliverable | Path | What landed |
-|---|---|---|
-| Live preview panel | `apps/desktop/src/components/LivePreview.tsx` (new) | `LivePreviewProps` (`url: string \| null`, optional `onElementClick`, `onRun`, `onStop`, `status`); the sandboxed `<iframe src={url}>` (`allow-scripts allow-same-origin allow-forms allow-popups allow-modals`, `referrerPolicy="no-referrer"`, a `title`); the "No preview yet" placeholder when `url` is `null`; a `role="alert"` line on `error`; pop-out via `window.open(url, '_blank', 'noopener,noreferrer')` (no `url` ⇒ no window); the pick overlay (hint, cross-origin note, `dir="ltr"` selector input, submit); a pick toggle whose overlay follows `status === 'running'`; and `elementMention(selector)` → `@element(#submit)` |
-| Preview toolbar | `apps/desktop/src/components/PreviewToolbar.tsx` (new) | `PreviewStatus` (`idle`/`running`/`stopped`/`error`), `PreviewAction`, Run/Stop/Pop out/Pick element buttons with icons (`▶`/`■`/`↗`/`⌖`), `role="toolbar"` + `aria-label`, a per-action `title` that says what it does or why it is off, `aria-pressed` + `data-picking` on the pick toggle, and one exported `previewToolbarDisabled(status)` table that owns every disabled rule |
-| UI tests | `LivePreview.test.tsx`, `PreviewToolbar.test.tsx` (new) | 16 tests (10 + 6): placeholder vs frame (src, title, sandbox, referrer), run/stop callbacks, pop-out through a mocked `window.open` plus the no-`url` case, the pick flow (empty submit ignored, trim, callback, field cleared, toggle closes), no picking outside `running`, a missing `onElementClick`, the error line, Arabic labels + `dir="rtl"` + the LTR selector input, `elementMention`; toolbar order/icons/labels, the disabled rules per status, callback forwarding, the `aria-pressed` flip and the whole `previewToolbarDisabled` table |
-| Docs chapter | `docs/src/live-preview.md` (new) + `docs/src/SUMMARY.md` | Arabic-first RTL block plus the English spec: the two prop shapes, the status/disabled table, the pop-out flags, why a cross-origin iframe cannot report clicks, the documented `postMessage` bridge contract (`{ type: 'warsha:preview-pick', selector }`) with its three parent-side rules, the sandbox/referrer posture, the RTL rules, and an explicit "what is not here yet" section. Fences are `ts`/`js`, so `mdbook test` runs no new fence |
+| Deliverable        | Path                                                     | What landed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------ | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Live preview panel | `apps/desktop/src/components/LivePreview.tsx` (new)      | `LivePreviewProps` (`url: string \| null`, optional `onElementClick`, `onRun`, `onStop`, `status`); the sandboxed `<iframe src={url}>` (`allow-scripts allow-same-origin allow-forms allow-popups allow-modals`, `referrerPolicy="no-referrer"`, a `title`); the "No preview yet" placeholder when `url` is `null`; a `role="alert"` line on `error`; pop-out via `window.open(url, '_blank', 'noopener,noreferrer')` (no `url` ⇒ no window); the pick overlay (hint, cross-origin note, `dir="ltr"` selector input, submit); a pick toggle whose overlay follows `status === 'running'`; and `elementMention(selector)` → `@element(#submit)` |
+| Preview toolbar    | `apps/desktop/src/components/PreviewToolbar.tsx` (new)   | `PreviewStatus` (`idle`/`running`/`stopped`/`error`), `PreviewAction`, Run/Stop/Pop out/Pick element buttons with icons (`▶`/`■`/`↗`/`⌖`), `role="toolbar"` + `aria-label`, a per-action `title` that says what it does or why it is off, `aria-pressed` + `data-picking` on the pick toggle, and one exported `previewToolbarDisabled(status)` table that owns every disabled rule                                                                                                                                                                                                                                                            |
+| UI tests           | `LivePreview.test.tsx`, `PreviewToolbar.test.tsx` (new)  | 16 tests (10 + 6): placeholder vs frame (src, title, sandbox, referrer), run/stop callbacks, pop-out through a mocked `window.open` plus the no-`url` case, the pick flow (empty submit ignored, trim, callback, field cleared, toggle closes), no picking outside `running`, a missing `onElementClick`, the error line, Arabic labels + `dir="rtl"` + the LTR selector input, `elementMention`; toolbar order/icons/labels, the disabled rules per status, callback forwarding, the `aria-pressed` flip and the whole `previewToolbarDisabled` table                                                                                         |
+| Docs chapter       | `docs/src/live-preview.md` (new) + `docs/src/SUMMARY.md` | Arabic-first RTL block plus the English spec: the two prop shapes, the status/disabled table, the pop-out flags, why a cross-origin iframe cannot report clicks, the documented `postMessage` bridge contract (`{ type: 'warsha:preview-pick', selector }`) with its three parent-side rules, the sandbox/referrer posture, the RTL rules, and an explicit "what is not here yet" section. Fences are `ts`/`js`, so `mdbook test` runs no new fence                                                                                                                                                                                            |
 
 Tests added — 16 new desktop tests, all passing; the desktop suite went 40 → 56.
 
@@ -1777,16 +1830,16 @@ second (19:06:08 → `exit=0 finished 19:07:02`) also passed every check, and a 
 `LivePreview.tsx` came after it; the third was requested 19:08:31 and is the run quoted below (`done.flag`
 `exit=0 finished 2026-10-29T19:09:37`). Per the corrected rule the evidence is `bridge-io/result.log`:
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` | PASS |
-| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
-| `cargo test --workspace` | PASS — 138 tests, 0 failed, 0 ignored |
-| `pnpm install` | PASS |
-| `pnpm -r typecheck` | PASS (TS strict, no `any` added) |
-| `pnpm -r build` | PASS |
-| `pnpm -r test` | PASS — 134 tests (client 32, crypto 22, i18n 12, ui 8, desktop 56, remote 4), incl. `mdbook build` + `mdbook test`, which lists `Testing chapter 'Live Preview': "live-preview.md"` |
-| `actionlint .github/workflows/ci.yml` | PASS |
+| Check                                                   | Result                                                                                                                                                                              |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cargo fmt --all --check`                               | PASS                                                                                                                                                                                |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS                                                                                                                                                                                |
+| `cargo test --workspace`                                | PASS — 138 tests, 0 failed, 0 ignored                                                                                                                                               |
+| `pnpm install`                                          | PASS                                                                                                                                                                                |
+| `pnpm -r typecheck`                                     | PASS (TS strict, no `any` added)                                                                                                                                                    |
+| `pnpm -r build`                                         | PASS                                                                                                                                                                                |
+| `pnpm -r test`                                          | PASS — 134 tests (client 32, crypto 22, i18n 12, ui 8, desktop 56, remote 4), incl. `mdbook build` + `mdbook test`, which lists `Testing chapter 'Live Preview': "live-preview.md"` |
+| `actionlint .github/workflows/ci.yml`                   | PASS                                                                                                                                                                                |
 
 `result.log` ends with `RESULT: M0 validation PASSED — all checks green.` (the script's own label is still "M0"),
 and it holds 18 `PASS` lines — the layout sanity checks, the toolchain installs and the eight validation commands —
@@ -1813,7 +1866,7 @@ Decisions (logged here because `DECISIONS.md` is outside this milestone's file s
   PLAN.md rather than claimed.
 - **Pop-out is gated on `status`, not on `url`.** The spec's `PreviewToolbar` props carry no `url`, so the
   toolbar's rule is "there is a preview to open" = `running` or `stopped`; `LivePreview` adds the `if (!url)
-  return` guard, so a caller that sets `status` without a `url` still opens nothing. `previewToolbarDisabled`
+return` guard, so a caller that sets `status` without a `url` still opens nothing. `previewToolbarDisabled`
   exports the table so the caller and the tests read one source.
 - **The pick toggle only exists while running**, and the overlay disappears on its own when the status leaves
   `running`: a stopped preview has no document to point at, and leaving the input on screen would invite a
@@ -1841,17 +1894,18 @@ suite prints an `act(...)` warning from `apps/desktop/src/App.tsx`; `apps/deskto
 `crates/warsha-*` files carry other sessions' uncommitted changes.
 
 #### M6a – Continue on server ✅ DONE (validated 2026-10-29T19:29:18, exit=0, all 18 checks green; lifecycle + review/apply only — no transport, see below)
+
 One Rust module, two desktop components, two test files and one docs chapter. No dependency added,
 no `Cargo.toml` edited, no `.github/workflows/**` change, no `package.json` change. LingCode-inspired
 ideas only: no code, text or asset was copied from it.
 
-| Deliverable | Path | What landed |
-|---|---|---|
-| Handoff module | `crates/warsha-pipeline/src/handoff.rs` (new) + `lib.rs` `mod`/`pub use` | `HandoffState` (`Idle`/`Preparing`/`HandedOff { remote_run_id, remote_url }`/`Applying`/`Applied`/`Failed(String)`, serde adjacently tagged `state`+`detail`) with `label()`/`remote()`/`failure()`, `HandoffManager` (`begin`/`handed_off`/`begin_apply`/`finish_apply`/`fail`/`reset`, illegal steps rejected), `HandoffFile` (`new`/`is_intact`), `HandoffBundle` (`paths`/`file`/`is_empty`), `ApplyOptions { owner_wins, selected }`, `ApplyResult { applied, conflicts, backups, resolved }` (`is_empty`/`has_conflicts`/`unresolved`/`requires_gate`), `Conflict { path, local_checksum, remote_checksum }`, `HandoffError` via thiserror, `content_checksum` (FNV-1a 64), `backup_bundle_name` |
-| Hand off dialog | `apps/desktop/src/components/HandoffDialog.tsx` (new) | `HandoffPhase` union mirroring `HandoffState::label()`, `isRemoteUrl` (http/https + host, no whitespace), `canHandOff`, `handoffStatusText`, a `role="dialog"` `aria-modal` panel with the URL input (`dir="ltr"`, `aria-invalid`, hint that turns into the error), the "Hand off to remote" button (off while `preparing`/`applying` or the URL is unusable), a `role="status"` phase line with a glyph, a `role="alert"` failure line, and the remote run id + URL once handed off |
-| Review & apply panel | `apps/desktop/src/components/ReviewApplyPanel.tsx` (new) | One row per changed file: checkbox, path (`dir="ltr"`), `new`/`conflict` badges, per-file diff from `diffLines` (prefix/suffix trim → context/removed/added, capped at `MAX_DIFF_LINES` with an "N more lines" note); files that apply cleanly start selected and a conflict starts unchecked; "Apply all" / "Apply selected" (in file order), select-all, the backup notice naming `backupName` + `runId`, and a policy line for owner-wins vs remote-wins |
-| UI tests | `HandoffDialog.test.tsx`, `ReviewApplyPanel.test.tsx` (new) | 17 tests (8 + 9): closed → nothing, open → labelled dialog; the URL gate (`warsha.example.com`, `ftp://`, `http://`, spaces) and the trimmed hand-off call; blocked submit; the handed-off status with `dir="ltr"` run id; the button locked while preparing/applying; the failure alert and its retryable button; Arabic labels + `dir="rtl"` + `isRemoteUrl`/`canHandOff`/`handoffStatusText`; the file list with per-file diff kinds, new-file and conflict badges; Apply all / Apply selected ordering; select-all; the conflict rule and backup notice; `disabled` and the empty list; Arabic + LTR paths/diffs; `diffLines` edge cases and the `MAX_DIFF_LINES` cut |
-| Docs chapter | `docs/src/continue-on-server.md` (new) + `docs/src/SUMMARY.md` | Arabic-first RTL block plus the English spec: the state machine and its serialized tag, bundle/checksum rules, the per-file apply table, owner-wins vs remote-wins, `requires_gate`, the two components, RTL, and an explicit "what is not here yet" section. Rust fences are ` ```rust,ignore ` because `mdbook test` runs rustdoc over them |
+| Deliverable          | Path                                                                     | What landed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| -------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Handoff module       | `crates/warsha-pipeline/src/handoff.rs` (new) + `lib.rs` `mod`/`pub use` | `HandoffState` (`Idle`/`Preparing`/`HandedOff { remote_run_id, remote_url }`/`Applying`/`Applied`/`Failed(String)`, serde adjacently tagged `state`+`detail`) with `label()`/`remote()`/`failure()`, `HandoffManager` (`begin`/`handed_off`/`begin_apply`/`finish_apply`/`fail`/`reset`, illegal steps rejected), `HandoffFile` (`new`/`is_intact`), `HandoffBundle` (`paths`/`file`/`is_empty`), `ApplyOptions { owner_wins, selected }`, `ApplyResult { applied, conflicts, backups, resolved }` (`is_empty`/`has_conflicts`/`unresolved`/`requires_gate`), `Conflict { path, local_checksum, remote_checksum }`, `HandoffError` via thiserror, `content_checksum` (FNV-1a 64), `backup_bundle_name` |
+| Hand off dialog      | `apps/desktop/src/components/HandoffDialog.tsx` (new)                    | `HandoffPhase` union mirroring `HandoffState::label()`, `isRemoteUrl` (http/https + host, no whitespace), `canHandOff`, `handoffStatusText`, a `role="dialog"` `aria-modal` panel with the URL input (`dir="ltr"`, `aria-invalid`, hint that turns into the error), the "Hand off to remote" button (off while `preparing`/`applying` or the URL is unusable), a `role="status"` phase line with a glyph, a `role="alert"` failure line, and the remote run id + URL once handed off                                                                                                                                                                                                                   |
+| Review & apply panel | `apps/desktop/src/components/ReviewApplyPanel.tsx` (new)                 | One row per changed file: checkbox, path (`dir="ltr"`), `new`/`conflict` badges, per-file diff from `diffLines` (prefix/suffix trim → context/removed/added, capped at `MAX_DIFF_LINES` with an "N more lines" note); files that apply cleanly start selected and a conflict starts unchecked; "Apply all" / "Apply selected" (in file order), select-all, the backup notice naming `backupName` + `runId`, and a policy line for owner-wins vs remote-wins                                                                                                                                                                                                                                            |
+| UI tests             | `HandoffDialog.test.tsx`, `ReviewApplyPanel.test.tsx` (new)              | 17 tests (8 + 9): closed → nothing, open → labelled dialog; the URL gate (`warsha.example.com`, `ftp://`, `http://`, spaces) and the trimmed hand-off call; blocked submit; the handed-off status with `dir="ltr"` run id; the button locked while preparing/applying; the failure alert and its retryable button; Arabic labels + `dir="rtl"` + `isRemoteUrl`/`canHandOff`/`handoffStatusText`; the file list with per-file diff kinds, new-file and conflict badges; Apply all / Apply selected ordering; select-all; the conflict rule and backup notice; `disabled` and the empty list; Arabic + LTR paths/diffs; `diffLines` edge cases and the `MAX_DIFF_LINES` cut                              |
+| Docs chapter         | `docs/src/continue-on-server.md` (new) + `docs/src/SUMMARY.md`           | Arabic-first RTL block plus the English spec: the state machine and its serialized tag, bundle/checksum rules, the per-file apply table, owner-wins vs remote-wins, `requires_gate`, the two components, RTL, and an explicit "what is not here yet" section. Rust fences are ` ```rust,ignore ` because `mdbook test` runs rustdoc over them                                                                                                                                                                                                                                                                                                                                                          |
 
 Tests added — 28 new, all passing: 11 in `handoff` (bundle creation + checksums incl. empty content,
 apply without conflicts, apply with an owner-wins conflict, apply with a remote-wins conflict, a
@@ -1865,16 +1919,16 @@ Verification runs for this milestone (two: the code was requested 2026-10-29T19:
 requested 19:28:40 → `done.flag` `exit=0 finished 2026-10-29T19:29:18`; the figures below are from the
 final run. Per the corrected rule the evidence is `bridge-io/result.log`):
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` | PASS |
-| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
-| `cargo test --workspace` | PASS — 149 tests, 0 failed, 0 ignored |
-| `pnpm install` | PASS |
-| `pnpm -r typecheck` | PASS (TS strict, no `any` added) |
-| `pnpm -r build` | PASS |
-| `pnpm -r test` | PASS — 151 tests (client 32, crypto 22, i18n 12, ui 8, desktop 73, remote 4), incl. `mdbook build` + `mdbook test`, which lists `Testing chapter 'Continue on Server': "continue-on-server.md"` |
-| `actionlint .github/workflows/ci.yml` | PASS |
+| Check                                                   | Result                                                                                                                                                                                          |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cargo fmt --all --check`                               | PASS                                                                                                                                                                                            |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS                                                                                                                                                                                            |
+| `cargo test --workspace`                                | PASS — 149 tests, 0 failed, 0 ignored                                                                                                                                                           |
+| `pnpm install`                                          | PASS                                                                                                                                                                                            |
+| `pnpm -r typecheck`                                     | PASS (TS strict, no `any` added)                                                                                                                                                                |
+| `pnpm -r build`                                         | PASS                                                                                                                                                                                            |
+| `pnpm -r test`                                          | PASS — 151 tests (client 32, crypto 22, i18n 12, ui 8, desktop 73, remote 4), incl. `mdbook build` + `mdbook test`, which lists `Testing chapter 'Continue on Server': "continue-on-server.md"` |
+| `actionlint .github/workflows/ci.yml`                   | PASS                                                                                                                                                                                            |
 
 `result.log` ends with `RESULT: M0 validation PASSED — all checks green.` (the script's own label is
 still "M0") and holds 18 `PASS` lines with no `FAIL` line. Also verified directly before the run:
@@ -1886,7 +1940,7 @@ apps/desktop/tsconfig.json` exit 0, `prettier --write` clean on the four new fil
 Decisions (logged here because `DECISIONS.md` is outside this milestone's file scope):
 
 - **`HandoffFile.checksum` is the checksum of the remote content, so "checksum mismatch" is an
-  integrity error, not the conflict test.** Conflict detection compares the *local* content's
+  integrity error, not the conflict test.** Conflict detection compares the _local_ content's
   checksum with the bundled one: same ⇒ already applied, absent ⇒ new file, different ⇒ a
   `Conflict` with both checksums recorded. The alternative reading (checksum = the local base at
   handoff time) would have made the six required tests overlap and left `local_checksum` in
@@ -1916,8 +1970,8 @@ Decisions (logged here because `DECISIONS.md` is outside this milestone's file s
 - **The panel starts a conflict unchecked.** A conflict is a decision, so it must not ride along
   with "Apply selected" by default; everything else starts selected because that is the common case.
 - **`diffLines` is a prefix/suffix trim, not an LCS.** The run view keeps the real diff viewer and
-  M14a's decision (no second diff engine) still holds; a review panel needs to show *what changed in
-  this file*, which the trim does, and `MAX_DIFF_LINES` bounds a generated 5000-line file.
+  M14a's decision (no second diff engine) still holds; a review panel needs to show _what changed in
+  this file_, which the trim does, and `MAX_DIFF_LINES` bounds a generated 5000-line file.
 - **The i18n catalog was not touched** (outside scope). Both components call
   `t('continue_on_server.*')` and fall back to their own ar/en labels when `t` returns the key,
   exactly as the M14a/M14b/M5a/M5b components do.
@@ -1935,20 +1989,21 @@ Pre-existing, not touched: `pnpm lint` fails repo-wide (ESLint 9 config lookup, 
 uncommitted changes.
 
 #### M8b – Simple mode UI spec + Routines + Settings → Providers ✅ DONE (validated 2026-10-29T19:44:19, exit=0, all check groups green)
+
 Two screens, two rows, one docs chapter. No dependency added, no `Cargo.toml`, no `package.json`, no
 `.github/workflows/**`, no `.rs` file. The two screens M16 recorded as "outside this milestone's file
 scope" (Simple-mode routines, Settings → Providers auto-update) are the ones this batch builds.
 LingCode-inspired ideas only: no code, text or asset was copied from it.
 
-| Deliverable | Path | What landed |
-|---|---|---|
-| UI spec | `docs/UI.md` §4 (new section) | The M8b layout contract: three panes (sidebar | chat | live preview) as one flex row mirrored by `dir`, the chat-first sidebar (New chat, search, projects, today's chats, plan badge), the top bar (project name, type pill, device status, primary Run, secondary Publish), the three-part reply format (collapsible "What I did" → plain-language result → "How it behaves", no code dumps), the one rounded composer (`+`, `@`, mic, model picker, permission chip), light/dark with the single accent `#FFD60A` on `#0E0E0E`, IBM Plex Sans Arabic-style UI font, mono only for steps/logs and verbatim tokens, Advanced mode unchanged. Arabic RTL block plus the English spec, in the chapter's existing style |
-| Docs shim + nav | `docs/src/UI.md` (new), `docs/src/SUMMARY.md` | `{{#include ../UI.md}}` shim because the content lives at the repo-level `docs/UI.md` and mdBook only publishes chapters under `src/` (same mechanism as `docs/src/launch/*.md`); SUMMARY gained `- [Desktop UI](UI.md)`, a top-level path with no anchor |
-| Routines screen | `apps/desktop/src/screens/Routines.tsx` (new) | `RoutinesProps { routines, onRun, onPause, onResume }`, header with the count pill, one `RoutineRow` per routine, empty state that says what a routine is, `section[aria-label]` + `dir` from `useDirection()` |
-| Routine row | `apps/desktop/src/components/RoutineRow.tsx` (new) | `RoutineState` (`idle`/`running`/`paused`/`failed`), `Routine`, `routineActions(state)` (`idle`→`['run']`, `running`→`['pause']`, `paused`→`['resume','run']`, `failed`→`['run']`), name, mono schedule pinned `dir="ltr"`, plain-language description, accent state badge |
-| Settings → Providers | `apps/desktop/src/screens/SettingsProviders.tsx` (new) | `SettingsProvidersProps { providers, onModeChange, onToggle, onPinVersion }`, header with the "off by default" note, one `ProviderRow` per provider, empty state |
-| Provider row | `apps/desktop/src/components/ProviderRow.tsx` (new) | `ProviderMode` (`off`/`notify`/`auto`), `ProviderEntry { name, mode, pinnedVersion?, enabled }`, `providerModes` (safest first), enabled checkbox, mode selector, mono pinned-version input (`dir="ltr"`, empty = latest), "Test connection" behind the optional `onTest` seam — no key read, no socket opened |
-| UI tests | `apps/desktop/src/components/RoutineRow.test.tsx`, `ProviderRow.test.tsx`, `apps/desktop/src/screens/Routines.test.tsx`, `SettingsProviders.test.tsx` (all new) | 27 tests: 7 row/row, 5 screen/8 screen |
+| Deliverable          | Path                                                                                                                                                            | What landed                                                                                                                                                                                                                                                                                                    |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| UI spec              | `docs/UI.md` §4 (new section)                                                                                                                                   | The M8b layout contract: three panes (sidebar                                                                                                                                                                                                                                                                  | chat | live preview) as one flex row mirrored by `dir`, the chat-first sidebar (New chat, search, projects, today's chats, plan badge), the top bar (project name, type pill, device status, primary Run, secondary Publish), the three-part reply format (collapsible "What I did" → plain-language result → "How it behaves", no code dumps), the one rounded composer (`+`, `@`, mic, model picker, permission chip), light/dark with the single accent `#FFD60A` on `#0E0E0E`, IBM Plex Sans Arabic-style UI font, mono only for steps/logs and verbatim tokens, Advanced mode unchanged. Arabic RTL block plus the English spec, in the chapter's existing style |
+| Docs shim + nav      | `docs/src/UI.md` (new), `docs/src/SUMMARY.md`                                                                                                                   | `{{#include ../UI.md}}` shim because the content lives at the repo-level `docs/UI.md` and mdBook only publishes chapters under `src/` (same mechanism as `docs/src/launch/*.md`); SUMMARY gained `- [Desktop UI](UI.md)`, a top-level path with no anchor                                                      |
+| Routines screen      | `apps/desktop/src/screens/Routines.tsx` (new)                                                                                                                   | `RoutinesProps { routines, onRun, onPause, onResume }`, header with the count pill, one `RoutineRow` per routine, empty state that says what a routine is, `section[aria-label]` + `dir` from `useDirection()`                                                                                                 |
+| Routine row          | `apps/desktop/src/components/RoutineRow.tsx` (new)                                                                                                              | `RoutineState` (`idle`/`running`/`paused`/`failed`), `Routine`, `routineActions(state)` (`idle`→`['run']`, `running`→`['pause']`, `paused`→`['resume','run']`, `failed`→`['run']`), name, mono schedule pinned `dir="ltr"`, plain-language description, accent state badge                                     |
+| Settings → Providers | `apps/desktop/src/screens/SettingsProviders.tsx` (new)                                                                                                          | `SettingsProvidersProps { providers, onModeChange, onToggle, onPinVersion }`, header with the "off by default" note, one `ProviderRow` per provider, empty state                                                                                                                                               |
+| Provider row         | `apps/desktop/src/components/ProviderRow.tsx` (new)                                                                                                             | `ProviderMode` (`off`/`notify`/`auto`), `ProviderEntry { name, mode, pinnedVersion?, enabled }`, `providerModes` (safest first), enabled checkbox, mode selector, mono pinned-version input (`dir="ltr"`, empty = latest), "Test connection" behind the optional `onTest` seam — no key read, no socket opened |
+| UI tests             | `apps/desktop/src/components/RoutineRow.test.tsx`, `ProviderRow.test.tsx`, `apps/desktop/src/screens/Routines.test.tsx`, `SettingsProviders.test.tsx` (all new) | 27 tests: 7 row/row, 5 screen/8 screen                                                                                                                                                                                                                                                                         |
 
 Tests added — 27 new, all passing: `routineActions` table, name/schedule/description render, state
 badge, Run→`onRun(id)`, Pause while running (and no Run button), Resume + Run when paused, Arabic
@@ -1963,22 +2018,22 @@ Verification run for this milestone (Windows host, Node 26.8.1, pnpm 9.0.0 run t
 <…>/pnpm.cjs` because `pnpm` is not on this host's PATH, `mdbook` 0.5.4 and `actionlint` in WSL
 Ubuntu):
 
-| Check | Result |
-|---|---|
-| `pnpm -r typecheck` | PASS — 7 packages, exit 0 (TS strict, no `any`) |
-| `pnpm -r --filter '!@warsha/docs' build` | PASS — desktop 72 modules, remote 55 modules |
-| `pnpm -r --filter '!@warsha/docs' test` | PASS — desktop 14 files / 100 tests (incl. the 27 new), client, crypto, i18n, ui, remote |
-| `mdbook build` + `mdbook test` (WSL, 0.5.4) | PASS — 0 `ERROR`, 0 `FAILED`, 16 chapters tested incl. `Desktop UI`, `book/UI.html` written (52 KB) |
-| `actionlint .github/workflows/ci.yml` (WSL) | PASS — exit 0, no workflow file touched |
-| `prettier --check` on the new files | PASS after one `--write`; the four source files and `docs/UI.md` are clean (12 untouched screens still fail, as at HEAD) |
-| `cargo fmt` / `clippy` / `test` | Not run — no `.rs` file changed; the Rust tree is untouched by this batch |
+| Check                                       | Result                                                                                                                   |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `pnpm -r typecheck`                         | PASS — 7 packages, exit 0 (TS strict, no `any`)                                                                          |
+| `pnpm -r --filter '!@warsha/docs' build`    | PASS — desktop 72 modules, remote 55 modules                                                                             |
+| `pnpm -r --filter '!@warsha/docs' test`     | PASS — desktop 14 files / 100 tests (incl. the 27 new), client, crypto, i18n, ui, remote                                 |
+| `mdbook build` + `mdbook test` (WSL, 0.5.4) | PASS — 0 `ERROR`, 0 `FAILED`, 16 chapters tested incl. `Desktop UI`, `book/UI.html` written (52 KB)                      |
+| `actionlint .github/workflows/ci.yml` (WSL) | PASS — exit 0, no workflow file touched                                                                                  |
+| `prettier --check` on the new files         | PASS after one `--write`; the four source files and `docs/UI.md` are clean (12 untouched screens still fail, as at HEAD) |
+| `cargo fmt` / `clippy` / `test`             | Not run — no `.rs` file changed; the Rust tree is untouched by this batch                                                |
 
 Defects found and fixed inside files this milestone had to touch:
 
 1. **The include shim path was one level off.** `docs/src/UI.md` first said
    `{{#include ../../UI.md}}`, which resolves to `Warsha/UI.md` (two levels above `docs/src` is the
    repo root, not `docs`), and `mdbook build` printed `ERROR Error updating "{{#include
-   ../../UI.md}}", Could not read file for link`. Corrected to `../UI.md`.
+../../UI.md}}", Could not read file for link`. Corrected to `../UI.md`.
 2. **`docs/UI.md` had never been through `mdbook test`.** Its two M13 wireframes were unlabelled
    fences, so rustdoc tried to compile the box-drawing diagrams and `mdbook test` reported two
    `FAILED` cases the moment the chapter was published. Both are now ` ```text `, so rustdoc no longer
@@ -2001,7 +2056,7 @@ Decisions (logged here because `DECISIONS.md` is outside this milestone's file s
   old settings screen intact and still lets a later catalog entry win.
 - **`routineActions(state)` is one exported pure function**, so a row shows only what its state
   allows: Pause never appears next to a routine that is not running, and `paused` offers both
-  Resume and Run now (a routine can be resumed *or* fired once). The row renders from that table,
+  Resume and Run now (a routine can be resumed _or_ fired once). The row renders from that table,
   so the tests and the UI cannot disagree.
 - **Both rows are fully controlled.** `mode`, `enabled` and `pinnedVersion` come from props and
   every edit calls back out (`onModeChange`, `onToggle`, `onPinVersion`); the screens add the
@@ -2032,19 +2087,20 @@ installed in this WSL image — it was installed there for this run. `apps/deskt
 changes.
 
 #### M15a – Website and launch ✅ DONE (validated 2026-10-29T19:56:42, exit=0, all 18 checks green)
+
 Three Markdown files (one new chapter, one new launch page) plus the landing-page extension and one
 SUMMARY line. No dependency added, no `Cargo.toml`, no `package.json`, no `.github/workflows/**`, no
 `.rs`/`.ts` file. LingCode-inspired ideas only: no code, text or asset was copied from it.
 
-| Deliverable | Path | What landed |
-|---|---|---|
-| Landing page — demo video | `docs/src/index.md` | "الفيديو التعريفي" / "Demo video": an explicit `text`-fenced placeholder frame naming the five beats, the pointer to `docs/launch/demo-video.md` (shot list) and `docs/launch/demo-script.md` (setup, do-not-show, post-production), a sentence saying the video is not recorded yet and the placeholder is not a dead player, and a commented-out `<iframe>` (`loading="lazy"`, `allowfullscreen`) that issues no request until the owner uncomments it after Gate D |
-| Landing page — segments | `docs/src/index.md` | "لمن ورشة … ولمن ليست" / "Who it is for / who it is not for": five "fits you" and six "does not fit you" statements that name the real limits (Gate D is not a setting, no hosted service on our keys, PolyForm Noncommercial, no 1.0 release tag, no support team/SLA), plus the explicit line that there are no testimonials because nobody has used Warsha yet |
-| Landing page — metrics | `docs/src/index.md` | "لا أرقام مزيفة" / "No fake metrics": a five-row claims table (12 agents, 14 stages, 4 gates, 3 operating systems, 6 preflight checks) with the file each number is read from, the list of deliberate absences (user/download/star counts, store ratings, testimonials, un-reproducible performance tables), and the rule that an untraceable number is not published |
-| Public changelog | `docs/src/changelog.md` (new) | Arabic RTL block (why the entries are placeholders, the four-section table, the honesty rules) plus the English page: prefix → section mapping, the `git log --no-merges --pretty='%h %s'` command the entries are drawn from, **Unreleased** with Added / Changed / Fixed / Removed, cover-to-cover entries tagged M0–M19 (M17–M19 written as *planned*, past tense only where the code exists today), and a closing "Not in this page" section that refuses fake entries for the unbuilt milestones |
-| Demo video shot list | `docs/launch/demo-video.md` (new) | The 3:00 landing-page cut: non-negotiables table (mock provider — `warshad` registers `MockProvider` as `mock` — Arabic first, clean machine, real numbers only, no testimonials, real recorded spend), five beats with timecodes (0:00 install → 0:20 add provider → 0:45 new project → 1:15 approve Gates A/B/C → 2:25 final repository → 2:55 close), each with the exact commands, what is on screen, ar/en caption text and a do-not list; references [demo-script.md](docs/launch/demo-script.md) for setup, the do-not-show list and post-production |
-| Numeric-claims checklist | `docs/launch/demo-video.md` | "Numeric claims check (before Gate D)": a `grep -RnoE` over `docs/src/*.md` + `docs/store` + `docs/social` + `docs/launch`, the claims table mapping each surviving number to its measurement, and the rule that an invented user/download/star count, testimonial, rating or benchmark is a **blocker** at Gate D rather than a wording problem |
-| Nav | `docs/src/SUMMARY.md` | `- [Changelog](changelog.md)` after `Continue on Server`, a top-level path with no anchor |
+| Deliverable               | Path                              | What landed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Landing page — demo video | `docs/src/index.md`               | "الفيديو التعريفي" / "Demo video": an explicit `text`-fenced placeholder frame naming the five beats, the pointer to `docs/launch/demo-video.md` (shot list) and `docs/launch/demo-script.md` (setup, do-not-show, post-production), a sentence saying the video is not recorded yet and the placeholder is not a dead player, and a commented-out `<iframe>` (`loading="lazy"`, `allowfullscreen`) that issues no request until the owner uncomments it after Gate D                                                                                       |
+| Landing page — segments   | `docs/src/index.md`               | "لمن ورشة … ولمن ليست" / "Who it is for / who it is not for": five "fits you" and six "does not fit you" statements that name the real limits (Gate D is not a setting, no hosted service on our keys, PolyForm Noncommercial, no 1.0 release tag, no support team/SLA), plus the explicit line that there are no testimonials because nobody has used Warsha yet                                                                                                                                                                                           |
+| Landing page — metrics    | `docs/src/index.md`               | "لا أرقام مزيفة" / "No fake metrics": a five-row claims table (12 agents, 14 stages, 4 gates, 3 operating systems, 6 preflight checks) with the file each number is read from, the list of deliberate absences (user/download/star counts, store ratings, testimonials, un-reproducible performance tables), and the rule that an untraceable number is not published                                                                                                                                                                                       |
+| Public changelog          | `docs/src/changelog.md` (new)     | Arabic RTL block (why the entries are placeholders, the four-section table, the honesty rules) plus the English page: prefix → section mapping, the `git log --no-merges --pretty='%h %s'` command the entries are drawn from, **Unreleased** with Added / Changed / Fixed / Removed, cover-to-cover entries tagged M0–M19 (M17–M19 written as _planned_, past tense only where the code exists today), and a closing "Not in this page" section that refuses fake entries for the unbuilt milestones                                                       |
+| Demo video shot list      | `docs/launch/demo-video.md` (new) | The 3:00 landing-page cut: non-negotiables table (mock provider — `warshad` registers `MockProvider` as `mock` — Arabic first, clean machine, real numbers only, no testimonials, real recorded spend), five beats with timecodes (0:00 install → 0:20 add provider → 0:45 new project → 1:15 approve Gates A/B/C → 2:25 final repository → 2:55 close), each with the exact commands, what is on screen, ar/en caption text and a do-not list; references [demo-script.md](docs/launch/demo-script.md) for setup, the do-not-show list and post-production |
+| Numeric-claims checklist  | `docs/launch/demo-video.md`       | "Numeric claims check (before Gate D)": a `grep -RnoE` over `docs/src/*.md` + `docs/store` + `docs/social` + `docs/launch`, the claims table mapping each surviving number to its measurement, and the rule that an invented user/download/star count, testimonial, rating or benchmark is a **blocker** at Gate D rather than a wording problem                                                                                                                                                                                                            |
+| Nav                       | `docs/src/SUMMARY.md`             | `- [Changelog](changelog.md)` after `Continue on Server`, a top-level path with no anchor                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 No tests were added: the change is Markdown only, so the suites are unchanged (149 Rust, 178
 package tests). `mdbook test` picks the new chapter up on its own and lists
@@ -2056,16 +2112,16 @@ edits was requested 2026-10-29T19:56:02 → `done.flag` `exit=0 finished 2026-10
 figures below are from the final run. Per the corrected rule the evidence is `bridge-io/result.log`,
 not `final.txt`):
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` | PASS |
-| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
-| `cargo test --workspace` | PASS — 149 tests, 0 failed, 0 ignored |
-| `pnpm install` | PASS |
-| `pnpm -r typecheck` | PASS |
-| `pnpm -r build` | PASS |
-| `pnpm -r test` | PASS — 178 tests (client 32, crypto 22, i18n 12, ui 8, desktop 100, remote 4), incl. `mdbook build` + `mdbook test` over 17 chapters with `Changelog` among them |
-| `actionlint .github/workflows/ci.yml` | PASS |
+| Check                                                   | Result                                                                                                                                                           |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cargo fmt --all --check`                               | PASS                                                                                                                                                             |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS                                                                                                                                                             |
+| `cargo test --workspace`                                | PASS — 149 tests, 0 failed, 0 ignored                                                                                                                            |
+| `pnpm install`                                          | PASS                                                                                                                                                             |
+| `pnpm -r typecheck`                                     | PASS                                                                                                                                                             |
+| `pnpm -r build`                                         | PASS                                                                                                                                                             |
+| `pnpm -r test`                                          | PASS — 178 tests (client 32, crypto 22, i18n 12, ui 8, desktop 100, remote 4), incl. `mdbook build` + `mdbook test` over 17 chapters with `Changelog` among them |
+| `actionlint .github/workflows/ci.yml`                   | PASS                                                                                                                                                             |
 
 `result.log` ends with `RESULT: M0 validation PASSED — all checks green.` (the script's own label is
 still "M0") and holds 18 `PASS` lines with no `FAIL` line. Also verified directly on this host before
@@ -2084,9 +2140,9 @@ Decisions (logged here because `DECISIONS.md` is outside this milestone's file s
   commit range to generate from; the page carries the command it is built from and states that a
   reviewer can check any line against `git log`. Claiming a bot generates it would be the first fake
   thing on the page.
-- **M17–M19 get *planned* entries, not past-tense ones.** The task asked for placeholders for M0–M19;
+- **M17–M19 get _planned_ entries, not past-tense ones.** The task asked for placeholders for M0–M19;
   writing "added crash reports" for an unbuilt milestone would be a fabricated changelog. They sit in
-  `Added` with the word *planned* and are repeated under "Not in this page".
+  `Added` with the word _planned_ and are repeated under "Not in this page".
 - **No number in the new sections lacks a source.** 12/14/4/3/6 are all read from the repository, and
   even the mock provider is cited by file (`crates/warshad/src/lib.rs`) rather than by an env var this
   repo does not have — the first draft invented `WARSHA_MOCK_PROVIDER=1` and was corrected.
@@ -2117,17 +2173,18 @@ M14a); `apps/desktop/tauri.conf.json`, `apps/desktop/src/App.tsx`, `crates/warsh
 the untracked component/screen/module files carry other sessions' uncommitted changes.
 
 #### M17 – Post-launch care ✅ DONE (validated 2026-10-29T20:12:37, exit=0, all 18 checks green; stores, screens and docs only — no collector, no store client, no push, no RPC, see below)
+
 One Rust module, two desktop screens, two test files and one docs chapter. No dependency added, no
 `Cargo.toml` edited, no `package.json` change, no `.github/workflows/**` change, no i18n catalog
 entry. LingCode-inspired ideas only: no code, text or asset was copied from it.
 
-| Deliverable | Path | What landed |
-|---|---|---|
-| Post-launch module | `crates/warsha-pipeline/src/post_launch.rs` (new) + `lib.rs` `mod`/`pub use` | `CrashReport { id, run_id, message, stack_trace: Option<String>, occurred_at, sent }` (`new`/`with_stack_trace`/`has_stack_trace`), `CrashReportStore` (`record`/`list`/`mark_sent`), `InMemoryCrashReportStore` (arrival order, duplicate + blank ids/messages rejected, idempotent `mark_sent`, `len`/`is_empty`/`unsent_count`); `StoreReview { id, store, rating, body, author, received_at }` (`new`/`rating_is_known`), `StoreReviewStore` (`record`/`list`/`list_by_store`), `InMemoryStoreReviewStore`, `MIN_RATING`/`MAX_RATING`; `DailySummary { date, runs_completed, total_cost_cents, error_count, new_feedback_count, suggested_next_steps }` with `is_quiet(max_cost_cents)`, `DailySummaryBuilder` (`build` = Arabic, `new(SummaryLanguage).summarize(…)`, `language()`), `SummaryLanguage` (`Arabic`/`English`, `as_str`); `PlainLanguageChangeRequest { id, description, created_at, status }` (`new`/`transition`), `ChangeRequestStatus` (`Pending`/`InProgress`/`Done`/`Rejected`, `as_str`/`is_open`/`can_transition_to`), `ChangeRequestStore` (`record`/`list`/`set_status`), `InMemoryChangeRequestStore` (`len`/`is_empty`/`open`); `PostLaunchError` via thiserror |
-| Crash reports screen | `apps/desktop/src/screens/CrashReports.tsx` (new) | `CrashReport` (camelCase twin of the Rust record), header with the count pill, the opt-in note, the empty state, and one row per report: message, `YYYY-MM-DD HH:MM UTC` time (`formatCrashTime`, UTC + padded, `—` for a negative or non-numeric value), a `sent`/`not sent` badge on the accent colour while unsent, and the stack trace in a scrolling `dir="ltr"` `<pre>` when the owner allowed it |
-| Store reviews screen | `apps/desktop/src/screens/StoreReviews.tsx` (new) | `StoreReview`, header with the count pill, the store-tagging note, the empty state, and one row per review: five stars with `role="img"` + `aria-label` ("4 of 5" / "4 من 5"), the store tag (mono, `dir="ltr"`), the body and the author; `clampRating`/`ratingIsKnown`/`ratingStars`/`ratingLabel` exported so the row, the label and the tests read one table; a rating outside `1..=5` renders clamped stars **and** a red "Rating out of range" line |
-| UI tests | `CrashReports.test.tsx`, `StoreReviews.test.tsx` (new) | 10 tests (5 + 5): rows with message/time/status, the empty states, the opt-in note, the LTR stack trace (present vs absent), `formatCrashTime` incl. the invalid paths, Arabic labels + `dir="rtl"` with LTR timestamps; reviews with stars/body/author/store, the clamped out-of-range rating and its flag, the whole helper table, Arabic labels + RTL section with LTR stars and store tags |
-| Docs chapter | `docs/src/post-launch-care.md` (new) + `docs/src/SUMMARY.md` | Arabic-first RTL block plus the English spec: the four stores and their errors, the no-PII payload, why `rating` is never clamped in Rust, the summary's fixed step order and its Arabic default, the status table with `done` terminal, the two screens, the RTL rules, and an explicit "what is not here yet" section. Rust fences are ` ```rust,ignore ` because `mdbook test` runs rustdoc over them |
+| Deliverable          | Path                                                                         | What landed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| -------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Post-launch module   | `crates/warsha-pipeline/src/post_launch.rs` (new) + `lib.rs` `mod`/`pub use` | `CrashReport { id, run_id, message, stack_trace: Option<String>, occurred_at, sent }` (`new`/`with_stack_trace`/`has_stack_trace`), `CrashReportStore` (`record`/`list`/`mark_sent`), `InMemoryCrashReportStore` (arrival order, duplicate + blank ids/messages rejected, idempotent `mark_sent`, `len`/`is_empty`/`unsent_count`); `StoreReview { id, store, rating, body, author, received_at }` (`new`/`rating_is_known`), `StoreReviewStore` (`record`/`list`/`list_by_store`), `InMemoryStoreReviewStore`, `MIN_RATING`/`MAX_RATING`; `DailySummary { date, runs_completed, total_cost_cents, error_count, new_feedback_count, suggested_next_steps }` with `is_quiet(max_cost_cents)`, `DailySummaryBuilder` (`build` = Arabic, `new(SummaryLanguage).summarize(…)`, `language()`), `SummaryLanguage` (`Arabic`/`English`, `as_str`); `PlainLanguageChangeRequest { id, description, created_at, status }` (`new`/`transition`), `ChangeRequestStatus` (`Pending`/`InProgress`/`Done`/`Rejected`, `as_str`/`is_open`/`can_transition_to`), `ChangeRequestStore` (`record`/`list`/`set_status`), `InMemoryChangeRequestStore` (`len`/`is_empty`/`open`); `PostLaunchError` via thiserror |
+| Crash reports screen | `apps/desktop/src/screens/CrashReports.tsx` (new)                            | `CrashReport` (camelCase twin of the Rust record), header with the count pill, the opt-in note, the empty state, and one row per report: message, `YYYY-MM-DD HH:MM UTC` time (`formatCrashTime`, UTC + padded, `—` for a negative or non-numeric value), a `sent`/`not sent` badge on the accent colour while unsent, and the stack trace in a scrolling `dir="ltr"` `<pre>` when the owner allowed it                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Store reviews screen | `apps/desktop/src/screens/StoreReviews.tsx` (new)                            | `StoreReview`, header with the count pill, the store-tagging note, the empty state, and one row per review: five stars with `role="img"` + `aria-label` ("4 of 5" / "4 من 5"), the store tag (mono, `dir="ltr"`), the body and the author; `clampRating`/`ratingIsKnown`/`ratingStars`/`ratingLabel` exported so the row, the label and the tests read one table; a rating outside `1..=5` renders clamped stars **and** a red "Rating out of range" line                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| UI tests             | `CrashReports.test.tsx`, `StoreReviews.test.tsx` (new)                       | 10 tests (5 + 5): rows with message/time/status, the empty states, the opt-in note, the LTR stack trace (present vs absent), `formatCrashTime` incl. the invalid paths, Arabic labels + `dir="rtl"` with LTR timestamps; reviews with stars/body/author/store, the clamped out-of-range rating and its flag, the whole helper table, Arabic labels + RTL section with LTR stars and store tags                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Docs chapter         | `docs/src/post-launch-care.md` (new) + `docs/src/SUMMARY.md`                 | Arabic-first RTL block plus the English spec: the four stores and their errors, the no-PII payload, why `rating` is never clamped in Rust, the summary's fixed step order and its Arabic default, the status table with `done` terminal, the two screens, the RTL rules, and an explicit "what is not here yet" section. Rust fences are ` ```rust,ignore ` because `mdbook test` runs rustdoc over them                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 Tests added — 25 new, all passing: 15 in `post_launch` (crash list order, duplicate/blank refusal,
 `mark_sent` idempotence + unknown id, crash serde incl. a record without `stack_trace`, review
@@ -2142,16 +2199,16 @@ Verification runs for this milestone (two: the code was requested 2026-10-29T20:
 requested 20:11:25 → `done.flag` `exit=0 finished 2026-10-29T20:12:37`; the figures below are from the
 final run. Per the corrected rule the evidence is `bridge-io/result.log`, not `final.txt`):
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` | PASS |
-| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
-| `cargo test --workspace` | PASS — 164 tests, 0 failed, 0 ignored |
-| `pnpm install` | PASS |
-| `pnpm -r typecheck` | PASS (TS strict, no `any` added) |
-| `pnpm -r build` | PASS |
-| `pnpm -r test` | PASS — 188 tests (client 32, crypto 22, i18n 12, ui 8, desktop 110, remote 4), incl. `mdbook build` + `mdbook test`, which lists `Testing chapter 'Post-launch Care': "post-launch-care.md"` |
-| `actionlint .github/workflows/ci.yml` | PASS |
+| Check                                                   | Result                                                                                                                                                                                       |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cargo fmt --all --check`                               | PASS                                                                                                                                                                                         |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS                                                                                                                                                                                         |
+| `cargo test --workspace`                                | PASS — 164 tests, 0 failed, 0 ignored                                                                                                                                                        |
+| `pnpm install`                                          | PASS                                                                                                                                                                                         |
+| `pnpm -r typecheck`                                     | PASS (TS strict, no `any` added)                                                                                                                                                             |
+| `pnpm -r build`                                         | PASS                                                                                                                                                                                         |
+| `pnpm -r test`                                          | PASS — 188 tests (client 32, crypto 22, i18n 12, ui 8, desktop 110, remote 4), incl. `mdbook build` + `mdbook test`, which lists `Testing chapter 'Post-launch Care': "post-launch-care.md"` |
+| `actionlint .github/workflows/ci.yml`                   | PASS                                                                                                                                                                                         |
 
 `result.log` ends with `RESULT: M0 validation PASSED — all checks green.` (the script's own label is
 still "M0") and holds 18 `PASS` lines with no `FAIL` line. The only edits after that run are the
@@ -2179,7 +2236,7 @@ Decisions (logged here because `DECISIONS.md` is outside this milestone's file s
 
 - **`rating` is stored exactly as the store reported it.** Clamping in Rust would hide a broken feed
   behind plausible numbers; `rating_is_known()` answers the question instead, and the desktop draws
-  clamped stars *plus* a red out-of-range line, so the reader sees both the value and the anomaly.
+  clamped stars _plus_ a red out-of-range line, so the reader sees both the value and the anomaly.
 - **`DailySummaryBuilder` has both `build` and `summarize`.** The milestone specified
   `DailySummaryBuilder::build(date, runs, costs, errors, feedback)` and the surface is Arabic-first,
   so `build` is the Arabic associated function; a language needed a receiver, hence
@@ -2221,19 +2278,20 @@ changes. `crates/warsha-pipeline/src/lib.rs` already carried one of those change
 added `mod post_launch;` and the `pub use` block above the existing lines.
 
 #### M18 – Agent workflow and context ✅ DONE (validated 2026-10-29T20:30, all check groups green; module + three components + chapter only — no agent loop, no RPC, no attachment resolution, no prompt caching, no cost-view wiring, see below)
+
 One Rust module, three desktop components, three test files and one docs chapter. No
 dependency added, no `Cargo.toml` edited, no `package.json` change, no
 `.github/workflows/**` change, no i18n catalog entry. LingCode-inspired ideas only: no code,
 text or asset was copied from it.
 
-| Deliverable | Path | What landed |
-|---|---|---|
-| Agent workflow module | `crates/warsha-pipeline/src/agent_workflow.rs` (new) + `lib.rs` `mod`/`pub use` | `AgentMode` (`Plan`/`Agent`, serde `snake_case`, `Plan` is `Default`, `as_str`/`can_edit`), `ModeTransition { from, to, approved_by, approved_at }` (`is_owner_approved`), `ModeManager { current, history }` (`request_transition`/`last_transition`/`can_edit`), `TodoStatus` (`Pending`/`InProgress`/`Done`/`Cancelled`, `as_str`/`is_open`), `TodoItem`, `TodoList` (`add`/`update`/`remove`/`list_pending`/`get`/`len`/`is_empty`/`is_complete`), `AskUserRequest`, `AskUserQueue` (`enqueue`/`answer`/`pending`/`blocking`/`blocks_run`/`answered_count`/`len`/`is_empty`), `Message`, `MessageBus` (`send`/`read`/`unread_count`/`unread_for`/`messages`/`get`/`len`/`is_empty`), `MentionKind` (`ALL`/`as_str`/`prefix`/`from_name`), `Mention` (`rendered`), `MentionParser::parse`, `SlashCommand` (`bare_name`), `SlashCommandRegistry` (`register`/`lookup`/`list`/`matching`/`len`/`is_empty`), `ContextCompactor` (`compact`/`estimate_tokens`), `CompressedOutput` (`is_compressed`/`saved_lines`), `OutputCompressor::compress`, `CHARS_PER_TOKEN`, `AgentWorkflowError` via thiserror |
-| Plan/Agent badge | `apps/desktop/src/components/PlanModeBadge.tsx` (new) | `AgentMode` union, indigo Plan pill / `#FFD60A` Agent pill, `aria-pressed`, a `title` + `aria-label` that states the approval rule, `nextAgentMode(mode)` exported, click → `onToggle(next)`; the badge asks, the caller grants |
-| Mention picker | `apps/desktop/src/components/MentionPicker.tsx` (new) | `mentionKinds`/`MentionKind`, one row per kind with an LTR-isolated `@kind` token and a localized label, `filterMentionKinds(query)` (prefix, optional `@`, case-insensitive), `onSelect(kind)`, empty state |
-| Slash command picker | `apps/desktop/src/components/SlashCommandPicker.tsx` (new) | `SlashCommandItem`, `filterSlashCommands(commands, query)` (prefix, optional `/`, case-insensitive, sorted by bare name), name in mono `dir="ltr"` + description, `onSelect(name)`, empty state |
-| UI tests | `PlanModeBadge.test.tsx`, `MentionPicker.test.tsx`, `SlashCommandPicker.test.tsx` (new) | 17 tests (5 + 6 + 6) |
-| Docs chapter | `docs/src/agent-workflow.md` (new) + `docs/src/SUMMARY.md` | Arabic-first RTL block plus the English spec: the transition table, the three rules of `request_transition`, todos, `ask_user`/`send_message`, the six mention kinds and every parser rule, slash commands and their autocomplete rule, the three compaction stages with the quarter reserved for the marker, the compressor's ceilings, RTL, and an explicit "what is not here yet" section. Rust fences are ` ```rust,ignore ` because `mdbook test` runs rustdoc over them |
+| Deliverable           | Path                                                                                    | What landed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| --------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Agent workflow module | `crates/warsha-pipeline/src/agent_workflow.rs` (new) + `lib.rs` `mod`/`pub use`         | `AgentMode` (`Plan`/`Agent`, serde `snake_case`, `Plan` is `Default`, `as_str`/`can_edit`), `ModeTransition { from, to, approved_by, approved_at }` (`is_owner_approved`), `ModeManager { current, history }` (`request_transition`/`last_transition`/`can_edit`), `TodoStatus` (`Pending`/`InProgress`/`Done`/`Cancelled`, `as_str`/`is_open`), `TodoItem`, `TodoList` (`add`/`update`/`remove`/`list_pending`/`get`/`len`/`is_empty`/`is_complete`), `AskUserRequest`, `AskUserQueue` (`enqueue`/`answer`/`pending`/`blocking`/`blocks_run`/`answered_count`/`len`/`is_empty`), `Message`, `MessageBus` (`send`/`read`/`unread_count`/`unread_for`/`messages`/`get`/`len`/`is_empty`), `MentionKind` (`ALL`/`as_str`/`prefix`/`from_name`), `Mention` (`rendered`), `MentionParser::parse`, `SlashCommand` (`bare_name`), `SlashCommandRegistry` (`register`/`lookup`/`list`/`matching`/`len`/`is_empty`), `ContextCompactor` (`compact`/`estimate_tokens`), `CompressedOutput` (`is_compressed`/`saved_lines`), `OutputCompressor::compress`, `CHARS_PER_TOKEN`, `AgentWorkflowError` via thiserror |
+| Plan/Agent badge      | `apps/desktop/src/components/PlanModeBadge.tsx` (new)                                   | `AgentMode` union, indigo Plan pill / `#FFD60A` Agent pill, `aria-pressed`, a `title` + `aria-label` that states the approval rule, `nextAgentMode(mode)` exported, click → `onToggle(next)`; the badge asks, the caller grants                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Mention picker        | `apps/desktop/src/components/MentionPicker.tsx` (new)                                   | `mentionKinds`/`MentionKind`, one row per kind with an LTR-isolated `@kind` token and a localized label, `filterMentionKinds(query)` (prefix, optional `@`, case-insensitive), `onSelect(kind)`, empty state                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Slash command picker  | `apps/desktop/src/components/SlashCommandPicker.tsx` (new)                              | `SlashCommandItem`, `filterSlashCommands(commands, query)` (prefix, optional `/`, case-insensitive, sorted by bare name), name in mono `dir="ltr"` + description, `onSelect(name)`, empty state                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| UI tests              | `PlanModeBadge.test.tsx`, `MentionPicker.test.tsx`, `SlashCommandPicker.test.tsx` (new) | 17 tests (5 + 6 + 6)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Docs chapter          | `docs/src/agent-workflow.md` (new) + `docs/src/SUMMARY.md`                              | Arabic-first RTL block plus the English spec: the transition table, the three rules of `request_transition`, todos, `ask_user`/`send_message`, the six mention kinds and every parser rule, slash commands and their autocomplete rule, the three compaction stages with the quarter reserved for the marker, the compressor's ceilings, RTL, and an explicit "what is not here yet" section. Rust fences are ` ```rust,ignore ` because `mdbook test` runs rustdoc over them                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 Tests added — 45 new, all passing: 28 in `agent_workflow` (approval required / recorded / back to
 Plan / same-mode refusal, snake_case wire shape, todo add-update-remove + refusals, `list_pending`
@@ -2248,19 +2306,19 @@ Verification run for this milestone (Rust + docs + actionlint in WSL Ubuntu agai
 of the live tree at `/root/warsha-m18` with `CARGO_TARGET_DIR=/root/warsha/target`; TypeScript on
 this Windows host with the repo's own `node_modules/.bin`, because `pnpm` is not installed here):
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` | PASS — exit 0, empty diff |
-| `cargo clippy --workspace --all-targets -- -D warnings` | PASS — exit 0, no warning |
-| `cargo test --workspace` | PASS — 192 passed, 0 failed, 0 ignored |
-| `tsc --noEmit` (desktop + crypto + client + i18n + ui + remote) | PASS — exit 0 for all six |
-| `vitest run` (desktop) | PASS — 19 files / 127 tests |
-| `vitest run` (crypto, client, i18n, ui, remote) | PASS — 22 / 32 / 12 / 8 / 4 |
-| `vite build` (desktop, remote) | PASS — exit 0, both bundles written |
-| `mdbook build` + `mdbook test` (WSL, 0.5.4) | PASS — both exit 0, no `ERROR`, `Testing chapter 'Agent Workflow and Context': "agent-workflow.md"` |
-| `actionlint .github/workflows/ci.yml` (WSL) | PASS — exit 0, no workflow file touched |
-| `prettier --write`/`--check` on the six new TS files and the chapter | PASS — four unchanged, `SlashCommandPicker.test.tsx` and the chapter reflowed, re-verified after |
-| `pnpm install` and `pnpm -r` typecheck/build/test | Not run — `pnpm` is not on this host's PATH; the same commands were run through the repo's `node_modules/.bin` equivalents above, and no `package.json`/lockfile changed |
+| Check                                                                | Result                                                                                                                                                                   |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `cargo fmt --all --check`                                            | PASS — exit 0, empty diff                                                                                                                                                |
+| `cargo clippy --workspace --all-targets -- -D warnings`              | PASS — exit 0, no warning                                                                                                                                                |
+| `cargo test --workspace`                                             | PASS — 192 passed, 0 failed, 0 ignored                                                                                                                                   |
+| `tsc --noEmit` (desktop + crypto + client + i18n + ui + remote)      | PASS — exit 0 for all six                                                                                                                                                |
+| `vitest run` (desktop)                                               | PASS — 19 files / 127 tests                                                                                                                                              |
+| `vitest run` (crypto, client, i18n, ui, remote)                      | PASS — 22 / 32 / 12 / 8 / 4                                                                                                                                              |
+| `vite build` (desktop, remote)                                       | PASS — exit 0, both bundles written                                                                                                                                      |
+| `mdbook build` + `mdbook test` (WSL, 0.5.4)                          | PASS — both exit 0, no `ERROR`, `Testing chapter 'Agent Workflow and Context': "agent-workflow.md"`                                                                      |
+| `actionlint .github/workflows/ci.yml` (WSL)                          | PASS — exit 0, no workflow file touched                                                                                                                                  |
+| `prettier --write`/`--check` on the six new TS files and the chapter | PASS — four unchanged, `SlashCommandPicker.test.tsx` and the chapter reflowed, re-verified after                                                                         |
+| `pnpm install` and `pnpm -r` typecheck/build/test                    | Not run — `pnpm` is not on this host's PATH; the same commands were run through the repo's `node_modules/.bin` equivalents above, and no `package.json`/lockfile changed |
 
 Every check passed on its **first** run except the three assertions listed below, which were fixed
 before the quoted figures were taken. Nothing is committed and nothing is pushed.
@@ -2344,16 +2402,17 @@ already carried one of those changes; this milestone only added `mod agent_workf
 block above the existing lines.
 
 #### M19 – Backend kit ✅ DONE (validated 2026-10-29T20:48:09, exit=0, all 18 checks green; definition layer, panel and chapter only — no MCP transport, no backend client, no export file, no fresh-instance round trip, see below)
+
 One Rust module, one desktop component, one test file and one docs chapter. No dependency added,
 no `Cargo.toml` edited, no `package.json` change, no `.github/workflows/**` change, no i18n
 catalog entry. LingCode-inspired ideas only: no code, text or asset was copied from it.
 
-| Deliverable | Path | What landed |
-|---|---|---|
+| Deliverable        | Path                                                                         | What landed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------ | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Backend kit module | `crates/warsha-pipeline/src/backend_kit.rs` (new) + `lib.rs` `mod`/`pub use` | `BackendKind` (`PocketBase`/`Supabase`, serde `snake_case`, `all`/`as_str`/`display_name`, `PocketBase` is `Default`), `BackendFeature` (`Auth`/`PostgresRls`/`Storage`/`Push`/`Functions`, `all`/`as_str`), `BackendConfig { kind, url, project_name, enabled_features }` (`new`/`with_feature`/`has_feature`/`feature_list`, the list kept in `BackendFeature::all` order), `ColumnDef` (`new`), `TableDef` (`new`/`has_column`), `RlsOperation` (`as_sql`/`as_str`), `RlsPolicy` (`new`), `ExportBundle { sql_dump, storage_archive_path }` (`has_schema`/`has_storage`), `PaymentsGate` (`new`/`is_enabled`/`enable`/`disable`/`summary`), `BackendKit` (`new`/`config`/`table`/`features`/`is_empty`/`add_table`/`add_rls_policy`/`add_storage_bucket`/`add_function`/`export`/`storage_archive_path`), `BackendKitError` via thiserror, `is_safe_identifier`/`is_safe_column_type` |
-| Backend kit panel | `apps/desktop/src/components/BackendKitPanel.tsx` (new) | `BackendKind`/`BackendFeature` unions, `BackendTable`/`BackendColumn`/`PaymentsGateStatus`, `backendKinds`/`allBackendFeatures`, the kind selector as a `role="radiogroup"` of two `role="radio"` buttons with `aria-checked`, five service checkboxes in `BackendFeature::all` order, one row per table (name and columns in mono `dir="ltr"`, `nullable` spelled out), the empty state, **Export** disabled with no tables and a `title` saying why, and the payments chip showing the approver and the timestamp or "off — owner approval required". `paymentsGateEnabled`/`canExport`/`paymentsGateText` are exported so the panel, its `title` and the tests read one table |
-| UI tests | `apps/desktop/src/components/BackendKitPanel.test.tsx` (new) | 10 tests: the two kinds in order with `aria-checked`, the kind callback, all five services with both toggle directions, the table rows with their columns and the empty state, export on/off with its `title`, the gate shut and open, Arabic labels + `dir="rtl"` with the URL and the identifiers still LTR, and the three helpers (the gate needing an approver **and** a timestamp, `canExport`, the localized gate line) |
-| Docs chapter | `docs/src/backend-kit.md` (new) + `docs/src/SUMMARY.md` | Arabic-first RTL block plus the English spec: the type table, what every `add_*` refuses and the two rules that matter (the column-type screen, the table must exist before its policy), the export order with a real dump example, why the project name and the URL are comment-screened, the archive-path rule, the payments-gate table with `is_enabled`'s three-part test, the panel's rules, RTL, and an explicit "what is not here yet" section. Rust fences are ` ```rust,ignore ` and the SQL one is ` ```sql `, so `mdbook test` compiles no new fence |
+| Backend kit panel  | `apps/desktop/src/components/BackendKitPanel.tsx` (new)                      | `BackendKind`/`BackendFeature` unions, `BackendTable`/`BackendColumn`/`PaymentsGateStatus`, `backendKinds`/`allBackendFeatures`, the kind selector as a `role="radiogroup"` of two `role="radio"` buttons with `aria-checked`, five service checkboxes in `BackendFeature::all` order, one row per table (name and columns in mono `dir="ltr"`, `nullable` spelled out), the empty state, **Export** disabled with no tables and a `title` saying why, and the payments chip showing the approver and the timestamp or "off — owner approval required". `paymentsGateEnabled`/`canExport`/`paymentsGateText` are exported so the panel, its `title` and the tests read one table                                                                                                                                                                                                         |
+| UI tests           | `apps/desktop/src/components/BackendKitPanel.test.tsx` (new)                 | 10 tests: the two kinds in order with `aria-checked`, the kind callback, all five services with both toggle directions, the table rows with their columns and the empty state, export on/off with its `title`, the gate shut and open, Arabic labels + `dir="rtl"` with the URL and the identifiers still LTR, and the three helpers (the gate needing an approver **and** a timestamp, `canExport`, the localized gate line)                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Docs chapter       | `docs/src/backend-kit.md` (new) + `docs/src/SUMMARY.md`                      | Arabic-first RTL block plus the English spec: the type table, what every `add_*` refuses and the two rules that matter (the column-type screen, the table must exist before its policy), the export order with a real dump example, why the project name and the URL are comment-screened, the archive-path rule, the payments-gate table with `is_enabled`'s three-part test, the panel's rules, RTL, and an explicit "what is not here yet" section. Rust fences are ` ```rust,ignore ` and the SQL one is ` ```sql `, so `mdbook test` compiles no new fence                                                                                                                                                                                                                                                                                                                          |
 
 Tests added — 26 new, all passing: 16 in `backend_kit` (config creation and the sorted feature list,
 `add_table` with its four refusals and the duplicate, `add_rls_policy` requiring a table + its three
@@ -2368,16 +2427,16 @@ bridge is `scripts/wsl-bridge.ps1` → `scripts/wsl-setup.sh` in WSL Ubuntu as r
 also checked on this Windows host with the repo's own `node_modules/.bin`, because `pnpm` is not
 installed here):
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` | PASS |
-| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
-| `cargo test --workspace` | PASS — 208 passed, 0 failed, 0 ignored (142 of them in `warsha-pipeline`) |
-| `pnpm install` | PASS |
-| `pnpm -r typecheck` | PASS (TS strict, no `any` added) |
-| `pnpm -r build` | PASS |
-| `pnpm -r test` | PASS — 215 tests (desktop 137, client 32, crypto 22, i18n 12, ui 8, remote 4), incl. `mdbook build` + `mdbook test`, which lists `Testing chapter 'Backend Kit': "backend-kit.md"` |
-| `actionlint .github/workflows/ci.yml` | PASS |
+| Check                                                   | Result                                                                                                                                                                             |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cargo fmt --all --check`                               | PASS                                                                                                                                                                               |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS                                                                                                                                                                               |
+| `cargo test --workspace`                                | PASS — 208 passed, 0 failed, 0 ignored (142 of them in `warsha-pipeline`)                                                                                                          |
+| `pnpm install`                                          | PASS                                                                                                                                                                               |
+| `pnpm -r typecheck`                                     | PASS (TS strict, no `any` added)                                                                                                                                                   |
+| `pnpm -r build`                                         | PASS                                                                                                                                                                               |
+| `pnpm -r test`                                          | PASS — 215 tests (desktop 137, client 32, crypto 22, i18n 12, ui 8, remote 4), incl. `mdbook build` + `mdbook test`, which lists `Testing chapter 'Backend Kit': "backend-kit.md"` |
+| `actionlint .github/workflows/ci.yml`                   | PASS                                                                                                                                                                               |
 
 `bridge-io/result.log` ends with `RESULT: M0 validation PASSED — all checks green.` (the script's own
 label is still "M0") and holds 18 `PASS` lines with no `FAIL` line. Also verified directly before that
@@ -2432,7 +2491,7 @@ Decisions (logged here because `DECISIONS.md` is outside this milestone's file s
 - **`add_table` takes a `TableDef` and `add_rls_policy` an `RlsPolicy`**, while buckets and functions
   take names: the structs are the storage shape, so a caller cannot add a table with fields the kit
   never stores, and a name has nothing to get wrong.
-- **`is_enabled()` is the flag *and* the approval record.** `enabled` is a public field because the
+- **`is_enabled()` is the flag _and_ the approval record.** `enabled` is a public field because the
   PLAN specifies it, so the honest reading of "approved" has to be recomputed: setting the field by
   hand leaves `is_enabled()` false, and one test pins exactly that. There is no auto-enable path.
 - **A second approval is `PaymentsAlreadyEnabled`, not a silent overwrite.** The gate records who
@@ -2477,15 +2536,16 @@ Two independent deliverables. Nothing under `crates/**/src/**` was edited; no co
 changed.
 
 **A. Architecture docs + CI-enforced boundaries**
+
 - `docs/ARCHITECTURE.md` — the workspace as declared on disk (10 crates, 7 pnpm packages). Read from
   `Cargo.toml`, every `crates/*/Cargo.toml`, `packages/*/package.json` and `apps/*/package.json`:
   the per-crate dependency table, the per-crate and per-package module map, the declared direction,
   the intended direction, a rationale for every significant edge, the edges that must never exist,
   and a §5 census of the places where declared ≠ intended.
 - `docs/ARCH_RULES.md` — five rules with stable ids (`R1 core-is-leaf`, `R2
-  no-daemon-under-pipeline`, `R3 no-upward-edges`, `R4 no-private-module-reach`, `R5
-  ui-through-client`), each with what it forbids, why, and the exact `<RULE-ID>: <file>:<line>
-  <offence>` format; plus the self-test contract and the out-of-scope list.
+no-daemon-under-pipeline`, `R3 no-upward-edges`, `R4 no-private-module-reach`, `R5
+ui-through-client`), each with what it forbids, why, and the exact `<RULE-ID>: <file>:<line>
+<offence>` format; plus the self-test contract and the out-of-scope list.
 - `scripts/check-arch.mjs` — Node ESM, zero dependencies (it runs before `pnpm install` in some
   environments). Parses `[dependencies]`, `[dev-dependencies]`, `[build-dependencies]`,
   `[target.'cfg(…)'…]` and the `[dependencies.foo]` sub-table form; reads each crate's private `mod`
@@ -2513,6 +2573,7 @@ re-exported names from `crates/warsha-pipeline/src/lib.rs`. The clean fixture mi
 it also proves R3 and R4 do not fire on the layout we actually ship.
 
 **B. `pnpm lint` green repo-wide (ESLint 9 flat config)**
+
 - `eslint.config.js` (root, CommonJS — the root `package.json` has no `"type": "module"`). Carries
   every preset `.eslintrc.cjs` extended except one: `eslint:recommended`,
   `@typescript-eslint/recommended`, `@typescript-eslint/eslint-recommended`, `react/recommended`,
@@ -2606,7 +2667,6 @@ Checks after the write: every table row is well-formed, all 117 expected rows ar
 once with line counts that match the files on disk (validated by a throwaway script outside the repo),
 and `pnpm lint` / `check-arch.mjs` were re-run afterwards with the same result.
 
-
 #### M20 (second batch) – First UI wiring batch: App shell + run view ✅ DONE (validated 2026-10-31, desktop 144 tests, `tsc`/`eslint`/`vite build`/`check-arch.mjs`/`actionlint` green on the Windows host; no bridge run for this batch)
 
 Mounting only: no component was edited, no behaviour or logic was added, no dependency, no
@@ -2614,23 +2674,23 @@ Mounting only: no component was edited, no behaviour or logic was added, no depe
 files in scope are `apps/desktop/src/App.tsx`, `apps/desktop/src/screens/RunView.tsx` and
 `apps/desktop/src/App.test.tsx`.
 
-| Deliverable | Path | What landed |
-|---|---|---|
-| App shell mounts | `apps/desktop/src/App.tsx` | `PlanModeBadge` in the top bar next to the Simple/Advanced toggle (with `agentMode` state seeded `plan`); a Settings tab strip (`role="tablist"`, `data-testid="settings-tab-<screen>"`) over `settings` / `settings-providers` / `routines` / `crash-reports` / `store-reviews` / `backend-kit`; `Routines`, `SettingsProviders` + `ProviderSetupWizard`, `CrashReports`, `StoreReviews` and `BackendKitPanel` mounted behind it with empty lists and local state; `StatusStrip` + `PermissionModeChip` verified in place |
-| Run-view mounts | `apps/desktop/src/screens/RunView.tsx` | Four tabs (`run-tab-stream` / `-preview` / `-handoff` / `-router`) plus a `handoff-open` button in the header; `LivePreview` on the preview tab; `HandoffDialog` (mounted once, `data-phase="idle"`) and `ReviewApplyPanel` (empty `files`, `backupName=""`) on the handoff tab; `EcoModeToggle` + `LocalCloudBadge` rows on the router & cost tab with an empty-target line |
-| Mount tests | `apps/desktop/src/App.test.tsx` | 7 new tests (8 in the file): top bar (status strip, permission chip, plan badge), the badge flip to `agent`, every settings tab including the wizard and the shut payments gate, preview idle → running, handoff dialog open/close, review & apply empty state with both apply buttons disabled, eco toggle flip + the empty target line |
+| Deliverable      | Path                                   | What landed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| App shell mounts | `apps/desktop/src/App.tsx`             | `PlanModeBadge` in the top bar next to the Simple/Advanced toggle (with `agentMode` state seeded `plan`); a Settings tab strip (`role="tablist"`, `data-testid="settings-tab-<screen>"`) over `settings` / `settings-providers` / `routines` / `crash-reports` / `store-reviews` / `backend-kit`; `Routines`, `SettingsProviders` + `ProviderSetupWizard`, `CrashReports`, `StoreReviews` and `BackendKitPanel` mounted behind it with empty lists and local state; `StatusStrip` + `PermissionModeChip` verified in place |
+| Run-view mounts  | `apps/desktop/src/screens/RunView.tsx` | Four tabs (`run-tab-stream` / `-preview` / `-handoff` / `-router`) plus a `handoff-open` button in the header; `LivePreview` on the preview tab; `HandoffDialog` (mounted once, `data-phase="idle"`) and `ReviewApplyPanel` (empty `files`, `backupName=""`) on the handoff tab; `EcoModeToggle` + `LocalCloudBadge` rows on the router & cost tab with an empty-target line                                                                                                                                               |
+| Mount tests      | `apps/desktop/src/App.test.tsx`        | 7 new tests (8 in the file): top bar (status strip, permission chip, plan badge), the badge flip to `agent`, every settings tab including the wizard and the shut payments gate, preview idle → running, handoff dialog open/close, review & apply empty state with both apply buttons disabled, eco toggle flip + the empty target line                                                                                                                                                                                   |
 
 Checks actually run (this Windows host, `pnpm` is not on the PATH, so the repo's own
 `node_modules/.bin` equivalents were used):
 
-| Check | Result |
-|---|---|
-| `tsc --noEmit -p apps/desktop` | PASS — exit 0, TS strict, no `any` added |
-| `vitest run` (each package from its own directory, the way `pnpm -r test` runs it) | PASS — desktop 20 files / 144 tests (was 20 / 137), client 32, i18n 12, crypto 22, ui 8, remote 4: 222 TS tests |
-| `eslint src` (apps/desktop) | PASS — 0 errors, 1 warning: the pre-existing `RunView.tsx react-hooks/exhaustive-deps`, present at HEAD |
-| `vite build` (apps/desktop) | PASS — exit 0, 87 modules, bundle written |
-| `node scripts/check-arch.mjs --self-test` + `node scripts/check-arch.mjs` | PASS — 5 rules fire on the fixtures, `arch: 5 rules, 0 violations` |
-| `actionlint .github/workflows/ci.yml` (WSL Ubuntu) | PASS — exit 0, no workflow file touched |
+| Check                                                                                     | Result                                                                                                            |
+| ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `tsc --noEmit -p apps/desktop`                                                            | PASS — exit 0, TS strict, no `any` added                                                                          |
+| `vitest run` (each package from its own directory, the way `pnpm -r test` runs it)        | PASS — desktop 20 files / 144 tests (was 20 / 137), client 32, i18n 12, crypto 22, ui 8, remote 4: 222 TS tests   |
+| `eslint src` (apps/desktop)                                                               | PASS — 0 errors, 1 warning: the pre-existing `RunView.tsx react-hooks/exhaustive-deps`, present at HEAD           |
+| `vite build` (apps/desktop)                                                               | PASS — exit 0, 87 modules, bundle written                                                                         |
+| `node scripts/check-arch.mjs --self-test` + `node scripts/check-arch.mjs`                 | PASS — 5 rules fire on the fixtures, `arch: 5 rules, 0 violations`                                                |
+| `actionlint .github/workflows/ci.yml` (WSL Ubuntu)                                        | PASS — exit 0, no workflow file touched                                                                           |
 | `cargo fmt`/`clippy`/`test`, `pnpm install`/`-r typecheck`/`-r build`/`-r test`, `mdbook` | Not run — no Rust, manifest, lockfile or docs source changed in this batch; the bridge runs the full 18-check set |
 
 Not wired, and recorded rather than claimed:
@@ -2688,22 +2748,22 @@ component mount. The batch scope listed five paths but item 4 names
 `packages/client/src/index.ts`, so that file was treated as in scope and nothing else in
 `packages/` or `apps/` was edited.
 
-| Deliverable | Path | What landed |
-|---|---|---|
-| Backend kit export | `crates/warsha-pipeline/src/backend_kit.rs` | `pub const SCHEMA_FILE_NAME`; `BackendKitError::InvalidExportPath` + `Io { path, message }`; `BackendKit::export_to_dir(&self, dir: &str) -> Result<String, BackendKitError>` — creates `<dir>`, writes the `export()` dump to `<dir>/schema.sql` with `std::fs`, returns the path. `export()` itself still writes nothing, and the storage archive is still the caller's to pack |
-| Handoff bundle writer | `crates/warsha-pipeline/src/handoff.rs` | `HANDOFF_FILE_PREFIX`/`HANDOFF_FILE_SUFFIX`; `HandoffError::Encode` + `Io { path, message }`; `HandoffManager::write_bundle(&self, bundle, dir) -> Result<String, HandoffError>` — `validate_bundle` first, then `serde_json::to_string_pretty` into `<dir>/handoff-<run_id>.json`. `is_file_stem_safe` refuses a run id that is not one path segment (separator, `..`, blank), so a bundle cannot choose where it lands |
-| RPC methods | `crates/warshad/src/lib.rs` | Five `#[method]`s on `WarshaApi` + bodies; `DaemonState` gained `backend_kits: RwLock<HashMap<String, BackendKit>>`, `crash_reports: RwLock<InMemoryCrashReportStore>`, `store_reviews: RwLock<InMemoryStoreReviewStore>`; helpers `default_backend_config`, `is_relative_bundle_path`, consts `HANDOFF_DIR`/`LOCAL_POCKETBASE_URL` |
-| Client signatures | `packages/client/src/index.ts` | `WarshaWiringApi` (`exportBackend`, `createHandoff`, `applyHandoff`, `listCrashReports`, `listStoreReviews`) plus `CrashReport`, `StoreReview`, `HandoffConflict` and `HandoffApplySummary` wire types, snake_case to match serde. Signatures only: `WarshaClient` does not implement them |
+| Deliverable           | Path                                        | What landed                                                                                                                                                                                                                                                                                                                                                                                                              |
+| --------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Backend kit export    | `crates/warsha-pipeline/src/backend_kit.rs` | `pub const SCHEMA_FILE_NAME`; `BackendKitError::InvalidExportPath` + `Io { path, message }`; `BackendKit::export_to_dir(&self, dir: &str) -> Result<String, BackendKitError>` — creates `<dir>`, writes the `export()` dump to `<dir>/schema.sql` with `std::fs`, returns the path. `export()` itself still writes nothing, and the storage archive is still the caller's to pack                                        |
+| Handoff bundle writer | `crates/warsha-pipeline/src/handoff.rs`     | `HANDOFF_FILE_PREFIX`/`HANDOFF_FILE_SUFFIX`; `HandoffError::Encode` + `Io { path, message }`; `HandoffManager::write_bundle(&self, bundle, dir) -> Result<String, HandoffError>` — `validate_bundle` first, then `serde_json::to_string_pretty` into `<dir>/handoff-<run_id>.json`. `is_file_stem_safe` refuses a run id that is not one path segment (separator, `..`, blank), so a bundle cannot choose where it lands |
+| RPC methods           | `crates/warshad/src/lib.rs`                 | Five `#[method]`s on `WarshaApi` + bodies; `DaemonState` gained `backend_kits: RwLock<HashMap<String, BackendKit>>`, `crash_reports: RwLock<InMemoryCrashReportStore>`, `store_reviews: RwLock<InMemoryStoreReviewStore>`; helpers `default_backend_config`, `is_relative_bundle_path`, consts `HANDOFF_DIR`/`LOCAL_POCKETBASE_URL`                                                                                      |
+| Client signatures     | `packages/client/src/index.ts`              | `WarshaWiringApi` (`exportBackend`, `createHandoff`, `applyHandoff`, `listCrashReports`, `listStoreReviews`) plus `CrashReport`, `StoreReview`, `HandoffConflict` and `HandoffApplySummary` wire types, snake_case to match serde. Signatures only: `WarshaClient` does not implement them                                                                                                                               |
 
 The five RPC methods, and what each one actually does today:
 
-| Method | Body |
-|---|---|
-| `backend.export(run_id, output_dir)` | Gets or inserts the run's `BackendKit` in `DaemonState.backend_kits` (starting from `default_backend_config`: PocketBase on `http://127.0.0.1:8090`, project name = `run_id`), clones it, calls `export_to_dir`, returns the path. Because no RPC adds tables yet, the first export is a header-only dump |
-| `handoff.create(run_id, files)` | `HandoffManager::create_bundle` from the `(path, content)` pairs, then `write_bundle` into `<data_dir>/handoff/`; returns the JSON path |
-| `handoff.apply(path, owner_wins)` | Reads and parses the bundle, resolves the working tree (`RunId` → `Run` → `Project.repo_path`, falling back to the bundle's own directory) and reads every relative bundle path that exists there, then returns `ApplyResult` as JSON (`applied`/`conflicts`/`backups`/`resolved`). It writes no file and takes no backup — `apply_bundle` is the dry-run decision the module documents |
-| `postlaunch.crashes(run_id)` | `list()` from the in-memory store, filtered by `run_id`; a blank id returns every report (the crash screen's unselected state) |
-| `postlaunch.reviews(store)` | `list()` / `list_by_store(store)` from the in-memory store; a blank store returns every review |
+| Method                               | Body                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend.export(run_id, output_dir)` | Gets or inserts the run's `BackendKit` in `DaemonState.backend_kits` (starting from `default_backend_config`: PocketBase on `http://127.0.0.1:8090`, project name = `run_id`), clones it, calls `export_to_dir`, returns the path. Because no RPC adds tables yet, the first export is a header-only dump                                                                               |
+| `handoff.create(run_id, files)`      | `HandoffManager::create_bundle` from the `(path, content)` pairs, then `write_bundle` into `<data_dir>/handoff/`; returns the JSON path                                                                                                                                                                                                                                                 |
+| `handoff.apply(path, owner_wins)`    | Reads and parses the bundle, resolves the working tree (`RunId` → `Run` → `Project.repo_path`, falling back to the bundle's own directory) and reads every relative bundle path that exists there, then returns `ApplyResult` as JSON (`applied`/`conflicts`/`backups`/`resolved`). It writes no file and takes no backup — `apply_bundle` is the dry-run decision the module documents |
+| `postlaunch.crashes(run_id)`         | `list()` from the in-memory store, filtered by `run_id`; a blank id returns every report (the crash screen's unselected state)                                                                                                                                                                                                                                                          |
+| `postlaunch.reviews(store)`          | `list()` / `list_by_store(store)` from the in-memory store; a blank store returns every review                                                                                                                                                                                                                                                                                          |
 
 Tests added — 6 new, all passing: 2 in `backend_kit` (the dump written to `<dir>/schema.sql` and read
 back byte-for-byte against `export().sql_dump`, with the directory created and no archive written; a
@@ -2716,16 +2776,16 @@ being PocketBase on the documented local URL named after the run).
 Checks actually run (`pnpm` is not on this host's PATH, so the repo's own `node_modules` binaries were
 used; all Rust checks ran in WSL Ubuntu):
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` | PASS — exit 0 |
-| `cargo clippy --workspace --all-targets -- -D warnings` | PASS — exit 0, no warnings |
-| `cargo test --workspace` | PASS — exit 0, 214 tests passed, 0 failed across every `test result:` line |
-| `tsc --noEmit -p packages/client` | PASS — exit 0 |
-| `eslint src --ext .ts` (packages/client) | PASS — exit 0 |
-| `vitest run` (packages/client) | PASS — 32 tests |
-| `tsc --noEmit -p apps/desktop` | PASS — exit 0 (the desktop consumes `@warsha/client`) |
-| `actionlint .github/workflows/ci.yml` | PASS — exit 0, no workflow file touched |
+| Check                                                                                                     | Result                                                                                                                                                                                                           |
+| --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cargo fmt --all --check`                                                                                 | PASS — exit 0                                                                                                                                                                                                    |
+| `cargo clippy --workspace --all-targets -- -D warnings`                                                   | PASS — exit 0, no warnings                                                                                                                                                                                       |
+| `cargo test --workspace`                                                                                  | PASS — exit 0, 214 tests passed, 0 failed across every `test result:` line                                                                                                                                       |
+| `tsc --noEmit -p packages/client`                                                                         | PASS — exit 0                                                                                                                                                                                                    |
+| `eslint src --ext .ts` (packages/client)                                                                  | PASS — exit 0                                                                                                                                                                                                    |
+| `vitest run` (packages/client)                                                                            | PASS — 32 tests                                                                                                                                                                                                  |
+| `tsc --noEmit -p apps/desktop`                                                                            | PASS — exit 0 (the desktop consumes `@warsha/client`)                                                                                                                                                            |
+| `actionlint .github/workflows/ci.yml`                                                                     | PASS — exit 0, no workflow file touched                                                                                                                                                                          |
 | `pnpm install` / `-r typecheck` / `-r build` / `-r test`, `mdbook`, `vite build`, the 18-check bridge run | Not run — `pnpm` is missing on this Windows host and the per-package equivalents above were run instead; no docs source and no desktop component changed, so `mdbook`/`vite build` would exercise untouched code |
 
 Not wired, recorded rather than claimed:
@@ -2776,13 +2836,13 @@ Five files: `crates/warsha-pipeline/src/handoff.rs`, `crates/warsha-pipeline/src
 `crates/warshad/src/lib.rs`, `PLAN.md`, `PROGRESS.md`. No dependency added, no `Cargo.toml` edited, no
 TypeScript changed, no `.github/workflows/**` change.
 
-| Deliverable | Path | What landed |
-|---|---|---|
-| Handoff apply to disk | `crates/warsha-pipeline/src/handoff.rs` | `HandoffManager::apply_to_disk(&self, bundle, working_tree: &str, owner_wins: bool) -> Result<ApplyResult, HandoffError>`: reads the working tree, runs the existing dry-run decision (`apply_bundle`), then copies every path in `ApplyResult::backups` to `{working_tree}/.warsha-backup/{timestamp}/{path}` and only then writes every path in `ApplyResult::applied` (parent directories created, a file that already matches left untouched). A conflict does not stop the apply — the other files are written and the conflict stays on record. A bundle that fails a checksum or carries a path outside the tree (`..`, absolute, drive prefix) is refused as a whole, so an apply never writes half a tree. `BACKUP_DIR_NAME`, `MAX_BACKUP_ATTEMPTS`, `create_backup_dir` (millisecond stamp, `-2`, `-3`, … on collision so two applies never share a backup directory), `is_working_tree_path`, `io_error` |
-| Apply summary | same file | `ApplyResult::backup_dir: Option<String>` — `None` for a dry run, and `skip_serializing_if` keeps it out of the JSON then, so the previously shipped summary shape is unchanged. `#[serde(default)]` on the way back in |
-| `handoff.apply` | `crates/warshad/src/lib.rs` | Reads the bundle from disk, resolves RunId → Run → `Project.repo_path` (`working_tree_for_run`, no bundle-directory fallback: an apply writes files, so a run with no repo is refused with `run \`…\` has no project repo to apply into`), calls `apply_to_disk`, returns the `ApplyResult` JSON with `conflicts` and `backup_dir`. The old `is_relative_bundle_path` screen moved into the pipeline crate as `is_working_tree_path` (it is now applied by the layer that writes) |
-| `BackendKit::from_project` | `crates/warsha-pipeline/src/backend_kit.rs` | `BackendKit::from_project(project_name: &str, url: &str, kind: BackendKind) -> Self` — the default config for a project: kind, URL, project name, no service enabled, no schema |
-| `backend.export` | `crates/warshad/src/lib.rs` | Resolves the run's project name (`project_name_for_run`: RunId → Run → Project, falling back to the run id when a link is missing) and creates the per-run kit through the new `default_backend_kit(project_name)`, so `schema.sql` and the storage-archive stem name the project instead of the run; then `export_to_dir` |
+| Deliverable                | Path                                        | What landed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| -------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Handoff apply to disk      | `crates/warsha-pipeline/src/handoff.rs`     | `HandoffManager::apply_to_disk(&self, bundle, working_tree: &str, owner_wins: bool) -> Result<ApplyResult, HandoffError>`: reads the working tree, runs the existing dry-run decision (`apply_bundle`), then copies every path in `ApplyResult::backups` to `{working_tree}/.warsha-backup/{timestamp}/{path}` and only then writes every path in `ApplyResult::applied` (parent directories created, a file that already matches left untouched). A conflict does not stop the apply — the other files are written and the conflict stays on record. A bundle that fails a checksum or carries a path outside the tree (`..`, absolute, drive prefix) is refused as a whole, so an apply never writes half a tree. `BACKUP_DIR_NAME`, `MAX_BACKUP_ATTEMPTS`, `create_backup_dir` (millisecond stamp, `-2`, `-3`, … on collision so two applies never share a backup directory), `is_working_tree_path`, `io_error` |
+| Apply summary              | same file                                   | `ApplyResult::backup_dir: Option<String>` — `None` for a dry run, and `skip_serializing_if` keeps it out of the JSON then, so the previously shipped summary shape is unchanged. `#[serde(default)]` on the way back in                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `handoff.apply`            | `crates/warshad/src/lib.rs`                 | Reads the bundle from disk, resolves RunId → Run → `Project.repo_path` (`working_tree_for_run`, no bundle-directory fallback: an apply writes files, so a run with no repo is refused with `run \`…\` has no project repo to apply into`), calls `apply_to_disk`, returns the `ApplyResult`JSON with`conflicts`and`backup_dir`. The old `is_relative_bundle_path`screen moved into the pipeline crate as`is_working_tree_path` (it is now applied by the layer that writes)                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `BackendKit::from_project` | `crates/warsha-pipeline/src/backend_kit.rs` | `BackendKit::from_project(project_name: &str, url: &str, kind: BackendKind) -> Self` — the default config for a project: kind, URL, project name, no service enabled, no schema                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `backend.export`           | `crates/warshad/src/lib.rs`                 | Resolves the run's project name (`project_name_for_run`: RunId → Run → Project, falling back to the run id when a link is missing) and creates the per-run kit through the new `default_backend_kit(project_name)`, so `schema.sql` and the storage-archive stem name the project instead of the run; then `export_to_dir`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 Tests added — 11 new, all passing: 7 in `handoff` (`apply_to_disk` writes a new file and its parent
 directory while leaving an agreed file alone and creating no backup directory; remote-wins overwrites a
@@ -2804,18 +2864,18 @@ mdbook 0.5.4, actionlint 1.7.7). Final run requested 2026-10-30T16:19:19 via `br
 line and ends with `RESULT: M0 validation PASSED — all checks green.` (the script's own label is still
 "M0"; the check set is the 20-item `wsl-setup.sh` list).
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` | PASS |
-| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
-| `cargo test --workspace` | PASS — 224 tests, 0 failed (the 11 new ones listed above are named in the log) |
-| `pnpm install` | PASS |
-| `pnpm -r typecheck` | PASS |
-| `pnpm lint` | PASS |
-| `node scripts/check-arch.mjs` | PASS |
-| `pnpm -r build` | PASS |
-| `pnpm -r test` | PASS — 222 tests (client 32, i18n 12, crypto 22, ui 8, remote 4, desktop 144) |
-| `actionlint .github/workflows/ci.yml` | PASS |
+| Check                                                   | Result                                                                         |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `cargo fmt --all --check`                               | PASS                                                                           |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS                                                                           |
+| `cargo test --workspace`                                | PASS — 224 tests, 0 failed (the 11 new ones listed above are named in the log) |
+| `pnpm install`                                          | PASS                                                                           |
+| `pnpm -r typecheck`                                     | PASS                                                                           |
+| `pnpm lint`                                             | PASS                                                                           |
+| `node scripts/check-arch.mjs`                           | PASS                                                                           |
+| `pnpm -r build`                                         | PASS                                                                           |
+| `pnpm -r test`                                          | PASS — 222 tests (client 32, i18n 12, crypto 22, ui 8, remote 4, desktop 144)  |
+| `actionlint .github/workflows/ci.yml`                   | PASS                                                                           |
 
 The first run of this batch (requested 16:12:41) already had clippy, test, lint, build, arch and actionlint
 green and failed only `cargo fmt --check` on the new code; `cargo fmt --all` touched exactly the three Rust
@@ -2827,7 +2887,7 @@ Decisions (logged here because `DECISIONS.md` is outside this batch's file scope
 
 - **`apply_to_disk`, not a second `apply_bundle`.** The batch brief asked for
   `HandoffManager::apply_bundle(&bundle, working_tree, owner_wins)`, but `apply_bundle(bundle, local_files,
-  options)` already exists and is the documented dry-run decision every existing test and the M20 third
+options)` already exists and is the documented dry-run decision every existing test and the M20 third
   batch rely on; Rust does not overload methods, and redefining it to write files would have turned a pure
   function with 11 test call sites into a filesystem call. The writing method therefore takes the heading's
   name (`apply_to_disk`) and reuses `apply_bundle` for the decision, so "review shows a diff, apply writes"
@@ -2868,36 +2928,36 @@ Windows checkout's line-ending handling, not a change made here.
 
 #### M20 (fifth batch) – Design system: `packages/ui` tokens + Storybook ✅ DONE (validated 2026-10-31, exit=0, all 9 checks green in WSL Ubuntu on a pristine copy at `/root/warsha-m20-final`)
 
-| Check | Result |
-|---|---|
-| `pnpm install --frozen-lockfile` | PASS — the regenerated lockfile adds 731 lines, 0 deleted |
-| `pnpm -r typecheck` | PASS — 7 packages, including five story files checked against the real `@storybook/react` types |
-| `pnpm lint` | PASS — 0 errors; 1 pre-existing `react-hooks/exhaustive-deps` warning in `apps/desktop/src/screens/RunView.tsx` |
-| `node scripts/check-arch.mjs --self-test` | PASS |
-| `node scripts/check-arch.mjs` | PASS — `arch: 5 rules, 0 violations` |
-| `pnpm -r test` | PASS — 245 tests (client 32, crypto 22, i18n 12, ui 31, remote 4, desktop 144), 0 failures |
-| `pnpm -r build` | PASS — desktop CSS 3.54 kB, the tokens inlined through the `@warsha/ui` alias |
-| `actionlint .github/workflows/ci.yml` | PASS |
-| `npx storybook build` (in `packages/ui`) | PASS — the five stories and the preview compiled, ~3.3 s |
+| Check                                     | Result                                                                                                          |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `pnpm install --frozen-lockfile`          | PASS — the regenerated lockfile adds 731 lines, 0 deleted                                                       |
+| `pnpm -r typecheck`                       | PASS — 7 packages, including five story files checked against the real `@storybook/react` types                 |
+| `pnpm lint`                               | PASS — 0 errors; 1 pre-existing `react-hooks/exhaustive-deps` warning in `apps/desktop/src/screens/RunView.tsx` |
+| `node scripts/check-arch.mjs --self-test` | PASS                                                                                                            |
+| `node scripts/check-arch.mjs`             | PASS — `arch: 5 rules, 0 violations`                                                                            |
+| `pnpm -r test`                            | PASS — 245 tests (client 32, crypto 22, i18n 12, ui 31, remote 4, desktop 144), 0 failures                      |
+| `pnpm -r build`                           | PASS — desktop CSS 3.54 kB, the tokens inlined through the `@warsha/ui` alias                                   |
+| `actionlint .github/workflows/ci.yml`     | PASS                                                                                                            |
+| `npx storybook build` (in `packages/ui`)  | PASS — the five stories and the preview compiled, ~3.3 s                                                        |
 
 What landed:
 
-| Area | File(s) | What it holds |
-|---|---|---|
-| Token layer | `packages/ui/src/tokens/{colors,spacing,radius,typography,shadow,motion,vars,index}.ts` | Role-named tokens with light + dark values, plus one typed helper per family (`colorVar`, `space`, `radius`, `shadow`, `fontSize`, `fontWeight`, `duration`, `easing`) and the `--warsha-*` name builders the drift test compares against the stylesheet |
-| Stylesheet | `packages/ui/src/tokens/tokens.css` | Every token as a custom property: light on `:root`, dark on `[data-theme='dark']`, durations zeroed under `prefers-reduced-motion`, `color-scheme` per theme. Deliberately no `prefers-color-scheme` query |
-| Components | `packages/ui/src/components.tsx` | `Box`/`Text`/`Button`/`Card` read tokens only; 10 literals (blue, greys, white card, 3 radii, a shadow, 2 durations) replaced. Same props, same computed values |
-| Storybook | `packages/ui/.storybook/{main.ts,preview.ts}`, `packages/ui/src/components/{Box,Text,Button,Card,Tokens}.stories.tsx` | SB 8 with `@storybook/react-vite` + `addon-essentials`; the decorator sets `dir` and `data-theme` from two toolbar globes (RTL default, light + dark) and imports `tokens.css` once |
-| Drift rule | `packages/ui/src/tokens/tokenDrift.test.ts`, `docs/ARCH_RULES.md` `R6` | 12 tests: no colour/length/physical-property/font-stack/raw-token/`cssVar(` literal in a component, TS and CSS agree per theme, every exported component has a story, self-tested against one planted violation per rule |
-| Helper tests | `packages/ui/src/tokens/tokens.test.ts` | 11 tests: the name each helper renders, the accent invariant (`#FFD60A` in both themes, ink on top), a palette per theme, the 4px scale, and `space()`'s off-scale branch (1.5/2.5/3.5 → 6/10/14px) that makes the component migration pixel-identical |
-| Storybook typecheck | `packages/ui/tsconfig.storybook.json`, `packages/ui/package.json` | `typecheck`/`build` also run `tsc --noEmit -p tsconfig.storybook.json`, so `main.ts` and `preview.ts` are under strict TypeScript too — they are outside the package `rootDir`, which is why the package tsconfig cannot cover them |
-| Desktop (minimal) | `apps/desktop/src/index.css`, `PlanModeBadge.tsx`, `RoutineRow.tsx`, `screens/Routines.tsx`, `screens/CrashReports.tsx` | The stylesheet imports the tokens and styles `body`/links/focus from them (the `[dir="rtl"]` family override is gone — the Arabic-first stack covers both directions); the four accent sites reference `--warsha-color-accent` / `-accent-ink` |
-| Manifest | `packages/ui/package.json`, `pnpm-lock.yaml` | `storybook`, `@storybook/react`, `@storybook/react-vite`, `@storybook/addon-essentials` pinned at `8.6.19`, `vite ^5.4.0`, `storybook`/`build-storybook` scripts, an `exports` map so `@warsha/ui/tokens/tokens.css` resolves |
+| Area                | File(s)                                                                                                                 | What it holds                                                                                                                                                                                                                                            |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Token layer         | `packages/ui/src/tokens/{colors,spacing,radius,typography,shadow,motion,vars,index}.ts`                                 | Role-named tokens with light + dark values, plus one typed helper per family (`colorVar`, `space`, `radius`, `shadow`, `fontSize`, `fontWeight`, `duration`, `easing`) and the `--warsha-*` name builders the drift test compares against the stylesheet |
+| Stylesheet          | `packages/ui/src/tokens/tokens.css`                                                                                     | Every token as a custom property: light on `:root`, dark on `[data-theme='dark']`, durations zeroed under `prefers-reduced-motion`, `color-scheme` per theme. Deliberately no `prefers-color-scheme` query                                               |
+| Components          | `packages/ui/src/components.tsx`                                                                                        | `Box`/`Text`/`Button`/`Card` read tokens only; 10 literals (blue, greys, white card, 3 radii, a shadow, 2 durations) replaced. Same props, same computed values                                                                                          |
+| Storybook           | `packages/ui/.storybook/{main.ts,preview.ts}`, `packages/ui/src/components/{Box,Text,Button,Card,Tokens}.stories.tsx`   | SB 8 with `@storybook/react-vite` + `addon-essentials`; the decorator sets `dir` and `data-theme` from two toolbar globes (RTL default, light + dark) and imports `tokens.css` once                                                                      |
+| Drift rule          | `packages/ui/src/tokens/tokenDrift.test.ts`, `docs/ARCH_RULES.md` `R6`                                                  | 12 tests: no colour/length/physical-property/font-stack/raw-token/`cssVar(` literal in a component, TS and CSS agree per theme, every exported component has a story, self-tested against one planted violation per rule                                 |
+| Helper tests        | `packages/ui/src/tokens/tokens.test.ts`                                                                                 | 11 tests: the name each helper renders, the accent invariant (`#FFD60A` in both themes, ink on top), a palette per theme, the 4px scale, and `space()`'s off-scale branch (1.5/2.5/3.5 → 6/10/14px) that makes the component migration pixel-identical   |
+| Storybook typecheck | `packages/ui/tsconfig.storybook.json`, `packages/ui/package.json`                                                       | `typecheck`/`build` also run `tsc --noEmit -p tsconfig.storybook.json`, so `main.ts` and `preview.ts` are under strict TypeScript too — they are outside the package `rootDir`, which is why the package tsconfig cannot cover them                      |
+| Desktop (minimal)   | `apps/desktop/src/index.css`, `PlanModeBadge.tsx`, `RoutineRow.tsx`, `screens/Routines.tsx`, `screens/CrashReports.tsx` | The stylesheet imports the tokens and styles `body`/links/focus from them (the `[dir="rtl"]` family override is gone — the Arabic-first stack covers both directions); the four accent sites reference `--warsha-color-accent` / `-accent-ink`           |
+| Manifest            | `packages/ui/package.json`, `pnpm-lock.yaml`                                                                            | `storybook`, `@storybook/react`, `@storybook/react-vite`, `@storybook/addon-essentials` pinned at `8.6.19`, `vite ^5.4.0`, `storybook`/`build-storybook` scripts, an `exports` map so `@warsha/ui/tokens/tokens.css` resolves                            |
 
 Two defects this batch found and fixed before the acceptance run:
 
 1. `pnpm lint` failed on the new `Tokens.stories.tsx` — `import/order` wanted the `@storybook/react` type import before the `react` one with no blank line inside the group. Fixed the import order; the second `lint` run was clean.
-2. The first lockfile copy-back silently restored the *old* file: a later `rsync` into the WSL copy overwrote the regenerated lockfile before it was copied out, and the frozen install then passed against a manifest the lockfile did not describe. Detected by `git status --porcelain pnpm-lock.yaml` reporting no change; re-running `pnpm install` after the last sync and copying it back produced the +731-line diff, and `pnpm install --frozen-lockfile` was re-proved on a clean copy afterwards.
+2. The first lockfile copy-back silently restored the _old_ file: a later `rsync` into the WSL copy overwrote the regenerated lockfile before it was copied out, and the frozen install then passed against a manifest the lockfile did not describe. Detected by `git status --porcelain pnpm-lock.yaml` reporting no change; re-running `pnpm install` after the last sync and copying it back produced the +731-line diff, and `pnpm install --frozen-lockfile` was re-proved on a clean copy afterwards.
 
 Decisions (logged here because `DECISIONS.md` is outside this batch's file scope):
 
@@ -2905,7 +2965,7 @@ Decisions (logged here because `DECISIONS.md` is outside this batch's file scope
 - **Tokens are declared twice (TS + CSS) and compared, not generated.** No build step in this repo turns TypeScript into CSS, and a generator would be a new dependency outside the Storybook allowance. The drift test gives the same guarantee at the cost of editing two files — and it fails when only one is edited.
 - **`space()` keeps an off-scale fallback instead of widening the scale.** `Button`'s block paddings are 6/10/14 px (1.5/2.5/3.5 steps); snapping them to the 13 published steps would have moved every button by up to 2 px. The one place that computes a length therefore lives in `tokens/spacing.ts`, not in a component — which is also why R6 never has to allow a literal.
 - **`Button` primary is the accent, not the old blue.** `#2563eb` appears in no token list the brief names, and "one accent `#FFD60A` on `#0E0E0E`" is what the milestone is for. Secondary (`surfaceMuted` on `text`) and ghost (`text`) stay neutral so no label sits unreadably on yellow.
-- **`accentStrong` is an addition to the nine required roles.** The required set has no readable accent *foreground*: `#FFD60A` on `#fafafa` fails contrast, so links and active labels use a dark gold of the same hue in light mode and the brand value in dark mode.
+- **`accentStrong` is an addition to the nine required roles.** The required set has no readable accent _foreground_: `#FFD60A` on `#fafafa` fails contrast, so links and active labels use a dark gold of the same hue in light mode and the brand value in dark mode.
 - **Spacing is published in px, not rem.** The pre-token components computed pixels (`p * 4`), and a rem scale would change every rendered padding under a non-16 px root font size. The type sizes stay in rem, where scaling is the point.
 - **Storybook is a per-package config, not a root one.** `packages/ui` is the only package with stories; a root config would make every app install Storybook to build nothing. The permitted root `.storybook/` was therefore not created.
 - **R6 is a test, not an ESLint rule.** A lint rule would mean editing the root `eslint.config.js` (outside this batch's files) and still could not read `tokens.css` to compare the two halves. A vitest test in the owning package compares both, self-tests against planted violations, and fails the existing `Test` step — no CI change needed.
@@ -2927,13 +2987,13 @@ Four new modules in `crates/warsha-pipeline`, one `lib.rs` wiring block, one doc
 SUMMARY line, and the two record files. No dependency added, no `Cargo.toml`, `package.json` or
 lockfile change, no `.github/workflows/**` change, no TypeScript and no i18n catalog entry.
 
-| Deliverable | Path | What landed |
-|---|---|---|
-| Taste store | `crates/warsha-pipeline/src/preferences.rs` (new) + `lib.rs` `mod`/`pub use` | `SignalKind` (`Approve`/`Reject`/`ChangeRequest`/`Edit`, serde `snake_case`, `all`/`as_str`/`is_positive`/`direction`/`phrase`), `PreferenceSignal { id, project_id, owner_id, kind, target, weight, recorded_at }` (`new`/`with_weight`/`contribution`/`decayed_contribution`, validating `weight` finite and non-negative), `Preference { key, score, evidence_count, last_updated }`, `PreferenceStore` trait (`record_signal`/`list_preferences`/`explain`), `InMemoryPreferenceStore` (append-only `Vec` + id set, `owner_preferences`, `explain_for_owner`, `signals`/`len`/`is_empty`/`clear`, monotonic `advance_to` clock), `decay_factor`, `DECAY_HALF_LIFE_SECS` (30 days), `DEFAULT_SIGNAL_WEIGHT`, `PreferenceError` via thiserror |
-| Build cache | `crates/warsha-pipeline/src/build_cache.rs` (new) + `lib.rs` | `BuildCacheKey { stage, inputs_hash, prompt_hash, model, skill_versions }` (`new`/`with_skills`/`hash`/`is_complete`, `#[serde(default)]` on the skill list), `BuildCacheEntry { key, output_path, created_at, hit_count }`, `BuildCache` trait (`get`/`put`/`invalidate`/`stats`), `InMemoryBuildCache` (`entries`/`len`/`is_empty`/`clear`), `BuildCacheStats` (`lookups`/`hit_rate`), `pub(crate) fnv1a_64_hex` |
-| LLM cache | `crates/warsha-pipeline/src/llm_cache.rs` (new) + `lib.rs` | `normalize_prompt` (trim, collapse whitespace, lowercase), `LlmCacheKey { prompt, model, normalized }` (`new`/`normalized`/`canonical_prompt`/`hash`), `LlmCacheEntry { key, response, created_at, hit_count }`, `LlmCache` trait (`get`/`put`/`stats`), `InMemoryLlmCache` (exact identity map + normalized pointer map, `entries`/`len`/`is_empty`/`clear`), `LlmCacheStats` |
-| Scale standards | `crates/warsha-pipeline/src/scale_standards.rs` (new) + `lib.rs` | `ScaleCategory` (`Database`/`Api`/`Observability`/`Security`, `all`/`as_str`/`label`), `ScaleStandard { id, category, description, check }` (`new`/`is_namespaced`), `SCALE_STANDARDS` = `static LazyLock<[ScaleStandard; 8]>` (FK indexes, no N+1, connection pooling, pagination, timeout budget, structured logs, health endpoint, request size limit), `ScaleStandards::all`/`by_category`/`get`/`checklist` |
-| Docs chapter | `docs/src/scale-standards.md` (new) + `docs/src/SUMMARY.md` | Arabic-first RTL block plus the English spec: the types, why the table is a `LazyLock` and not a `const`, the eight standards with a rationale and a check each, the per-rule security/API reasoning, how `checklist()` is meant to reach the Coder/Reviewer/spec-template prompts, and an explicit "what is not here yet" section. Rust fences are ` ```rust,ignore ` because `mdbook test` runs rustdoc over them |
+| Deliverable     | Path                                                                         | What landed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| --------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Taste store     | `crates/warsha-pipeline/src/preferences.rs` (new) + `lib.rs` `mod`/`pub use` | `SignalKind` (`Approve`/`Reject`/`ChangeRequest`/`Edit`, serde `snake_case`, `all`/`as_str`/`is_positive`/`direction`/`phrase`), `PreferenceSignal { id, project_id, owner_id, kind, target, weight, recorded_at }` (`new`/`with_weight`/`contribution`/`decayed_contribution`, validating `weight` finite and non-negative), `Preference { key, score, evidence_count, last_updated }`, `PreferenceStore` trait (`record_signal`/`list_preferences`/`explain`), `InMemoryPreferenceStore` (append-only `Vec` + id set, `owner_preferences`, `explain_for_owner`, `signals`/`len`/`is_empty`/`clear`, monotonic `advance_to` clock), `decay_factor`, `DECAY_HALF_LIFE_SECS` (30 days), `DEFAULT_SIGNAL_WEIGHT`, `PreferenceError` via thiserror |
+| Build cache     | `crates/warsha-pipeline/src/build_cache.rs` (new) + `lib.rs`                 | `BuildCacheKey { stage, inputs_hash, prompt_hash, model, skill_versions }` (`new`/`with_skills`/`hash`/`is_complete`, `#[serde(default)]` on the skill list), `BuildCacheEntry { key, output_path, created_at, hit_count }`, `BuildCache` trait (`get`/`put`/`invalidate`/`stats`), `InMemoryBuildCache` (`entries`/`len`/`is_empty`/`clear`), `BuildCacheStats` (`lookups`/`hit_rate`), `pub(crate) fnv1a_64_hex`                                                                                                                                                                                                                                                                                                                              |
+| LLM cache       | `crates/warsha-pipeline/src/llm_cache.rs` (new) + `lib.rs`                   | `normalize_prompt` (trim, collapse whitespace, lowercase), `LlmCacheKey { prompt, model, normalized }` (`new`/`normalized`/`canonical_prompt`/`hash`), `LlmCacheEntry { key, response, created_at, hit_count }`, `LlmCache` trait (`get`/`put`/`stats`), `InMemoryLlmCache` (exact identity map + normalized pointer map, `entries`/`len`/`is_empty`/`clear`), `LlmCacheStats`                                                                                                                                                                                                                                                                                                                                                                  |
+| Scale standards | `crates/warsha-pipeline/src/scale_standards.rs` (new) + `lib.rs`             | `ScaleCategory` (`Database`/`Api`/`Observability`/`Security`, `all`/`as_str`/`label`), `ScaleStandard { id, category, description, check }` (`new`/`is_namespaced`), `SCALE_STANDARDS` = `static LazyLock<[ScaleStandard; 8]>` (FK indexes, no N+1, connection pooling, pagination, timeout budget, structured logs, health endpoint, request size limit), `ScaleStandards::all`/`by_category`/`get`/`checklist`                                                                                                                                                                                                                                                                                                                                |
+| Docs chapter    | `docs/src/scale-standards.md` (new) + `docs/src/SUMMARY.md`                  | Arabic-first RTL block plus the English spec: the types, why the table is a `LazyLock` and not a `const`, the eight standards with a rationale and a check each, the per-rule security/API reasoning, how `checklist()` is meant to reach the Coder/Reviewer/spec-template prompts, and an explicit "what is not here yet" section. Rust fences are ` ```rust,ignore ` because `mdbook test` runs rustdoc over them                                                                                                                                                                                                                                                                                                                             |
 
 Tests added — 39 new, all passing: 13 in `preferences` (kind table + serde, one approval, approvals and
 rejections netting out, weight scaling, halving after 30 days, no amplification and no clock rewind,
@@ -2952,19 +3012,19 @@ partition sum, the checklist line shape, category names + serde). Suite totals: 
 Verification for this batch (`pnpm` is not on the Windows host PATH, so the whole set ran inside WSL
 Ubuntu on a synced copy, `/root/warsha-m20-cache`, with `CARGO_TARGET_DIR=/root/warsha/target`):
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` | PASS — exit 0 |
-| `cargo clippy --workspace --all-targets -- -D warnings` | PASS — exit 0, no warning |
-| `cargo test --workspace` | PASS — exit 0, 263 passed, 0 failed, 0 ignored across 24 `test result:` lines |
-| `pnpm install --frozen-lockfile` | PASS |
-| `pnpm -r typecheck` | PASS — 7 packages |
-| `pnpm lint` | PASS — 0 errors, 1 warning: the pre-existing `react-hooks/exhaustive-deps` in `apps/desktop/src/screens/RunView.tsx`, present at HEAD |
-| `node scripts/check-arch.mjs` | PASS — `arch: 5 rules, 0 violations` |
-| `pnpm -r build` | PASS — desktop bundle 340.83 kB |
-| `pnpm -r test` | PASS — 245 tests (client 32, crypto 22, i18n 12, ui 31, remote 4, desktop 144), incl. `mdbook build` + `mdbook test`, which lists `Testing chapter 'Scale Standards': "scale-standards.md"` |
-| `mdbook build` / `mdbook test` (docs, 0.5.4) | PASS — both exit 0, no `ERROR`, `book/scale-standards.html` (33 KB) written |
-| `actionlint .github/workflows/ci.yml` | PASS — exit 0, no workflow file touched |
+| Check                                                   | Result                                                                                                                                                                                      |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cargo fmt --all --check`                               | PASS — exit 0                                                                                                                                                                               |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS — exit 0, no warning                                                                                                                                                                   |
+| `cargo test --workspace`                                | PASS — exit 0, 263 passed, 0 failed, 0 ignored across 24 `test result:` lines                                                                                                               |
+| `pnpm install --frozen-lockfile`                        | PASS                                                                                                                                                                                        |
+| `pnpm -r typecheck`                                     | PASS — 7 packages                                                                                                                                                                           |
+| `pnpm lint`                                             | PASS — 0 errors, 1 warning: the pre-existing `react-hooks/exhaustive-deps` in `apps/desktop/src/screens/RunView.tsx`, present at HEAD                                                       |
+| `node scripts/check-arch.mjs`                           | PASS — `arch: 5 rules, 0 violations`                                                                                                                                                        |
+| `pnpm -r build`                                         | PASS — desktop bundle 340.83 kB                                                                                                                                                             |
+| `pnpm -r test`                                          | PASS — 245 tests (client 32, crypto 22, i18n 12, ui 31, remote 4, desktop 144), incl. `mdbook build` + `mdbook test`, which lists `Testing chapter 'Scale Standards': "scale-standards.md"` |
+| `mdbook build` / `mdbook test` (docs, 0.5.4)            | PASS — both exit 0, no `ERROR`, `book/scale-standards.html` (33 KB) written                                                                                                                 |
+| `actionlint .github/workflows/ci.yml`                   | PASS — exit 0, no workflow file touched                                                                                                                                                     |
 
 Nothing is committed and nothing is pushed. The counts in the table above are the ones the runs printed;
 no check is quoted that was not executed.
@@ -3021,7 +3081,7 @@ Decisions (logged here because `DECISIONS.md` is outside this batch's file scope
   `(role, model, prompt)`; the documented order is `ResponseCache` first, and only a miss reaches
   `LlmCache`, so the existing hit/miss meter keeps its meaning and this cache records what survived a
   cold start. Nothing in that file changed.
-- **The scale checklist renders as `[<id>] <rule> — <check>`.** A gate report has to quote *which*
+- **The scale checklist renders as `[<id>] <rule> — <check>`.** A gate report has to quote _which_
   standard failed, and a bare sentence cannot be quoted back; the id is also what `ScaleStandards::get`
   takes, so a prompt, a finding and a lookup use one string.
 
@@ -3056,11 +3116,11 @@ tests, one docs chapter plus its SUMMARY line, and the two record files. No depe
 `Cargo.toml`, `package.json`, lockfile, `.github/workflows/**` or i18n catalog change; no file outside
 this batch's allowed scope touched.
 
-| Deliverable | Path | What landed |
-|---|---|---|
-| Run modes | `crates/warsha-pipeline/src/run_modes.rs` (new) + `lib.rs` `mod`/`pub use` | `RunMode` (`Local`/`SelfHosted`/`Hosted`, serde `snake_case`, `all`/`as_str`/`label`, `Local` is `Default`), `RunModeConfig { mode, bind_host, allowed_hosts, relay_url }` with `for_mode`/`validate`/`is_loopback_only`/`requires_pairing` + `with_bind_host`/`with_allowed_hosts`/`with_relay_url`, `is_loopback_host`, `LOOPBACK_HOST`/`WILDCARD_HOST`/`LOCALHOST`, `PhonePairing` (`new`/`is_active`, hand-written `Debug`), `PairingStore` trait (`create`/`list`/`revoke`/`is_revoked` + provided `active`), `InMemoryPairingStore` (`new`/`len`/`is_empty`/`get`), `RunModeError` via thiserror (11 variants), `REDACTED_SECRET` |
-| Badge | `apps/desktop/src/components/RunModeBadge.tsx` (new) + `RunModeBadge.test.tsx` (new) | `RunMode` = the three serde tags, `RUN_MODES`, `loopbackOnly` (mirrors `is_loopback_only`), `runModeLabel`/`runModeHint`, and the pill: SVG icon per mode, green/amber/accent colour, `data-mode`/`data-loopback`, `dir` from the locale, `paddingInline`, `unicode-bidi: isolate`. Strings go through `t('run_modes.*')` with an ar/en fallback table, the same shape as `PlanModeBadge`/`LocalCloudBadge` |
-| Docs chapter | `docs/src/run-modes.md` (new) + `docs/src/SUMMARY.md` | Arabic-first RTL block plus the English spec: the three modes, the bind/allow-list/relay table, the error-per-rule table, `for_mode`'s deliberate refusals, the pairing flow (seven steps) and its revocation semantics, the badge, and an explicit "what is not here yet" section. Rust fences are ` ```rust,ignore ` because `mdbook test` runs rustdoc over them |
+| Deliverable  | Path                                                                                 | What landed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ------------ | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Run modes    | `crates/warsha-pipeline/src/run_modes.rs` (new) + `lib.rs` `mod`/`pub use`           | `RunMode` (`Local`/`SelfHosted`/`Hosted`, serde `snake_case`, `all`/`as_str`/`label`, `Local` is `Default`), `RunModeConfig { mode, bind_host, allowed_hosts, relay_url }` with `for_mode`/`validate`/`is_loopback_only`/`requires_pairing` + `with_bind_host`/`with_allowed_hosts`/`with_relay_url`, `is_loopback_host`, `LOOPBACK_HOST`/`WILDCARD_HOST`/`LOCALHOST`, `PhonePairing` (`new`/`is_active`, hand-written `Debug`), `PairingStore` trait (`create`/`list`/`revoke`/`is_revoked` + provided `active`), `InMemoryPairingStore` (`new`/`len`/`is_empty`/`get`), `RunModeError` via thiserror (11 variants), `REDACTED_SECRET` |
+| Badge        | `apps/desktop/src/components/RunModeBadge.tsx` (new) + `RunModeBadge.test.tsx` (new) | `RunMode` = the three serde tags, `RUN_MODES`, `loopbackOnly` (mirrors `is_loopback_only`), `runModeLabel`/`runModeHint`, and the pill: SVG icon per mode, green/amber/accent colour, `data-mode`/`data-loopback`, `dir` from the locale, `paddingInline`, `unicode-bidi: isolate`. Strings go through `t('run_modes.*')` with an ar/en fallback table, the same shape as `PlanModeBadge`/`LocalCloudBadge`                                                                                                                                                                                                                             |
+| Docs chapter | `docs/src/run-modes.md` (new) + `docs/src/SUMMARY.md`                                | Arabic-first RTL block plus the English spec: the three modes, the bind/allow-list/relay table, the error-per-rule table, `for_mode`'s deliberate refusals, the pairing flow (seven steps) and its revocation semantics, the badge, and an explicit "what is not here yet" section. Rust fences are ` ```rust,ignore ` because `mdbook test` runs rustdoc over them                                                                                                                                                                                                                                                                     |
 
 Tests added — 21 new, all passing: 16 in `run_modes` (`for_mode` per mode and its refusal, the
 refused-by-default SelfHosted/Hosted starts, stable tags + labels + serde + `Default`, both loopback
@@ -3078,21 +3138,21 @@ Verification for this batch (the Windows host has no `pnpm`, and `cargo` on Wind
 and the TypeScript checks ran per package on the Windows host through the local `node_modules/.bin`
 binaries with `npm --prefix`):
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` | PASS — exit 0 |
-| `cargo clippy --workspace --all-targets -- -D warnings` | PASS — exit 0, no warning |
-| `cargo test --workspace --all-targets` | PASS — exit 0, 279 passed, 0 failed, 0 ignored across 14 `test result:` lines |
-| `mdbook build` / `mdbook test` (docs, 0.5.4) | PASS — both exit 0, `Testing chapter 'Run Modes': "run-modes.md"` listed (22 chapters) |
-| `actionlint .github/workflows/ci.yml` | PASS — exit 0, no workflow file touched |
-| `packages/client` typecheck / test / build / lint | PASS — 32 tests |
-| `packages/crypto` typecheck / test / build / lint | PASS — 22 tests |
-| `packages/i18n` typecheck / test / build / lint | PASS — 12 tests |
-| `packages/ui` test / lint | PASS — 31 tests, 0 errors |
-| `packages/ui` typecheck / build | ⚠️ NOT RUN GREEN — exit 2, `Cannot find module '@storybook/react'` in the five pre-existing `*.stories.tsx`. `packages/ui/package.json` and `pnpm-lock.yaml` both carry `@storybook/react@8.6.19`, but this host's `node_modules` predates the fifth batch and there is no `pnpm` to reinstall with, so the package is simply absent. `packages/ui` is untouched by this batch; CI's `pnpm install --frozen-lockfile` supplies it |
-| `apps/desktop` typecheck / test / build / lint | PASS — 149 tests, `vite build` exit 0 |
-| `apps/remote` typecheck / test / build / lint | PASS — 4 tests |
-| `node scripts/check-arch.mjs` | PASS — `arch: 5 rules, 0 violations` |
+| Check                                                   | Result                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cargo fmt --all --check`                               | PASS — exit 0                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS — exit 0, no warning                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `cargo test --workspace --all-targets`                  | PASS — exit 0, 279 passed, 0 failed, 0 ignored across 14 `test result:` lines                                                                                                                                                                                                                                                                                                                                                     |
+| `mdbook build` / `mdbook test` (docs, 0.5.4)            | PASS — both exit 0, `Testing chapter 'Run Modes': "run-modes.md"` listed (22 chapters)                                                                                                                                                                                                                                                                                                                                            |
+| `actionlint .github/workflows/ci.yml`                   | PASS — exit 0, no workflow file touched                                                                                                                                                                                                                                                                                                                                                                                           |
+| `packages/client` typecheck / test / build / lint       | PASS — 32 tests                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `packages/crypto` typecheck / test / build / lint       | PASS — 22 tests                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `packages/i18n` typecheck / test / build / lint         | PASS — 12 tests                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `packages/ui` test / lint                               | PASS — 31 tests, 0 errors                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `packages/ui` typecheck / build                         | ⚠️ NOT RUN GREEN — exit 2, `Cannot find module '@storybook/react'` in the five pre-existing `*.stories.tsx`. `packages/ui/package.json` and `pnpm-lock.yaml` both carry `@storybook/react@8.6.19`, but this host's `node_modules` predates the fifth batch and there is no `pnpm` to reinstall with, so the package is simply absent. `packages/ui` is untouched by this batch; CI's `pnpm install --frozen-lockfile` supplies it |
+| `apps/desktop` typecheck / test / build / lint          | PASS — 149 tests, `vite build` exit 0                                                                                                                                                                                                                                                                                                                                                                                             |
+| `apps/remote` typecheck / test / build / lint           | PASS — 4 tests                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `node scripts/check-arch.mjs`                           | PASS — `arch: 5 rules, 0 violations`                                                                                                                                                                                                                                                                                                                                                                                              |
 
 Nothing is committed and nothing is pushed. The counts above are the ones the runs printed; the one
 check that did not pass is named with its cause rather than omitted. The only lint output repo-wide is
@@ -3108,7 +3168,7 @@ Decisions (logged here because `DECISIONS.md` is outside this batch's file scope
   not configured this yet" into an open port.
 - **`is_loopback_only` is a property of the bind, and Hosted answers `true`.** Hosted's API binds
   `127.0.0.1` and remote devices arrive through the relay, so nothing listens off-host. Whether a relay
-  is *reachable* is a different question, answered by a transport that does not exist yet, and conflating
+  is _reachable_ is a different question, answered by a transport that does not exist yet, and conflating
   the two would let a config claim "not exposed" because it has a URL.
 - **Only `127.0.0.1` and `localhost` count as loopback; `::1` is refused.** The daemon binds IPv4 and
   reports one address, so accepting a v6 literal would validate a config nothing can bind. `localhost`
@@ -3165,39 +3225,39 @@ Three code files plus the two record files: `packages/client/src/index.ts`,
 `PROGRESS.md`. No dependency added, no `Cargo.toml`/`package.json`/lockfile change, no
 `.github/workflows/**` change, no i18n catalog entry, no Rust change.
 
-| Deliverable | Path | What landed |
-|---|---|---|
-| Client implementations | `packages/client/src/index.ts` | `WarshaClient implements WarshaWiringApi`; `exportBackend`/`createHandoff`/`applyHandoff`/`listCrashReports`/`listStoreReviews` call `backend.export`/`handoff.create`/`handoff.apply`/`postlaunch.crashes`/`postlaunch.reviews` with the daemon's snake_case params (`run_id`, `output_dir`, `files`, `path`, `owner_wins`, `store`). Result validation: `wiringObject`/`wiringArray`/`wiringString`/`wiringNumber`/`wiringBoolean`/`wiringNullableString`/`wiringPath`/`wiringStringList` + exported `parseHandoffApplySummary`, every error prefixed `Malformed RPC result from <method>: …`. Method names are module consts so the call and its errors cannot drift |
-| Wire types | same file | `HandoffApplySummary.backup_dir?: string` (the field the fourth batch added to `ApplyResult`); `applyHandoff` now resolves `Promise<HandoffApplySummary>`, the third batch's `Promise<string>` decoded into the type it names; `WarshaWiringApi`'s doc comment no longer says "signatures only" |
-| Composer mount | `apps/desktop/src/screens/SimpleMode.tsx` | `ComposerTrigger`, `composerTriggerFor(value)`, `insertComposerToken(value, insertion)`, `simpleSlashCommands(locale)` and a `SIMPLE_SLASH_COMMANDS` placeholder catalog, all exported for reuse; `mentionQuery`/`slashQuery` state (`null` = closed, the string is also the filter query); `handleComposerChange` keeps text and both pickers in step; `pickMention`/`pickSlashCommand` insert and close; `closePickers` on send. The composer box became a column: the input row, then `MentionPicker`/`SlashCommandPicker` under it, `data-testid="simple-composer-input"` on the field |
-| Tests | `apps/desktop/src/App.test.tsx` | 6 new tests (desktop 149 → 155): mention opens on `@fi` with `data-query="fi"` and inserts `@file `; slash opens on `/re` and inserts `/review `; neither opens for `dev@example.com` or `@file:src/main.rs`; the two path-returning RPC calls and their params; the apply summary (`backup_dir` included) plus `postlaunch.crashes` with `run_id: ''` and `postlaunch.reviews` with a store; the two malformed-result rejections |
+| Deliverable            | Path                                      | What landed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Client implementations | `packages/client/src/index.ts`            | `WarshaClient implements WarshaWiringApi`; `exportBackend`/`createHandoff`/`applyHandoff`/`listCrashReports`/`listStoreReviews` call `backend.export`/`handoff.create`/`handoff.apply`/`postlaunch.crashes`/`postlaunch.reviews` with the daemon's snake_case params (`run_id`, `output_dir`, `files`, `path`, `owner_wins`, `store`). Result validation: `wiringObject`/`wiringArray`/`wiringString`/`wiringNumber`/`wiringBoolean`/`wiringNullableString`/`wiringPath`/`wiringStringList` + exported `parseHandoffApplySummary`, every error prefixed `Malformed RPC result from <method>: …`. Method names are module consts so the call and its errors cannot drift |
+| Wire types             | same file                                 | `HandoffApplySummary.backup_dir?: string` (the field the fourth batch added to `ApplyResult`); `applyHandoff` now resolves `Promise<HandoffApplySummary>`, the third batch's `Promise<string>` decoded into the type it names; `WarshaWiringApi`'s doc comment no longer says "signatures only"                                                                                                                                                                                                                                                                                                                                                                         |
+| Composer mount         | `apps/desktop/src/screens/SimpleMode.tsx` | `ComposerTrigger`, `composerTriggerFor(value)`, `insertComposerToken(value, insertion)`, `simpleSlashCommands(locale)` and a `SIMPLE_SLASH_COMMANDS` placeholder catalog, all exported for reuse; `mentionQuery`/`slashQuery` state (`null` = closed, the string is also the filter query); `handleComposerChange` keeps text and both pickers in step; `pickMention`/`pickSlashCommand` insert and close; `closePickers` on send. The composer box became a column: the input row, then `MentionPicker`/`SlashCommandPicker` under it, `data-testid="simple-composer-input"` on the field                                                                              |
+| Tests                  | `apps/desktop/src/App.test.tsx`           | 6 new tests (desktop 149 → 155): mention opens on `@fi` with `data-query="fi"` and inserts `@file `; slash opens on `/re` and inserts `/review `; neither opens for `dev@example.com` or `@file:src/main.rs`; the two path-returning RPC calls and their params; the apply summary (`backup_dir` included) plus `postlaunch.crashes` with `run_id: ''` and `postlaunch.reviews` with a store; the two malformed-result rejections                                                                                                                                                                                                                                       |
 
 What the composer actually does now, and what it still does not:
 
-| Piece | Behaviour |
-|---|---|
-| Mention trigger | `@` must begin the trailing token and only letters may follow, so `dev@example.com` stays an address and `@file:src/main.rs` counts as resolved. Picking a kind writes `@file ` (or `@folder`, `@codebase`, …) and closes the dropdown |
-| Slash trigger | Same rule with `/` and an allowed `-` (so `/dry-run` works). Picking writes the command name (already slash-prefixed) plus a space |
-| Mutual exclusion | One nullable query per picker, set from a single `composerTriggerFor` result, so the two can never be open together and neither survives a send |
-| Slash catalog | `/review`, `/refactor`, `/test`, `/docs`, `/release` with ar/en one-liners, held in the screen. No RPC reports the project's skills yet, so this is the composer's placeholder, not the daemon's registry |
-| Not done | Nothing attaches file contents for a mention (`@file` is text only — resolution still belongs to the caller), nothing executes a slash command, and the message still goes to the mock agent reply. No screen calls the five new client methods yet |
+| Piece            | Behaviour                                                                                                                                                                                                                                           |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Mention trigger  | `@` must begin the trailing token and only letters may follow, so `dev@example.com` stays an address and `@file:src/main.rs` counts as resolved. Picking a kind writes `@file ` (or `@folder`, `@codebase`, …) and closes the dropdown              |
+| Slash trigger    | Same rule with `/` and an allowed `-` (so `/dry-run` works). Picking writes the command name (already slash-prefixed) plus a space                                                                                                                  |
+| Mutual exclusion | One nullable query per picker, set from a single `composerTriggerFor` result, so the two can never be open together and neither survives a send                                                                                                     |
+| Slash catalog    | `/review`, `/refactor`, `/test`, `/docs`, `/release` with ar/en one-liners, held in the screen. No RPC reports the project's skills yet, so this is the composer's placeholder, not the daemon's registry                                           |
+| Not done         | Nothing attaches file contents for a mention (`@file` is text only — resolution still belongs to the caller), nothing executes a slash command, and the message still goes to the mock agent reply. No screen calls the five new client methods yet |
 
 Checks actually run (the Windows host has no `pnpm`, so the repo's own `node_modules` binaries were
 used for the per-package runs, and `bridge-io/run.flag` requested the bridge run that CI actually
 uses):
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` | PASS — bridge, exit 0 |
-| `cargo clippy --workspace --all-targets -- -D warnings` | PASS — bridge, exit 0 |
-| `cargo test --workspace` | PASS — bridge, 279 passed, 0 failed across 24 `test result:` lines (Rust untouched this batch) |
-| `pnpm install` / `-r typecheck` | PASS — bridge |
-| `pnpm lint` | PASS — bridge; 0 errors, 1 warning (the pre-existing `react-hooks/exhaustive-deps` in `apps/desktop/src/screens/RunView.tsx`). The same run locally on the two edited files reports nothing for them |
-| `node scripts/check-arch.mjs` / `--self-test` | PASS — `arch: 5 rules, 0 violations`; self-test fires all five rules |
-| `pnpm -r build` | PASS — bridge. Locally `vite build` also ran from `apps/desktop` (348.50 kB) and `apps/remote` (212.57 kB) |
-| `pnpm -r test` | PASS — bridge, 256 tests: client 32, i18n 12, crypto 22, ui 31, remote 4, desktop 155 |
-| `actionlint .github/workflows/ci.yml` | PASS — exit 0 in the bridge and directly in WSL; no workflow file touched |
-| `mdbook build` / `test` | Not run separately — `docs/src/**` is untouched this batch and the bridge's `pnpm -r test` covers the docs package |
+| Check                                                   | Result                                                                                                                                                                                               |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cargo fmt --all --check`                               | PASS — bridge, exit 0                                                                                                                                                                                |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS — bridge, exit 0                                                                                                                                                                                |
+| `cargo test --workspace`                                | PASS — bridge, 279 passed, 0 failed across 24 `test result:` lines (Rust untouched this batch)                                                                                                       |
+| `pnpm install` / `-r typecheck`                         | PASS — bridge                                                                                                                                                                                        |
+| `pnpm lint`                                             | PASS — bridge; 0 errors, 1 warning (the pre-existing `react-hooks/exhaustive-deps` in `apps/desktop/src/screens/RunView.tsx`). The same run locally on the two edited files reports nothing for them |
+| `node scripts/check-arch.mjs` / `--self-test`           | PASS — `arch: 5 rules, 0 violations`; self-test fires all five rules                                                                                                                                 |
+| `pnpm -r build`                                         | PASS — bridge. Locally `vite build` also ran from `apps/desktop` (348.50 kB) and `apps/remote` (212.57 kB)                                                                                           |
+| `pnpm -r test`                                          | PASS — bridge, 256 tests: client 32, i18n 12, crypto 22, ui 31, remote 4, desktop 155                                                                                                                |
+| `actionlint .github/workflows/ci.yml`                   | PASS — exit 0 in the bridge and directly in WSL; no workflow file touched                                                                                                                            |
+| `mdbook build` / `test`                                 | Not run separately — `docs/src/**` is untouched this batch and the bridge's `pnpm -r test` covers the docs package                                                                                   |
 
 Defects and host problems met while getting there:
 
@@ -3231,7 +3291,7 @@ Decisions (logged here because `DECISIONS.md` is outside this batch's file scope
   pointer to the backup.
 - **Results are validated, not cast.** Every method returns `unknown` from `rpc` and is narrowed field
   by field, so `undefined` cannot reach a render. The messages are `Malformed RPC result from <method>:
-  "<field>" is not …`, never a body dump, so nothing a daemon echoes can leak into a message (the token
+"<field>" is not …`, never a body dump, so nothing a daemon echoes can leak into a message (the token
   redaction in `rpc` still covers transport and JSON-RPC errors).
 - **A blank `run_id`/`store` is sent for "everything".** `postlaunch.crashes` and `postlaunch.reviews`
   treat a blank filter as the crash and review screens' unselected state, so the optional TS parameter
@@ -3273,10 +3333,12 @@ and other sessions' files (`.github/workflows/ci.yml`, `DECISIONS.md`, `apps/des
 `run-output.log`, `status.txt` and `done.flag`, which are that directory's own artefacts.
 
 #### Blocked (Local Only — Requires Windows Host Execution)
+
 - **WSL2 validation runs outside the agent sandbox** — the bridge script (`scripts/wsl-bridge.ps1`) must be running on the Windows host; it rsyncs the repo to `/root/warsha` and runs `scripts/wsl-setup.sh`.
 - Full validation log lives at `/root/warsha/wsl-validation.log` inside WSL (readable with `wsl -d Ubuntu -u root`).
 
 #### Team structure (Agent Teams)
+
 - **rust-coder** — owns `crates/**` + root `Cargo.toml`
 - **web-coder** — owns `apps/**`, `packages/**`, `pnpm-workspace.yaml`, `package.json`, `tsconfig.json`, `vitest.config.ts`
 - **debugger** — read-only on code; writes only `docs/VALIDATION_NOTES.md`; maps every bridge FAIL to file + root cause + exact fix
@@ -3286,6 +3348,7 @@ and other sessions' files (`.github/workflows/ci.yml`, `DECISIONS.md`, `apps/des
 ---
 
 ## Human-only steps (from BUILD_PROMPT.md §9)
+
 - [ ] Create the GitHub org/repo, add CI secrets, enable branch protection
 - [ ] Code signing certificates (Windows: e.g. SignPath/Azure Trusted Signing; macOS: Apple Developer ID + notarization)
 - [ ] Store and registry accounts and submissions (winget, Homebrew, Scoop, Microsoft Store, crates.io/npm publish)
@@ -3293,14 +3356,19 @@ and other sessions' files (`.github/workflows/ci.yml`, `DECISIONS.md`, `apps/des
 - [ ] Real-provider smoke tests with the user's own keys
 
 ## Additional HUMAN TODO (Local Toolchain)
+
 - [ ] Keep `scripts/wsl-bridge.ps1` running on the Windows host while the build session is active (it is the only validation path; agents cannot execute WSL commands)
 - [ ] Approve GitHub App installation for Renovate once the repo exists (M16)
 - [ ] Configure Tauri updater signing keys and store them as CI secrets (M16)
 - [ ] Confirm the Activepieces CE deployment target (bundled vs. user-hosted) — M16 landed the license review and docs only; the connection is not wired yet
 - [ ] Provide API keys for real-provider smoke tests when M2 reaches live verification
+
 ## v0.1.0 ready
+
 All milestones M0–M16 are implemented and validated. Last bridge run 2026-10-29T17:47:43 exited 0 with all 18 checks green (cargo fmt/clippy/test, pnpm install/typecheck/build/test, actionlint). See PLAN.md for per-milestone evidence. Human-only steps remain listed above.
+
 ## Plan update 2026-10-29 — LingCode-inspired ideas (ideas only)
+
 PLAN.md and DECISIONS.md updated with 11 ideas adopted from LingCode's public site (ideas only; no branding/assets/text/code copied). New milestones M17 (Post-launch care), M18 (Agent workflow and context), M19 (Backend kit); subsections M14a (work protection), M14b (router additions), M5a (status strip/delivery), M5b (live preview), M6a (continue on server), M8b (Simple mode UI spec), M15a (website and launch). Definition of Done extended to M10-M19. License remains PolyForm Noncommercial 1.0.0. No code changes; CI unaffected.
 
 #### M20 (ninth batch) – Agent loop wiring: `agent_loop.rs` + `skills.list`/`agent.turn` ✅ DONE (validated 2026-10-30T18:12, all check groups green; 294 Rust tests and 256 TS tests, 0 failures)
@@ -3310,13 +3378,13 @@ Wiring only, in the five files the batch was allowed to touch: no dependency add
 TypeScript source change, no new feature. The loop calls the M18 types exactly as they shipped; the
 only additions to `agent_workflow.rs` are two helpers on `SlashCommandRegistry`.
 
-| Deliverable | Path | What landed |
-|---|---|---|
-| Agent loop | `crates/warsha-pipeline/src/agent_loop.rs` (new) + `lib.rs` `mod`/`pub use` | `AgentLoop { mode_manager, todo_list, ask_queue, message_bus, compactor, compressor }` + the private `context` transcript, `AgentLoop::new()`, `run_turn(input, skills) -> AgentTurnResult` (mentions → slash command → Plan plan / Agent summary → one todo → compaction), `approve_agent_mode`/`return_to_plan_mode` through `ModeManager::request_transition`, `mode`/`todos`/`context` accessors, `AgentTurnResult { mode, mentions, command, response, todos }` (serde `snake_case`), `TURN_CONTEXT_BUDGET_TOKENS = 512`, `MAX_SUMMARY_CHARS = 120`, hand-written `impl Default` |
-| Registry helpers | `crates/warsha-pipeline/src/agent_workflow.rs` | `SlashCommandRegistry::from_skills(&[SlashCommand]) -> Self` (cannot fail: a nameless or whitespace-named entry is skipped and a repeated name keeps the first) and `SlashCommandRegistry::skills() -> Vec<SlashCommand>` (owned, registration order — the `skills.list` wire shape; `list()` stays the sorted picker view) |
-| Skills RPC | `crates/warshad/src/lib.rs` | `SKILL_CATALOG` (`/review`, `/refactor`, `/test`, `/fix`, `/explain`), `skill_catalog()` built through the registry, `#[method(name = "skills.list")] list_skills() -> Vec<SlashCommand>` |
-| Agent turn RPC | `crates/warshad/src/lib.rs` | `#[method(name = "agent.turn")] agent_turn(input) -> AgentTurnResult`: builds the catalog, takes the loop's write lock and returns `run_turn(&input, &skills)` |
-| Daemon wiring | `crates/warshad/src/lib.rs` | `DaemonState.agent_loop: Arc<RwLock<AgentLoop>>` with a `TODO(persistence)` note, initialized in `start_daemon` and in the tests' `test_state` |
+| Deliverable      | Path                                                                        | What landed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ---------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Agent loop       | `crates/warsha-pipeline/src/agent_loop.rs` (new) + `lib.rs` `mod`/`pub use` | `AgentLoop { mode_manager, todo_list, ask_queue, message_bus, compactor, compressor }` + the private `context` transcript, `AgentLoop::new()`, `run_turn(input, skills) -> AgentTurnResult` (mentions → slash command → Plan plan / Agent summary → one todo → compaction), `approve_agent_mode`/`return_to_plan_mode` through `ModeManager::request_transition`, `mode`/`todos`/`context` accessors, `AgentTurnResult { mode, mentions, command, response, todos }` (serde `snake_case`), `TURN_CONTEXT_BUDGET_TOKENS = 512`, `MAX_SUMMARY_CHARS = 120`, hand-written `impl Default` |
+| Registry helpers | `crates/warsha-pipeline/src/agent_workflow.rs`                              | `SlashCommandRegistry::from_skills(&[SlashCommand]) -> Self` (cannot fail: a nameless or whitespace-named entry is skipped and a repeated name keeps the first) and `SlashCommandRegistry::skills() -> Vec<SlashCommand>` (owned, registration order — the `skills.list` wire shape; `list()` stays the sorted picker view)                                                                                                                                                                                                                                                           |
+| Skills RPC       | `crates/warshad/src/lib.rs`                                                 | `SKILL_CATALOG` (`/review`, `/refactor`, `/test`, `/fix`, `/explain`), `skill_catalog()` built through the registry, `#[method(name = "skills.list")] list_skills() -> Vec<SlashCommand>`                                                                                                                                                                                                                                                                                                                                                                                             |
+| Agent turn RPC   | `crates/warshad/src/lib.rs`                                                 | `#[method(name = "agent.turn")] agent_turn(input) -> AgentTurnResult`: builds the catalog, takes the loop's write lock and returns `run_turn(&input, &skills)`                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Daemon wiring    | `crates/warshad/src/lib.rs`                                                 | `DaemonState.agent_loop: Arc<RwLock<AgentLoop>>` with a `TODO(persistence)` note, initialized in `start_daemon` and in the tests' `test_state`                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 Tests added — 15 new, all passing: 12 in `agent_loop` (a new loop starts in Plan with empty stores,
 Plan returns a plan and executes nothing, Agent returns a summary, mentions parsed and repeated in the
@@ -3327,28 +3395,27 @@ allowed, the loop owns the `ask_user` queue and the message bus, the result's se
 input still produces a turn), 1 in `agent_workflow` (`from_skills` skipping the two unusable entries
 and the duplicate, `skills()` order, slash-less lookup) and 2 in `warshad` (`skills.list` reports the
 five commands in catalog order and resolves as a registry; `agent.turn` plans first and executes only
-after the owner's approval, with `turn-2` recorded). Workspace totals: Rust 279 → 294, TS unchanged at
-256.
+after the owner's approval, with `turn-2` recorded). Workspace totals: Rust 279 → 294, TS unchanged at 256.
 
 Checks actually run (Rust and docs in WSL Ubuntu as root against a synced copy at `/root/warsha-al`
 with `CARGO_TARGET_DIR=/root/warsha/target`, because this Windows host's `cargo` targets
 `x86_64-pc-windows-gnu` and has no `gcc.exe` for `ring`; TypeScript on this Windows host with the
 repo's own `node_modules`, because `pnpm` is not installed here):
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` | PASS — exit 0, also re-checked with the WSL toolchain's `rustfmt 1.10.0-stable` |
-| `cargo clippy --workspace --all-targets -- -D warnings` | PASS — exit 0, no warning |
-| `cargo test --workspace` | PASS — 294 passed, 0 failed, 0 ignored |
-| `tsc --noEmit` (client, crypto, i18n, desktop, remote) | PASS — exit 0 for all five |
-| `tsc --noEmit` (`packages/ui`) | **Not a regression, pre-existing**: exit 2 on `Cannot find module '@storybook/react'` and the implicit-`any` parameters that follow from it. `node_modules/@storybook` does not exist on this host — the M20 fifth batch recorded the same gap ("the Windows host's `node_modules` predates the fifth batch") and the bridge's `pnpm install` supplies the package. No `.ts`/`.tsx` file changed in this batch |
-| `vitest run` per package | PASS — 256 tests (client 32, crypto 22, i18n 12, ui 31, desktop 155, remote 4), 0 failures |
-| `vite build` (desktop, remote) | PASS — exit 0, both bundles written |
-| `eslint src --ext .ts,.tsx` per package | PASS — 0 errors, 1 warning: the pre-existing `react-hooks/exhaustive-deps` in the desktop composer's subscription ref |
-| `node scripts/check-arch.mjs --self-test` + `node scripts/check-arch.mjs` | PASS — 5 rules fire on the fixtures, `arch: 5 rules, 0 violations` |
-| `actionlint .github/workflows/ci.yml` (WSL) | PASS — exit 0, no workflow file touched |
-| `mdbook build` + `mdbook test` (WSL, 0.5.4) | PASS — both exit 0, 22 chapters tested, no docs source changed |
-| `pnpm install` / `-r typecheck` / `-r build` / `-r test`, the bridge run | Not run — `pnpm` is not on this host's PATH and no `pnpm.cjs` exists anywhere under the user profile, so the per-package equivalents above were run instead; no `package.json`, lockfile or TypeScript source changed, so the bridge's run exercises the same code |
+| Check                                                                     | Result                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cargo fmt --all --check`                                                 | PASS — exit 0, also re-checked with the WSL toolchain's `rustfmt 1.10.0-stable`                                                                                                                                                                                                                                                                                                                                |
+| `cargo clippy --workspace --all-targets -- -D warnings`                   | PASS — exit 0, no warning                                                                                                                                                                                                                                                                                                                                                                                      |
+| `cargo test --workspace`                                                  | PASS — 294 passed, 0 failed, 0 ignored                                                                                                                                                                                                                                                                                                                                                                         |
+| `tsc --noEmit` (client, crypto, i18n, desktop, remote)                    | PASS — exit 0 for all five                                                                                                                                                                                                                                                                                                                                                                                     |
+| `tsc --noEmit` (`packages/ui`)                                            | **Not a regression, pre-existing**: exit 2 on `Cannot find module '@storybook/react'` and the implicit-`any` parameters that follow from it. `node_modules/@storybook` does not exist on this host — the M20 fifth batch recorded the same gap ("the Windows host's `node_modules` predates the fifth batch") and the bridge's `pnpm install` supplies the package. No `.ts`/`.tsx` file changed in this batch |
+| `vitest run` per package                                                  | PASS — 256 tests (client 32, crypto 22, i18n 12, ui 31, desktop 155, remote 4), 0 failures                                                                                                                                                                                                                                                                                                                     |
+| `vite build` (desktop, remote)                                            | PASS — exit 0, both bundles written                                                                                                                                                                                                                                                                                                                                                                            |
+| `eslint src --ext .ts,.tsx` per package                                   | PASS — 0 errors, 1 warning: the pre-existing `react-hooks/exhaustive-deps` in the desktop composer's subscription ref                                                                                                                                                                                                                                                                                          |
+| `node scripts/check-arch.mjs --self-test` + `node scripts/check-arch.mjs` | PASS — 5 rules fire on the fixtures, `arch: 5 rules, 0 violations`                                                                                                                                                                                                                                                                                                                                             |
+| `actionlint .github/workflows/ci.yml` (WSL)                               | PASS — exit 0, no workflow file touched                                                                                                                                                                                                                                                                                                                                                                        |
+| `mdbook build` + `mdbook test` (WSL, 0.5.4)                               | PASS — both exit 0, 22 chapters tested, no docs source changed                                                                                                                                                                                                                                                                                                                                                 |
+| `pnpm install` / `-r typecheck` / `-r build` / `-r test`, the bridge run  | Not run — `pnpm` is not on this host's PATH and no `pnpm.cjs` exists anywhere under the user profile, so the per-package equivalents above were run instead; no `package.json`, lockfile or TypeScript source changed, so the bridge's run exercises the same code                                                                                                                                             |
 
 Defects found and fixed inside files this batch created:
 
@@ -3427,14 +3494,14 @@ have a table, an idempotent migration and a save/load pair with round-trip tests
 No feature was added: no new RPC, no screen, and no daemon loads the rows at boot
 yet.
 
-| Deliverable | Path | What landed |
-|---|---|---|
-| Persistence module | `crates/warsha-store/src/persistence.rs` (new) + `lib.rs` `mod`/`pub use` | `SqliteStore { conn: rusqlite::Connection }` with `open(&str)` (creates the file, `journal_mode = WAL`, `foreign_keys = ON`, 5 s busy timeout, and it **refuses** to return a store that did not end up in WAL), `migrate()` (one `unchecked_transaction`, `CREATE TABLE IF NOT EXISTS`, safe to call on every start), `tables()` and `connection()`. Rows: `StoredPreference { project_id, key, score, evidence_count, last_updated }`, `StoredBackendKit { project_id, kind, url, config_json }`, `StoredRunMode { mode, config_json }`, `StoredPairing { device_id, secret, created_at, revoked }` (hand-written `Debug`, prints `<redacted>`). Methods: `save_preference`/`load_preferences` (upsert on `(project_id, key)`, highest score first then key), `save_backend_kit`/`load_backend_kit` (`Option`), `save_run_mode`/`load_run_mode` (`Option`), `save_pairing`/`load_pairings` (oldest first, revoked rows kept) |
-| Store error variants | `crates/warsha-store/src/lib.rs` | `StoreError::Sqlite(#[from] rusqlite::Error)`, `InvalidPath(String)` (a blank path is not SQLite's silent temp database) and `WalNotEnabled(String)`. No caller in the workspace matches `StoreError` exhaustively, so the three additions are source-compatible |
-| Dependency | `crates/warsha-store/Cargo.toml` | `rusqlite = { version = "0.32", features = ["bundled"] }` — the only new dependency. 0.32 is the newest line that wants `libsqlite3-sys ^0.30`, which is exactly what `sqlx`'s SQLite driver already links, so the workspace still has one native `sqlite3` (Cargo allows only one `links = "sqlite3"` package) and the bundled amalgamation is compiled once |
-| Preferences | `crates/warsha-pipeline/src/preferences.rs` | `InMemoryPreferenceStore::save_to_store(&self, &SqliteStore)` projects every derived preference, one row per `(project_id, key)`, in project-id order; `InMemoryPreferenceStore::load_from_store(store, project_id)` reads them back in the same order `list_preferences` uses. Module doc now says what is persisted (the derived rows) and what is not (the signal log, the owner dimension) |
-| Backend kit | `crates/warsha-pipeline/src/backend_kit.rs` | `BackendKit::save_to_store(&self, store, project_id)` writes the serialised kit into `config_json` and mirrors `kind`/`url` into their own columns; `BackendKit::load_from_store(store, project_id)` returns `Option<BackendKit>` and turns a row whose JSON no longer parses into `StoreError::Serialization` rather than an empty kit |
-| Run modes + pairing | `crates/warsha-pipeline/src/run_modes.rs` | `RunModeConfig::save_to_store`/`load_from_store(store, mode)` keyed by `RunMode::as_str` (saving Hosted does not erase Local), returned **unvalidated** so `validate()` stays the one gate before a bind; `InMemoryPairingStore::save_to_store`/`load_from_store` (returns a fresh store, so the caller keeps `create`/`list`/`revoke`/`is_revoked`) with revocation as a value on the row |
+| Deliverable          | Path                                                                      | What landed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| -------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Persistence module   | `crates/warsha-store/src/persistence.rs` (new) + `lib.rs` `mod`/`pub use` | `SqliteStore { conn: rusqlite::Connection }` with `open(&str)` (creates the file, `journal_mode = WAL`, `foreign_keys = ON`, 5 s busy timeout, and it **refuses** to return a store that did not end up in WAL), `migrate()` (one `unchecked_transaction`, `CREATE TABLE IF NOT EXISTS`, safe to call on every start), `tables()` and `connection()`. Rows: `StoredPreference { project_id, key, score, evidence_count, last_updated }`, `StoredBackendKit { project_id, kind, url, config_json }`, `StoredRunMode { mode, config_json }`, `StoredPairing { device_id, secret, created_at, revoked }` (hand-written `Debug`, prints `<redacted>`). Methods: `save_preference`/`load_preferences` (upsert on `(project_id, key)`, highest score first then key), `save_backend_kit`/`load_backend_kit` (`Option`), `save_run_mode`/`load_run_mode` (`Option`), `save_pairing`/`load_pairings` (oldest first, revoked rows kept) |
+| Store error variants | `crates/warsha-store/src/lib.rs`                                          | `StoreError::Sqlite(#[from] rusqlite::Error)`, `InvalidPath(String)` (a blank path is not SQLite's silent temp database) and `WalNotEnabled(String)`. No caller in the workspace matches `StoreError` exhaustively, so the three additions are source-compatible                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Dependency           | `crates/warsha-store/Cargo.toml`                                          | `rusqlite = { version = "0.32", features = ["bundled"] }` — the only new dependency. 0.32 is the newest line that wants `libsqlite3-sys ^0.30`, which is exactly what `sqlx`'s SQLite driver already links, so the workspace still has one native `sqlite3` (Cargo allows only one `links = "sqlite3"` package) and the bundled amalgamation is compiled once                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Preferences          | `crates/warsha-pipeline/src/preferences.rs`                               | `InMemoryPreferenceStore::save_to_store(&self, &SqliteStore)` projects every derived preference, one row per `(project_id, key)`, in project-id order; `InMemoryPreferenceStore::load_from_store(store, project_id)` reads them back in the same order `list_preferences` uses. Module doc now says what is persisted (the derived rows) and what is not (the signal log, the owner dimension)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Backend kit          | `crates/warsha-pipeline/src/backend_kit.rs`                               | `BackendKit::save_to_store(&self, store, project_id)` writes the serialised kit into `config_json` and mirrors `kind`/`url` into their own columns; `BackendKit::load_from_store(store, project_id)` returns `Option<BackendKit>` and turns a row whose JSON no longer parses into `StoreError::Serialization` rather than an empty kit                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Run modes + pairing  | `crates/warsha-pipeline/src/run_modes.rs`                                 | `RunModeConfig::save_to_store`/`load_from_store(store, mode)` keyed by `RunMode::as_str` (saving Hosted does not erase Local), returned **unvalidated** so `validate()` stays the one gate before a bind; `InMemoryPairingStore::save_to_store`/`load_from_store` (returns a fresh store, so the caller keeps `create`/`list`/`revoke`/`is_revoked`) with revocation as a value on the row                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 Tests added — 19 new, all passing: 11 in `warsha-store::persistence` (`open` creates the file and is
 in WAL, a blank path is refused, `migrate` creates the four tables and is idempotent, WAL survives a
@@ -3451,14 +3518,14 @@ Verification for this batch (the WSL bridge, `bridge-io`; the Windows host canno
 `cargo` targets `x86_64-pc-windows-gnu` and there is no `gcc`, which fails `libsqlite3-sys`'s C build
 before any of this code is reached):
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` | PASS |
-| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
-| `cargo test --workspace` | PASS — 313 tests, 0 failed, 1 ignored |
-| `pnpm install` / `-r typecheck` / `lint` / `-r build` / `-r test` | PASS — 256 TS tests |
-| `node scripts/check-arch.mjs` | PASS |
-| `actionlint .github/workflows/ci.yml` | PASS |
+| Check                                                             | Result                                |
+| ----------------------------------------------------------------- | ------------------------------------- |
+| `cargo fmt --all --check`                                         | PASS                                  |
+| `cargo clippy --workspace --all-targets -- -D warnings`           | PASS                                  |
+| `cargo test --workspace`                                          | PASS — 313 tests, 0 failed, 1 ignored |
+| `pnpm install` / `-r typecheck` / `lint` / `-r build` / `-r test` | PASS — 256 TS tests                   |
+| `node scripts/check-arch.mjs`                                     | PASS                                  |
+| `actionlint .github/workflows/ci.yml`                             | PASS                                  |
 
 Bridge evidence (per the corrected verification rule — `result.log`, not `final.txt`): run requested
 2026-10-30T18:40 via `bridge-io/run.flag`; `bridge-io/done.flag` says `exit=0 finished
@@ -3470,11 +3537,11 @@ the only edits after this one are the timestamps in this file and in `PLAN.md`, 
 Decisions (logged here because `DECISIONS.md` is outside this batch's file scope):
 
 - **`rusqlite`, not the existing `sqlx` pool.** The brief asks for `SqliteStore { conn:
-  rusqlite::Connection }`, and the four records are single-row settings writes a screen makes
+rusqlite::Connection }`, and the four records are single-row settings writes a screen makes
   synchronously; a pool plus `await` would have bought nothing and changed every signature. The two
   halves share the database file, not the API.
 - **Pinned to `rusqlite 0.32`.** 0.33 and later want `libsqlite3-sys ^0.31`, and Cargo refuses two
-  versions of a `links = "sqlite3"` crate: adding one would have failed the *whole workspace* build, not
+  versions of a `links = "sqlite3"` crate: adding one would have failed the _whole workspace_ build, not
   just this crate. 0.32.1 wants `^0.30.1`, which is the version already in `Cargo.lock`.
 - **`rusqlite` is declared in the crate, not in the workspace.** The root `Cargo.toml` is outside this
   batch's allowed files, so the dependency is pinned where it is used. Moving it to
@@ -3534,12 +3601,12 @@ Two new pipeline modules and one daemon wiring. The live preview and the MCP std
 workspace's `tokio` already enables `full`, which carries the `process` feature (checked before writing a
 line, as the brief asked).
 
-| Deliverable | Path | What landed |
-|---|---|---|
-| Process spawner | `crates/warsha-pipeline/src/process_spawn.rs` (new) + `lib.rs` `mod`/`pub use` | `ManagedProcess { id, command, args, child, status, started_at, exit_code }` (the handle is `#[serde(skip)]`), `ProcessSummary` (the clonable handle-free projection), `ProcessStatus` (`starting`/`running`/`stopped`/`failed`/`crashed` with `as_str`/`is_terminal`), `ProcessError` via thiserror, `ProcessManager` (`spawn(command, args, env) -> id`, `stop`, `status`, `list`, `restart`, plus `write_stdin`), `InMemoryProcessManager` (ids `proc-1`, `proc-2`, … from a counter; records behind one `tokio::sync::Mutex`) |
-| Live preview | same file | `LivePreview { project_id, process_id, command, args, status }`, `LivePreviewManager { processes: Arc<dyn ProcessManager>, previews }` with `split_command` (`npm run dev` → `npm` + `run dev`, whitespace only), `start`/`stop`/`status`/`list`, and one dev server per project |
-| MCP transports | `crates/warsha-pipeline/src/mcp_transport.rs` (new) + `lib.rs` `pub mod` | `McpTransport` (`Stdio`/`Http { url }`/`WebSocket { url }`, serde tag `kind`, `as_str`/`url`), `McpServerConfig { name, transport, command, args }` (`new_stdio`/`new_http`/`new_websocket`/`is_wired`), `McpStatus` (`disconnected`/`connecting`/`connected`/`error(message)`, `as_str`/`is_connected`), `McpConnection { config, status, process_id }`, `McpTransportError` via thiserror, `McpManager` (`connect`/`disconnect`/`list`/`send`) and `InMemoryMcpManager`, which starts a stdio server through the `ProcessManager` and writes its frames to the child's stdin |
-| Daemon state + RPC | `crates/warshad/src/lib.rs` | `DaemonState` gained `processes: Arc<dyn ProcessManager>`, `mcp: Arc<dyn McpManager>` and `previews: Arc<LivePreviewManager>`, built **once** in `start_daemon` (and in the test helper) so a dev server, an MCP server and a `process.spawn` all appear in one `process.list`. Eleven `#[method]`s: `process.spawn`, `process.stop`, `process.status`, `process.list`, `mcp.connect`, `mcp.disconnect`, `mcp.list`, `mcp.send`, `preview.start`, `preview.stop`, `preview.status`. One `rpc_error` helper (`-32000`) carries the `thiserror` message |
+| Deliverable        | Path                                                                           | What landed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Process spawner    | `crates/warsha-pipeline/src/process_spawn.rs` (new) + `lib.rs` `mod`/`pub use` | `ManagedProcess { id, command, args, child, status, started_at, exit_code }` (the handle is `#[serde(skip)]`), `ProcessSummary` (the clonable handle-free projection), `ProcessStatus` (`starting`/`running`/`stopped`/`failed`/`crashed` with `as_str`/`is_terminal`), `ProcessError` via thiserror, `ProcessManager` (`spawn(command, args, env) -> id`, `stop`, `status`, `list`, `restart`, plus `write_stdin`), `InMemoryProcessManager` (ids `proc-1`, `proc-2`, … from a counter; records behind one `tokio::sync::Mutex`)                                              |
+| Live preview       | same file                                                                      | `LivePreview { project_id, process_id, command, args, status }`, `LivePreviewManager { processes: Arc<dyn ProcessManager>, previews }` with `split_command` (`npm run dev` → `npm` + `run dev`, whitespace only), `start`/`stop`/`status`/`list`, and one dev server per project                                                                                                                                                                                                                                                                                               |
+| MCP transports     | `crates/warsha-pipeline/src/mcp_transport.rs` (new) + `lib.rs` `pub mod`       | `McpTransport` (`Stdio`/`Http { url }`/`WebSocket { url }`, serde tag `kind`, `as_str`/`url`), `McpServerConfig { name, transport, command, args }` (`new_stdio`/`new_http`/`new_websocket`/`is_wired`), `McpStatus` (`disconnected`/`connecting`/`connected`/`error(message)`, `as_str`/`is_connected`), `McpConnection { config, status, process_id }`, `McpTransportError` via thiserror, `McpManager` (`connect`/`disconnect`/`list`/`send`) and `InMemoryMcpManager`, which starts a stdio server through the `ProcessManager` and writes its frames to the child's stdin |
+| Daemon state + RPC | `crates/warshad/src/lib.rs`                                                    | `DaemonState` gained `processes: Arc<dyn ProcessManager>`, `mcp: Arc<dyn McpManager>` and `previews: Arc<LivePreviewManager>`, built **once** in `start_daemon` (and in the test helper) so a dev server, an MCP server and a `process.spawn` all appear in one `process.list`. Eleven `#[method]`s: `process.spawn`, `process.stop`, `process.status`, `process.list`, `mcp.connect`, `mcp.disconnect`, `mcp.list`, `mcp.send`, `preview.start`, `preview.stop`, `preview.status`. One `rpc_error` helper (`-32000`) carries the `thiserror` message                          |
 
 Tests added — 33 new, all passing: 18 in `process_spawn` (`spawn` → `running`, distinct ids, a missing
 binary, an empty command, `stop` → `stopped`, `stop` on a finished process → `NotRunning`, the exit code of
@@ -3558,15 +3625,15 @@ trip with one server per project). Suite totals: `warsha-pipeline` 230 → 259, 
 Verification for this batch (the WSL bridge, `bridge-io`; the Windows host cannot build the workspace —
 `cargo` targets `x86_64-pc-windows-gnu` with no `gcc`, which fails `ring`'s build script):
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` | PASS |
-| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
-| `cargo test --workspace` | PASS — 346 tests, 0 failed, 1 ignored |
+| Check                                                             | Result                                                                            |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `cargo fmt --all --check`                                         | PASS                                                                              |
+| `cargo clippy --workspace --all-targets -- -D warnings`           | PASS                                                                              |
+| `cargo test --workspace`                                          | PASS — 346 tests, 0 failed, 1 ignored                                             |
 | `pnpm install` / `-r typecheck` / `lint` / `-r build` / `-r test` | PASS — 256 TS tests (client 32, i18n 12, crypto 22, ui 31, remote 4, desktop 155) |
-| `node scripts/check-arch.mjs` | PASS — the new module is reached through a public path, so no rule fires |
-| `actionlint .github/workflows/ci.yml` | PASS |
-| `mdbook build` / `mdbook test` (inside `pnpm -r test`) | PASS — no docs source changed this batch |
+| `node scripts/check-arch.mjs`                                     | PASS — the new module is reached through a public path, so no rule fires          |
+| `actionlint .github/workflows/ci.yml`                             | PASS                                                                              |
+| `mdbook build` / `mdbook test` (inside `pnpm -r test`)            | PASS — no docs source changed this batch                                          |
 
 Bridge evidence (per the corrected verification rule — `result.log`, not `final.txt`): run requested
 2026-10-30T19:01:54 via `bridge-io/run.flag` (`status.txt` showed `started`); `bridge-io/done.flag` says
@@ -3642,7 +3709,6 @@ batch started (`PLAN.md`, `PROGRESS.md`, `crates/warsha-pipeline/src/agent_workf
 `crates/warshad/src/lib.rs`, `crates/warsha-store/**` and the new
 `crates/warsha-pipeline/src/agent_loop.rs`); they are kept as they were. Nothing was committed or pushed.
 
-
 #### M20 (twelfth batch) – Theme switch (`data-theme`), both apps migrated to tokens, R6 scans the apps ✅ DONE (validated 2026-10-30T19:40:04, exit=0, all 20 checks green in the WSL bridge — 346 Rust and 282 TS tests, 0 failures; no new dependency, no Rust change, no manifest change)
 
 Scope kept: `apps/desktop/src/**`, `apps/remote/src/**`, `packages/ui/src/tokens/tokenDrift.test.ts`,
@@ -3674,50 +3740,50 @@ What landed:
 
 Colour mapping (by role, not by hue — the brief's "replace literals" has to land somewhere):
 
-| literals | token |
-| --- | --- |
-| `#fafafa`, `#f9fafb` | `--warsha-color-bg` |
-| `#ffffff`, `white` | `--warsha-color-surface` |
-| `#f3f4f6`, `#eef2ff`, `#eff6ff`, `#dbeafe`, `#dcfce7`, `#d1fae5`, `#fee2e2`, `#fef2f2`, `#fef3c7`, `#fffbeb`, `#bfdbfe`, `#fde68a`, dark panes (`#0f172a`, `#1e293b`, `#1e1e1e`) | `--warsha-color-surface-muted` |
-| `#e5e7eb`, `#e5e5e5` | `--warsha-color-border` |
-| `#d1d5db`, `#93c5fd`, `#c7d2fe`, `#bbf7d0`, `#fcd34d`, `#fca5a5` | `--warsha-color-border-strong` |
-| `#111827`, `#1f2937`, `#374151`, `#e2e8f0` | `--warsha-color-text` |
-| `#6b7280`, `#4b5563`, `#64748b` | `--warsha-color-text-muted` |
-| `#9ca3af`, `#94a3b8`, `#6b6b6b` | `--warsha-color-muted` |
-| `#2563eb`, `#1d4ed8`, `#1e40af`, `#1e3a8a`, `#3b82f6`, `#3730a3`, `#6366f1`, `#8b5cf6`, `#06b6d4`, `#0ea5e9` | `--warsha-color-accent-strong` |
-| `#10b981`, `#059669`, `#166534`, `#065f46`, `#1a7f37`, `#14b8a6` | `--warsha-color-success` |
-| `#f59e0b`, `#d97706`, `#92400e`, `#b45309`, `#f97316` | `--warsha-color-warning` |
-| `#ef4444`, `#dc2626`, `#991b1b`, `#ec4899`, `#d946ef` | `--warsha-color-error` |
-| `#ffd60a` / `#0e0e0e` | `--warsha-color-accent` / `--warsha-color-accent-ink` |
-| `rgba(0,0,0,0.5)`, `rgba(15, 23, 42, 0.45)` (modal scrims) | `--warsha-color-muted` |
-| `boxShadow: '0 1px …'` … (six literals) | `--warsha-shadow-sm` / `-md` / `-lg` / `-xl` |
-| `4 8 12 16 24 32 48 64 px` in padding/margin/gap | `--warsha-space-1 … -16` |
-| `12 14 16 18 20 24 30 px`, `0.75 … 1.875rem` in `fontSize` | `--warsha-font-size-xs … -3xl` |
-| `'monospace'`, `'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'` | `--warsha-font-mono` |
+| literals                                                                                                                                                                         | token                                                 |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `#fafafa`, `#f9fafb`                                                                                                                                                             | `--warsha-color-bg`                                   |
+| `#ffffff`, `white`                                                                                                                                                               | `--warsha-color-surface`                              |
+| `#f3f4f6`, `#eef2ff`, `#eff6ff`, `#dbeafe`, `#dcfce7`, `#d1fae5`, `#fee2e2`, `#fef2f2`, `#fef3c7`, `#fffbeb`, `#bfdbfe`, `#fde68a`, dark panes (`#0f172a`, `#1e293b`, `#1e1e1e`) | `--warsha-color-surface-muted`                        |
+| `#e5e7eb`, `#e5e5e5`                                                                                                                                                             | `--warsha-color-border`                               |
+| `#d1d5db`, `#93c5fd`, `#c7d2fe`, `#bbf7d0`, `#fcd34d`, `#fca5a5`                                                                                                                 | `--warsha-color-border-strong`                        |
+| `#111827`, `#1f2937`, `#374151`, `#e2e8f0`                                                                                                                                       | `--warsha-color-text`                                 |
+| `#6b7280`, `#4b5563`, `#64748b`                                                                                                                                                  | `--warsha-color-text-muted`                           |
+| `#9ca3af`, `#94a3b8`, `#6b6b6b`                                                                                                                                                  | `--warsha-color-muted`                                |
+| `#2563eb`, `#1d4ed8`, `#1e40af`, `#1e3a8a`, `#3b82f6`, `#3730a3`, `#6366f1`, `#8b5cf6`, `#06b6d4`, `#0ea5e9`                                                                     | `--warsha-color-accent-strong`                        |
+| `#10b981`, `#059669`, `#166534`, `#065f46`, `#1a7f37`, `#14b8a6`                                                                                                                 | `--warsha-color-success`                              |
+| `#f59e0b`, `#d97706`, `#92400e`, `#b45309`, `#f97316`                                                                                                                            | `--warsha-color-warning`                              |
+| `#ef4444`, `#dc2626`, `#991b1b`, `#ec4899`, `#d946ef`                                                                                                                            | `--warsha-color-error`                                |
+| `#ffd60a` / `#0e0e0e`                                                                                                                                                            | `--warsha-color-accent` / `--warsha-color-accent-ink` |
+| `rgba(0,0,0,0.5)`, `rgba(15, 23, 42, 0.45)` (modal scrims)                                                                                                                       | `--warsha-color-muted`                                |
+| `boxShadow: '0 1px …'` … (six literals)                                                                                                                                          | `--warsha-shadow-sm` / `-md` / `-lg` / `-xl`          |
+| `4 8 12 16 24 32 48 64 px` in padding/margin/gap                                                                                                                                 | `--warsha-space-1 … -16`                              |
+| `12 14 16 18 20 24 30 px`, `0.75 … 1.875rem` in `fontSize`                                                                                                                       | `--warsha-font-size-xs … -3xl`                        |
+| `'monospace'`, `'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'`                                                                                                      | `--warsha-font-mono`                                  |
 
 Verification for this batch (the WSL bridge, `bridge-io`; the Windows host cannot build the
 workspace — no pnpm, and the Rust toolchain is WSL-only):
 
-| Check | Result |
-| --- | --- |
-| Bridge run `bridge-io/run.flag` → `done.flag` | PASS — `exit=0 finished 2026-10-30T19:40:04`, `result.log` carries 20 `PASS` lines, 0 `FAIL`, `RESULT: M0 validation PASSED — all checks green.` The earlier run at 19:34:14 was identically green with the same 346/282 totals; the 19:40:04 run already carried this section, `PLAN.md`'s batch section and the `ARCH_RULES.md` R6 rewrite. Only markup changed after it (this heading's timestamp, one file count in `ARCH_RULES.md`), and no check reads those files |
-| `cargo fmt --check` / `cargo clippy --workspace -- -D warnings` | PASS — no Rust file changed this batch |
-| `cargo test --workspace` | PASS — 24 `test result` lines summing to 346 passed, 0 failed, 1 ignored |
-| `pnpm install` / `pnpm -r typecheck` / `pnpm lint` / `pnpm -r build` / `pnpm -r test` | PASS — 282 TS tests (client 32, i18n 12, crypto 22, ui 36, remote 4, desktop 176), 0 failures |
-| `node scripts/check-arch.mjs` | PASS — `arch: 5 rules, 0 violations` |
-| `actionlint .github/workflows/ci.yml` | PASS — the workflow is untouched by this batch |
-| `mdbook build` / `mdbook test` (inside `pnpm -r test`) | PASS — no docs source changed |
+| Check                                                                                 | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Bridge run `bridge-io/run.flag` → `done.flag`                                         | PASS — `exit=0 finished 2026-10-30T19:40:04`, `result.log` carries 20 `PASS` lines, 0 `FAIL`, `RESULT: M0 validation PASSED — all checks green.` The earlier run at 19:34:14 was identically green with the same 346/282 totals; the 19:40:04 run already carried this section, `PLAN.md`'s batch section and the `ARCH_RULES.md` R6 rewrite. Only markup changed after it (this heading's timestamp, one file count in `ARCH_RULES.md`), and no check reads those files |
+| `cargo fmt --check` / `cargo clippy --workspace -- -D warnings`                       | PASS — no Rust file changed this batch                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `cargo test --workspace`                                                              | PASS — 24 `test result` lines summing to 346 passed, 0 failed, 1 ignored                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `pnpm install` / `pnpm -r typecheck` / `pnpm lint` / `pnpm -r build` / `pnpm -r test` | PASS — 282 TS tests (client 32, i18n 12, crypto 22, ui 36, remote 4, desktop 176), 0 failures                                                                                                                                                                                                                                                                                                                                                                            |
+| `node scripts/check-arch.mjs`                                                         | PASS — `arch: 5 rules, 0 violations`                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `actionlint .github/workflows/ci.yml`                                                 | PASS — the workflow is untouched by this batch                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `mdbook build` / `mdbook test` (inside `pnpm -r test`)                                | PASS — no docs source changed                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 Local Windows runs before the bridge (the repo's per-package binaries, used to iterate):
 
-| Check | Result |
-| --- | --- |
-| `apps/desktop`: `vitest run` | PASS — 23 files, 176 tests |
-| `apps/remote`: `vitest run` | PASS — 1 file, 4 tests |
-| `packages/ui`: `vitest run` | PASS — 4 files, 36 tests (17 in `tokenDrift`) |
-| `apps/desktop` / `apps/remote`: `tsc --noEmit` | PASS — exit 0 each |
-| `eslint src --ext .ts,.tsx` (desktop, remote, ui) | PASS — 0 errors; 1 pre-existing warning at `RunView.tsx:102` (`react-hooks/exhaustive-deps`, at HEAD) |
-| `vite build` (desktop, remote) | PASS — desktop 367.19 kB js / 3.59 kB css, remote 212.75 kB js / 3.60 kB css; both built stylesheets now carry the `--warsha-*` declarations |
+| Check                                             | Result                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/desktop`: `vitest run`                      | PASS — 23 files, 176 tests                                                                                                                                                                                                                                                  |
+| `apps/remote`: `vitest run`                       | PASS — 1 file, 4 tests                                                                                                                                                                                                                                                      |
+| `packages/ui`: `vitest run`                       | PASS — 4 files, 36 tests (17 in `tokenDrift`)                                                                                                                                                                                                                               |
+| `apps/desktop` / `apps/remote`: `tsc --noEmit`    | PASS — exit 0 each                                                                                                                                                                                                                                                          |
+| `eslint src --ext .ts,.tsx` (desktop, remote, ui) | PASS — 0 errors; 1 pre-existing warning at `RunView.tsx:102` (`react-hooks/exhaustive-deps`, at HEAD)                                                                                                                                                                       |
+| `vite build` (desktop, remote)                    | PASS — desktop 367.19 kB js / 3.59 kB css, remote 212.75 kB js / 3.60 kB css; both built stylesheets now carry the `--warsha-*` declarations                                                                                                                                |
 | `packages/ui`: `tsc --noEmit` on the Windows host | FAIL (environment, not code) — 10 errors, all `TS2307 Cannot find module '@storybook/react'` in `*.stories.tsx` plus its cascade; `@storybook` is not installed in this host's `node_modules`. The bridge's `pnpm install` provides it and `pnpm -r typecheck` passes there |
 
 Defects found and fixed inside files this batch owns:
@@ -3754,7 +3820,7 @@ Decisions (logged here because `DECISIONS.md` is outside this batch's file scope
 - **Colours map by role, not by hue.** `#2563eb` (blue) became `--warsha-color-accent-strong`, not
   `--warsha-color-accent`: the brand accent is `#FFD60A`, and gold on white is unreadable as text, so
   the accent-strong role is the one that exists for foreground brand colour. Pale status tints
-  (`#dcfce7`, `#fef3c7`, `#fee2e2`) became `surface-muted`, because the pill's *text* colour is what
+  (`#dcfce7`, `#fef3c7`, `#fee2e2`) became `surface-muted`, because the pill's _text_ colour is what
   carries the state and a saturated success/warning/error background would have made that text
   unreadable.
 - **A modal scrim has no token, so it uses `--warsha-color-muted`.** It is the only neutral that is
@@ -3804,22 +3870,22 @@ One new test, no new feature and no new dependency: a written request goes throu
 layer, a clarifying question, an approved plan, the pipeline stages, code generation into a temp
 directory, `cargo test`, `cargo build` and the built binary's output. The bridge run is the evidence:
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` | PASS |
-| `cargo clippy --workspace --all-targets -- -D warnings` | PASS — 0 warnings, 0 errors |
-| `cargo test --workspace` | PASS — 347 tests (346 + the new one), 0 failures |
+| Check                                                             | Result                                                                                        |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `cargo fmt --all --check`                                         | PASS                                                                                          |
+| `cargo clippy --workspace --all-targets -- -D warnings`           | PASS — 0 warnings, 0 errors                                                                   |
+| `cargo test --workspace`                                          | PASS — 347 tests (346 + the new one), 0 failures                                              |
 | `pnpm install` / `-r typecheck` / `lint` / `-r build` / `-r test` | PASS — 282 TS tests (client 32, i18n 12, crypto 22, ui 36, remote 4, desktop 176), 0 failures |
-| `node scripts/check-arch.mjs` | PASS |
-| `actionlint .github/workflows/ci.yml` | PASS |
+| `node scripts/check-arch.mjs`                                     | PASS                                                                                          |
+| `actionlint .github/workflows/ci.yml`                             | PASS                                                                                          |
 
 `RESULT: M0 validation PASSED — all checks green.` (20 PASS lines, 0 FAIL, exit=0.)
 
-| Deliverable | Path | What landed |
-|---|---|---|
+| Deliverable     | Path                                                    | What landed                                                                                                                                                      |
+| --------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | End-to-end test | `crates/warshad/tests/e2e_request_to_artifact.rs` (new) | One `#[tokio::test]` covering ten steps, plus the helpers it needs: the scripted answers, a file-block parser, a safe-path screen and the `cargo`/binary runners |
-| Milestones | `PLAN.md` | The thirteenth-batch section, `[x]` items and the one ⛔ limit |
-| This log | `PROGRESS.md` | This section |
+| Milestones      | `PLAN.md`                                               | The thirteenth-batch section, `[x]` items and the one ⛔ limit                                                                                                   |
+| This log        | `PROGRESS.md`                                           | This section                                                                                                                                                     |
 
 What the test actually does, in order:
 
@@ -3834,7 +3900,7 @@ What the test actually does, in order:
    is the only way into Agent mode, and it records `Plan → Agent` with an approver.
 5. Gate A is approved through `approve_gate`, then the run walks
    `Idea → GateA → Research → PrdSpec → GateB`; Gate B is approved; `→ Design → PlanTasks → Code →
-   ReviewQaSecurity`. Each stage asserts its artifact held the mock provider's `Mock response` before
+ReviewQaSecurity`. Each stage asserts its artifact held the mock provider's `Mock response` before
    the scripted answer replaced it.
 6. The plan (4 numbered files) and the code answer (3 file blocks) plus the reviewer's test answer
    (1 file block) are recorded as artifacts through `upsert_artifact`, then written into the project
@@ -3908,13 +3974,13 @@ added, no `Cargo.toml`/`package.json`/lockfile change, no `.github/workflows/**`
 catalog entry, no TypeScript source change. `MockProvider` is still the only provider any test uses;
 no test touches a network, a key or the keychain.
 
-| Deliverable | Path | What landed |
-|---|---|---|
-| Tool layer | `crates/warsha-pipeline/src/agent_tools.rs` (new) + `lib.rs` `mod`/`pub use` | `AgentTool { ReadFile { path }, WriteFile { path, content }, RunCommand { command, args } }` (serde tag `tool`, `snake_case`, `summary()`), `ToolResult { tool, success, output }` (`new`/`ok`/`failed`/`status`), `ToolError` via thiserror (`BlankPath`, `PathEscapesWorkingDir`, `BlankCommand`, `Io { path, error }`, `Spawn { command, error }`), `pub trait ToolExecutor: Send + Sync { fn execute(&self, &AgentTool) -> ToolResult }`, `FilesystemToolExecutor { working_dir }` (`new`, `working_dir`, `resolve`, read/write/run), `NoToolExecutor` |
-| Path screen | `agent_tools.rs` | `FilesystemToolExecutor::resolve` refuses a blank path, an absolute path, a `Component::Prefix` (Windows drive) and any `ParentDir` before a file is touched; `./notes.md` is allowed. The screen is this module's own because `handoff.rs`'s is private to that module and reaching into it is the cross-module access `ARCH_RULES.md` R4 forbids |
-| Agent mode | `crates/warsha-pipeline/src/agent_loop.rs` | `AgentLoop { …, tool_executor: Box<dyn ToolExecutor>, router: Option<Arc<dyn Router>> }`, `with_tool_executor`, `with_router`, `has_router`; `run_turn` is now `async`; `execute_turn` runs `parse_tool_request` first (tool execution) and otherwise asks the router; `AgentTurnResult` gained `tools: Vec<ToolResult>`; `MAX_TOOL_OUTPUT_LINES = 12`, `MAX_MODEL_REPLY_LINES = 12` |
-| Model path | `agent_loop.rs` | `pub trait Router: Send + Sync { async fn complete(&self, &str) -> Result<String, RouterError> }` (`async_trait`), `ProviderRouterAdapter { providers: Arc<RwLock<ProviderRouter>>, role, project_id }` over `chat_with_fallback`, `AGENT_ROLE = Role::Intake`, `AGENT_TEMPERATURE = 0.2`, `AGENT_MAX_TOKENS = 1024`, `AGENT_INSTRUCTION`, `RouterError { NoRoute, Failed }` + `impl From<ProviderError>` (a `NotFound`/`ModelNotFound` is `NoRoute`, everything else is `Failed`) |
-| Daemon | `crates/warshad/src/lib.rs` | `AGENT_WORKSPACE_DIR = "workspace"`, `AGENT_METER_KEY = "agent-loop"`, `build_agent_loop(data_dir, providers)` used by `start_daemon` and `test_state`; `agent_turn` awaits the turn; `DaemonState.agent_loop`'s doc names the wiring |
+| Deliverable | Path                                                                         | What landed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ----------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tool layer  | `crates/warsha-pipeline/src/agent_tools.rs` (new) + `lib.rs` `mod`/`pub use` | `AgentTool { ReadFile { path }, WriteFile { path, content }, RunCommand { command, args } }` (serde tag `tool`, `snake_case`, `summary()`), `ToolResult { tool, success, output }` (`new`/`ok`/`failed`/`status`), `ToolError` via thiserror (`BlankPath`, `PathEscapesWorkingDir`, `BlankCommand`, `Io { path, error }`, `Spawn { command, error }`), `pub trait ToolExecutor: Send + Sync { fn execute(&self, &AgentTool) -> ToolResult }`, `FilesystemToolExecutor { working_dir }` (`new`, `working_dir`, `resolve`, read/write/run), `NoToolExecutor` |
+| Path screen | `agent_tools.rs`                                                             | `FilesystemToolExecutor::resolve` refuses a blank path, an absolute path, a `Component::Prefix` (Windows drive) and any `ParentDir` before a file is touched; `./notes.md` is allowed. The screen is this module's own because `handoff.rs`'s is private to that module and reaching into it is the cross-module access `ARCH_RULES.md` R4 forbids                                                                                                                                                                                                         |
+| Agent mode  | `crates/warsha-pipeline/src/agent_loop.rs`                                   | `AgentLoop { …, tool_executor: Box<dyn ToolExecutor>, router: Option<Arc<dyn Router>> }`, `with_tool_executor`, `with_router`, `has_router`; `run_turn` is now `async`; `execute_turn` runs `parse_tool_request` first (tool execution) and otherwise asks the router; `AgentTurnResult` gained `tools: Vec<ToolResult>`; `MAX_TOOL_OUTPUT_LINES = 12`, `MAX_MODEL_REPLY_LINES = 12`                                                                                                                                                                       |
+| Model path  | `agent_loop.rs`                                                              | `pub trait Router: Send + Sync { async fn complete(&self, &str) -> Result<String, RouterError> }` (`async_trait`), `ProviderRouterAdapter { providers: Arc<RwLock<ProviderRouter>>, role, project_id }` over `chat_with_fallback`, `AGENT_ROLE = Role::Intake`, `AGENT_TEMPERATURE = 0.2`, `AGENT_MAX_TOKENS = 1024`, `AGENT_INSTRUCTION`, `RouterError { NoRoute, Failed }` + `impl From<ProviderError>` (a `NotFound`/`ModelNotFound` is `NoRoute`, everything else is `Failed`)                                                                         |
+| Daemon      | `crates/warshad/src/lib.rs`                                                  | `AGENT_WORKSPACE_DIR = "workspace"`, `AGENT_METER_KEY = "agent-loop"`, `build_agent_loop(data_dir, providers)` used by `start_daemon` and `test_state`; `agent_turn` awaits the turn; `DaemonState.agent_loop`'s doc names the wiring                                                                                                                                                                                                                                                                                                                      |
 
 Tests — 23 new (12 `agent_tools` + 11 `agent_loop`), 2 new in `warshad`, one existing daemon test
 re-pointed and one existing integration test given `.await`:
@@ -3930,7 +3996,7 @@ re-pointed and one existing integration test given `.await`:
   a router answer becomes the response and the prompt carries the instruction, the owner's words and
   the attachment; a router failure is reported; the real `ProviderRouter` + `MockProvider` path
   answers `Mock response`; a router with no role routing answers `no provider is routed for the agent
-  role`; a real temporary directory serves `read file` and `write file` (including multi-line content
+role`; a real temporary directory serves `read file` and `write file` (including multi-line content
   and created directories) and `run command`; a turn with no executor wired reports it; Plan mode
   writes no file; `please read file notes.md` goes to the model, not the tool; the parse table
   (`READ FILE "src/my notes.md"`, `write file empty.md`, `run command cargo test --all`, the blanks);
@@ -3938,18 +4004,18 @@ re-pointed and one existing integration test given `.await`:
 - `warshad`: `agent_turn_runs_a_tool_inside_the_agent_workspace` writes
   `<data_dir>/workspace/notes/hello.md` and refuses `../escape.md` (nothing written);
   `agent_turn_plans_first_and_executes_after_the_owner_approves` now asserts `Summary (model
-  completion)` and `- model: Mock response`, because the daemon's real router holds the mock provider.
+completion)` and `- model: Mock response`, because the daemon's real router holds the mock provider.
   `test_state`'s router now routes `AGENT_ROLE` to it (`agent_router_with_mock`).
 
 Checks (WSL Ubuntu, `/root/warsha`, the tree rsynced from this working copy; every command below was
 run and its exit code read):
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` | PASS (also re-run on the Windows host, exit 0) |
-| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
-| `cargo test --workspace` | 373 tests, 0 failures, 1 ignored — `warsha-pipeline` 283 (was 260), `warsha-store` 26, `warsha-providers` 19, `warshad` 16 (12 unit + `e2e_request_to_artifact` + 3 `m1_daemon`), `warsha-git` 13, `warsha-core` 8, `warsha-remote` 4, `warsha-backends` 2, `warsha-cli` 1, `warsha-relay` 1. The first full attempt failed one pre-existing flaky test (282 passed + 1 failed, `process_spawn::tests::preview_starts_reports_and_stops_its_dev_server`); the exact command was re-run three times afterwards (one more full `scripts/wsl-setup.sh` run and two isolated `cargo test --workspace` runs) and passed every time, 283 pipeline tests and 0 failures |
-| `pnpm install` / `pnpm -r typecheck` / `pnpm lint` / `node scripts/check-arch.mjs` / `pnpm -r build` / `pnpm -r test` / `actionlint .github/workflows/ci.yml` | PASS each (no TypeScript source changed; the suites and counts are unchanged) |
+| Check                                                                                                                                                         | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cargo fmt --all --check`                                                                                                                                     | PASS (also re-run on the Windows host, exit 0)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `cargo clippy --workspace --all-targets -- -D warnings`                                                                                                       | PASS                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `cargo test --workspace`                                                                                                                                      | 373 tests, 0 failures, 1 ignored — `warsha-pipeline` 283 (was 260), `warsha-store` 26, `warsha-providers` 19, `warshad` 16 (12 unit + `e2e_request_to_artifact` + 3 `m1_daemon`), `warsha-git` 13, `warsha-core` 8, `warsha-remote` 4, `warsha-backends` 2, `warsha-cli` 1, `warsha-relay` 1. The first full attempt failed one pre-existing flaky test (282 passed + 1 failed, `process_spawn::tests::preview_starts_reports_and_stops_its_dev_server`); the exact command was re-run three times afterwards (one more full `scripts/wsl-setup.sh` run and two isolated `cargo test --workspace` runs) and passed every time, 283 pipeline tests and 0 failures |
+| `pnpm install` / `pnpm -r typecheck` / `pnpm lint` / `node scripts/check-arch.mjs` / `pnpm -r build` / `pnpm -r test` / `actionlint .github/workflows/ci.yml` | PASS each (no TypeScript source changed; the suites and counts are unchanged)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 Decisions (logged here because `DECISIONS.md` is outside this batch's file scope):
 
@@ -4019,7 +4085,6 @@ an untracked `.ui-check/` directory that is not mine). The e2e test's `daemon_st
 loop with `AgentLoop::new()` — it only runs a Plan-mode turn, and `crates/warshad/tests/` is outside
 this batch's file scope apart from the one `.await`. Nothing was committed or pushed.
 
-
 #### M20 (fifteenth batch) – The desktop layout defect, `@warsha/ui` tokens in both apps, and Playwright visual checks for every screen ✅ DONE (validated 2026-10-30T23:34:19+04:00, exit=0, all 21 checks green in the WSL bridge — 373 Rust and 125 visual tests, 0 failures)
 
 Owner-reported defect: "the desktop UI layout is visibly broken in the browser". Root cause and the
@@ -4068,10 +4133,10 @@ dies part-way.
 Checks (WSL Ubuntu, `/root/warsha`, the tree rsynced from this working copy; every command below was
 run and its exit code read):
 
-| Check | Result |
-|---|---|
-| `pnpm visual` | PASS — 125 passed (2.9m), exit 0; 56 desktop + 4 remote baselines on disk, 60 PNGs in `bridge-io/shots/` |
-| `pnpm lint` | PASS (see the one fix below) |
+| Check                                  | Result                                                                                                    |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `pnpm visual`                          | PASS — 125 passed (2.9m), exit 0; 56 desktop + 4 remote baselines on disk, 60 PNGs in `bridge-io/shots/`  |
+| `pnpm lint`                            | PASS (see the one fix below)                                                                              |
 | Full `scripts/wsl-setup.sh` bridge run | 21 PASS, 0 FAIL, `RESULT: M0 validation PASSED — all checks green.` (2026-10-30T23:34:19+04:00, `exit=0`) |
 
 Decisions:
@@ -4103,8 +4168,7 @@ harness freezing the clock, so they disagreed with the app's own output in one 7
 event log (`rect=[1319,417 72x21]`, the rendered event timestamp). The rendering was confirmed
 deterministic first — three consecutive runs of the same case produced byte-identical PNGs — and only
 then were the baselines regenerated from the current source. The regenerated set then passed a clean
-re-run on the same tree. This is a stale baseline, not a tolerated flake: `maxDiffPixelRatio` is still
-0.
+re-run on the same tree. This is a stale baseline, not a tolerated flake: `maxDiffPixelRatio` is still 0.
 
 Not claimed / still open (unchanged by this batch):
 
@@ -4119,7 +4183,6 @@ Not claimed / still open (unchanged by this batch):
 Pre-existing, not touched: the working tree carried another session's uncommitted changes when this
 batch started (the Rust agent-mode batch, plus an untracked `.ui-check/` scratch directory this batch
 removed). Nothing was committed or pushed.
-
 
 #### M20 (sixteenth batch) – The daemon's four runtime seams: durable settings, child reaping, the MCP handshake, and the preview URL ✅ DONE (validated 2026-10-31T00:30:27+04:00, exit=0, all 21 bridge checks green — 386 Rust tests and 125 visual tests, 0 failures)
 
@@ -4141,7 +4204,7 @@ inventing one per run.
 
 **Children are reaped on shutdown.** `DaemonHandle` carries the daemon's one `Arc<dyn ProcessManager>`
 — the same manager `process.*`, `mcp.*` and `preview.*` all start children on, so it is the complete
-list. `shutdown` calls a new `ProcessManager::kill_all()`, which kills each live child *and* waits for
+list. `shutdown` calls a new `ProcessManager::kill_all()`, which kills each live child _and_ waits for
 it: killing alone leaves a zombie, and a dev server that survives holds its port for the next daemon
 to trip over. `run_daemon` funnels every exit through that same shutdown.
 
@@ -4161,12 +4224,12 @@ arrives. A server that prints no address leaves `url: None` rather than a guesse
 Checks (WSL Ubuntu, `/root/warsha`, the tree rsynced from this working copy; every command below was
 run and its exit code read):
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` + `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --workspace` | PASS, exit 0 — 386 tests, 0 failures (`warsha-pipeline` 290, `warshad` 14 + `child_reaping` 2 + `settings_persistence` 2 + `e2e_request_to_artifact` 1 + `m1_daemon` 3, `warsha-store` 26, `warsha-providers` 19, `warsha-git` 13, `warsha-core` 8, `warsha-remote` 4, `warsha-backends` 2, `warsha-cli` 1, `warsha-relay` 1) |
-| `node scripts/check-arch.mjs` | PASS — 5 rules, 0 violations |
-| Full `scripts/wsl-setup.sh` bridge run | 21 PASS, 0 FAIL, `RESULT: M0 validation PASSED — all checks green.` (2026-10-31T00:30:27+04:00, `exit=0`); 60 screenshots in `bridge-io/shots/` |
-| New timing-sensitive tests re-run 3x (`child_reaping`, `settings_persistence`, `mcp_transport::`, `process_spawn::`) | PASS every time, identical counts |
+| Check                                                                                                                | Result                                                                                                                                                                                                                                                                                                                        |
+| -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cargo fmt --all --check` + `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --workspace`       | PASS, exit 0 — 386 tests, 0 failures (`warsha-pipeline` 290, `warshad` 14 + `child_reaping` 2 + `settings_persistence` 2 + `e2e_request_to_artifact` 1 + `m1_daemon` 3, `warsha-store` 26, `warsha-providers` 19, `warsha-git` 13, `warsha-core` 8, `warsha-remote` 4, `warsha-backends` 2, `warsha-cli` 1, `warsha-relay` 1) |
+| `node scripts/check-arch.mjs`                                                                                        | PASS — 5 rules, 0 violations                                                                                                                                                                                                                                                                                                  |
+| Full `scripts/wsl-setup.sh` bridge run                                                                               | 21 PASS, 0 FAIL, `RESULT: M0 validation PASSED — all checks green.` (2026-10-31T00:30:27+04:00, `exit=0`); 60 screenshots in `bridge-io/shots/`                                                                                                                                                                               |
+| New timing-sensitive tests re-run 3x (`child_reaping`, `settings_persistence`, `mcp_transport::`, `process_spawn::`) | PASS every time, identical counts                                                                                                                                                                                                                                                                                             |
 
 Decisions:
 
@@ -4215,7 +4278,6 @@ Pre-existing, not touched: the working tree carried another session's uncommitte
 batch started (the Rust agent-mode batch, the UI/visual-check batch, and their files). The batch
 converted two pre-existing `warshad` unit tests (`mcp.connect`, `preview.start`) that asserted the
 old "no handshake / no URL" behaviour. Nothing was committed or pushed.
-
 
 #### M20 (seventeenth batch) – The first-run provider setup wizard ✅ DONE (validated 2026-10-31T02:59+04:00, the full 21-check `wsl-setup.sh` gate green in WSL Ubuntu at `/root/warsha` — 407 Rust tests and 240 visual tests, 0 failures)
 
@@ -4268,7 +4330,7 @@ in step. `models` was a list nothing sent and nothing read.
 
 **Storage.** `crates/warsha-store` gained `StoredProvider` plus `save_provider` (upsert preserving
 `created_at`), `load_provider`, `load_providers` (oldest first) and `delete_provider`, over a new
-`configured_providers` table in the same `SqliteStore` schema the other settings rows use — *not* a
+`configured_providers` table in the same `SqliteStore` schema the other settings rows use — _not_ a
 `providers` table, because `warsha-store/migrations/001_initial.sql` already creates one and the async
 `sqlx` migrator runs over the same `warsha.db`; two tables of that name made every daemon start fail
 with `table providers already exists`. `crates/warshad/src/settings.rs` wraps the four calls on
@@ -4296,7 +4358,7 @@ or a timeout is "the endpoint could not be reached". The probe builds its own er
 than using `reqwest`'s `Display`, which embeds the URL — a base URL can carry a token in its query
 string, and an error message is the string that reliably reaches a log. A refusal is a JSON-RPC
 **error** carrying the `HealthCheck` in `data` (the wizard reads a resolved promise as a passing test,
-so an unhealthy *result* would render as a green step), and the model that check needs is derived from
+so an unhealthy _result_ would render as a green step), and the model that check needs is derived from
 the provider's kind through a new `OneClickProvider::default_model()` — `custom` has none, so the
 honest refusal there is `Enter the model id.` `OneClickProvider::from_tag` reads a stored tag back.
 
@@ -4307,11 +4369,11 @@ printing "use keychain for credentials" for a keychain flow that did not exist.
 Checks (WSL Ubuntu, `/root/warsha`, the tree rsynced from this working copy; every command run and its
 exit code read):
 
-| Check | Result |
-|---|---|
-| `cargo fmt --all --check` + `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --workspace` | PENDING |
-| `crates/warshad/tests/provider_persistence.rs` (new, 5 tests, over HTTP with the client's object params) | PASS, 5 passed |
-| Full `scripts/wsl-setup.sh` bridge run | PENDING |
+| Check                                                                                                          | Result         |
+| -------------------------------------------------------------------------------------------------------------- | -------------- |
+| `cargo fmt --all --check` + `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --workspace` | PENDING        |
+| `crates/warshad/tests/provider_persistence.rs` (new, 5 tests, over HTTP with the client's object params)       | PASS, 5 passed |
+| Full `scripts/wsl-setup.sh` bridge run                                                                         | PENDING        |
 
 New tests this batch: `warsha-providers` 31 (5 new in `secrets.rs`; 6 new in `provider_setup.rs` —
 `from_tag`/`default_model`/`reason`, and a loopback stub proving a probe sends
@@ -4330,7 +4392,7 @@ Not claimed / still open:
 
 - **The real OS keychain is not exercised end-to-end here.** The WSL/CI container has no D-Bus secret
   service, so `keyring` fails with `PlatformFailure` (`org.freedesktop.secrets was not provided by any
-  .service files`, measured with a temporary probe that was then deleted). Production code still has
+.service files`, measured with a temporary probe that was then deleted). Production code still has
   exactly one store (`KeychainSecretStore`) and no fallback, but what the integration test drives is
   the injected `InMemorySecretStore`; only the credentials naming (`warsha-provider` + provider name)
   is unit-tested on the keychain path. A real-keychain smoke test stays a human step.
@@ -4362,10 +4424,11 @@ its daemon endpoint to `http://127.0.0.1:8766` with `test-token`.
 All four deliverables are complete:
 
 **1. `src-tauri` is real, compiling and bundled.**
+
 - `apps/desktop/src-tauri/Cargo.toml`: declared its own `[workspace]`, a `[lib] name = "warsha_desktop_lib"`
-  + `[[bin]] name = "warsha-desktop"` pair, `tauri-build = "2"`, `tauri = { version = "2", features = ["macos-private-api"] }`,
-  `serde`, `serde_json`, `anyhow`, and `warshad = { path = "../../../crates/warshad" }`. Dropped all
-  unused plugin crates, the v1 plugin features, and the phantom `warsha_client` dependency.
+  - `[[bin]] name = "warsha-desktop"` pair, `tauri-build = "2"`, `tauri = { version = "2", features = ["macos-private-api"] }`,
+    `serde`, `serde_json`, `anyhow`, and `warshad = { path = "../../../crates/warshad" }`. Dropped all
+    unused plugin crates, the v1 plugin features, and the phantom `warsha_client` dependency.
 - `apps/desktop/src-tauri/tauri.conf.json` (moved from `apps/desktop/`): schema upgraded to Tauri v2,
   `bundle.deb` nested as `bundle.linux.deb.depends`, icons configured, v1 `plugins.*.allowlist`
   blocks removed, `plugins.updater` preserved.
@@ -4378,6 +4441,7 @@ All four deliverables are complete:
   StoreLogo.png).
 
 **2. The app starts `warshad` in-process and reaps it on exit.**
+
 - `apps/desktop/src-tauri/src/lib.rs` (new, clean `cargo fmt`, clean `cargo clippy -D warnings`, no
   `unwrap()` outside tests): starts `warshad` synchronously before window creation through the same
   seam the CLI uses (`warshad::load_or_create_config(None)` + `warshad::start_daemon(config)`).
@@ -4392,6 +4456,7 @@ All four deliverables are complete:
   no tray icon).
 
 **3. Frontend config handoff + CORS preflight.**
+
 - `get_config` answers three shell-owned keys from the live daemon: `daemon_url` (`http://127.0.0.1:<rpc>`),
   `daemon_ws_url` (`ws://127.0.0.1:<http>`), and `daemon_token`. `set_config` refuses writes to those
   keys. Other keys persist to `<data dir>/desktop.json`.
@@ -4400,7 +4465,7 @@ All four deliverables are complete:
   fallbacks (`http://127.0.0.1:8766`, `test-token`). URL format is validated (`/^https?:\/\/\S+$/`)
   and trailing slashes are stripped.
 - `crates/warshad/src/lib.rs` (the one deliberate `crates/**` edit): parsed `config.allowed_origins`
-  once and wrapped the JSON-RPC server with `tower_http::cors::CorsLayer` *outside* `RpcAuthLayer`.
+  once and wrapped the JSON-RPC server with `tower_http::cors::CorsLayer` _outside_ `RpcAuthLayer`.
   Webview origins (`http://tauri.localhost`, `https://tauri.localhost`, `tauri://localhost`,
   `http://localhost:5173`) are allowed. Without this layer, the browser's preflight OPTIONS request
   carried no `Authorization` header and was refused `401 unauthorized` before the POST was sent.
@@ -4408,12 +4473,14 @@ All four deliverables are complete:
   baselines regenerated — browser path falls back to the exact stubbed constants.
 
 **4. Documentation in Arabic and English.**
+
 - `docs/INSTALL.md` (new, complete Arabic RTL section + English section): prerequisites table,
   commands, the default-GNU toolchain warning and MSVC invocation, debug-profile `ring` `D8050`
   failure note, artifact paths and sizes, first-run flow, data paths, uninstall, troubleshooting table,
   and §5 honest gaps.
 
 **5. Windows installer artifacts produced and verified.**
+
 - Executable: `apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/warsha-desktop.exe` (21,459,456 bytes)
 - MSI installer: `apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/Warsha_0.1.0_x64_en-US.msi` (8,085,504 bytes, 7.71 MiB)
 - NSIS installer: `apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/Warsha_0.1.0_x64-setup.exe` (5,726,834 bytes, 5.46 MiB)
@@ -4423,19 +4490,20 @@ All four deliverables are complete:
 
 Checks (every command run, tail output inspected, exit code verified):
 
-| Check | Environment | Command | Result |
-|---|---|---|---|
-| MSVC Release Build | Windows pwsh (vcvars64) | `cargo +stable-x86_64-pc-windows-msvc build --release --target x86_64-pc-windows-msvc` | PASS (exit 0) |
-| Clippy Clean | Windows pwsh (vcvars64) | `cargo +stable-x86_64-pc-windows-msvc clippy --release --target x86_64-pc-windows-msvc -- -D warnings` | PASS, 0 warnings (exit 0) |
-| Format Check | Windows pwsh | `cargo +stable-x86_64-pc-windows-msvc fmt --check` | PASS (exit 0) |
-| Desktop Typecheck | Windows pwsh | `pnpm --filter warsha-desktop typecheck` | PASS (exit 0) |
-| Desktop Build | Windows pwsh | `pnpm --filter warsha-desktop build` | PASS, Vite 99 modules (exit 0) |
-| Tauri Bundle | Windows pwsh (vcvars64) | `pnpm --filter warsha-desktop tauri build --target x86_64-pc-windows-msvc` | PASS, 2 bundles produced (exit 0) |
-| Binary Self-Check | Windows pwsh | `warsha-desktop.exe --self-check --data-dir .selfcheck-final` | PASS, 3 PASS, 0 FAIL (exit 0) |
-| Full 21-Check Gate | WSL Ubuntu (`/root/warsha`) | `bash scripts/wsl-setup.sh` | PASS, 21 PASS, 0 FAIL, `RESULT: M0 validation PASSED` (exit 0) |
-| Playwright Visual | WSL Ubuntu (`/root/warsha`) | `pnpm visual` (within `wsl-setup.sh`) | PASS, 240 passed (exit 0, 0 baselines regenerated) |
+| Check              | Environment                 | Command                                                                                                | Result                                                         |
+| ------------------ | --------------------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
+| MSVC Release Build | Windows pwsh (vcvars64)     | `cargo +stable-x86_64-pc-windows-msvc build --release --target x86_64-pc-windows-msvc`                 | PASS (exit 0)                                                  |
+| Clippy Clean       | Windows pwsh (vcvars64)     | `cargo +stable-x86_64-pc-windows-msvc clippy --release --target x86_64-pc-windows-msvc -- -D warnings` | PASS, 0 warnings (exit 0)                                      |
+| Format Check       | Windows pwsh                | `cargo +stable-x86_64-pc-windows-msvc fmt --check`                                                     | PASS (exit 0)                                                  |
+| Desktop Typecheck  | Windows pwsh                | `pnpm --filter warsha-desktop typecheck`                                                               | PASS (exit 0)                                                  |
+| Desktop Build      | Windows pwsh                | `pnpm --filter warsha-desktop build`                                                                   | PASS, Vite 99 modules (exit 0)                                 |
+| Tauri Bundle       | Windows pwsh (vcvars64)     | `pnpm --filter warsha-desktop tauri build --target x86_64-pc-windows-msvc`                             | PASS, 2 bundles produced (exit 0)                              |
+| Binary Self-Check  | Windows pwsh                | `warsha-desktop.exe --self-check --data-dir .selfcheck-final`                                          | PASS, 3 PASS, 0 FAIL (exit 0)                                  |
+| Full 21-Check Gate | WSL Ubuntu (`/root/warsha`) | `bash scripts/wsl-setup.sh`                                                                            | PASS, 21 PASS, 0 FAIL, `RESULT: M0 validation PASSED` (exit 0) |
+| Playwright Visual  | WSL Ubuntu (`/root/warsha`) | `pnpm visual` (within `wsl-setup.sh`)                                                                  | PASS, 240 passed (exit 0, 0 baselines regenerated)             |
 
 Decisions recorded in `DECISIONS.md` (2026-10-31):
+
 - M22: desktop shell starts `warshad` in-process (not sidecar/spawn); bound ports and shutdown handled directly;
 - M22: endpoint and token reach the webview through the `get_config` key-value surface;
 - M22: JSON-RPC server answers CORS preflights (`crates/warshad/src/lib.rs` change);
@@ -4444,6 +4512,7 @@ Decisions recorded in `DECISIONS.md` (2026-10-31):
 - M22: `--self-check` verifies the daemon half on hosts where a webview cannot be created.
 
 Honest limitations / what was not verified:
+
 - **GUI window was not displayed on screen**: in this non-interactive Windows session, `tao`/`wry`
   fail with `Access is denied (os error 5)` during window creation; the visual/layout behavior is
   covered by the 240 Playwright tests, and the daemon/RPC half is covered by `--self-check`.
@@ -4480,13 +4549,14 @@ Honest limitations / what was not verified:
      - Verifies that setting `WARSHA_E2E_REAL=1` without an API key in environment fails immediately with the expected clear explanation: `"WARSHA_E2E_REAL=1 is set, but no API key was found in WARSHA_REAL_PROVIDER_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, or SecretStore. A real model API key is required to execute the real-model E2E test."`
 
 Checks:
-| Check | Environment | Command | Result |
-|---|---|---|---|
-| E2E Arabic Suite | WSL Ubuntu | `cargo test -p warshad --test e2e_real_arabic_request` | PASS, 2 passed (exit 0) |
-| Clippy Clean | WSL Ubuntu | `cargo clippy --workspace --all-targets -- -D warnings` | PASS, 0 warnings (exit 0) |
-| Format Check | WSL Ubuntu | `cargo fmt --all --check` | PASS (exit 0) |
-| Full 21-Check Gate | WSL Ubuntu | `bash scripts/wsl-setup.sh` | PASS, 21 PASS, 0 FAIL, `RESULT: M0 validation PASSED` (exit 0) |
-| Playwright Visual | WSL Ubuntu | `pnpm visual` | PASS, 240 passed (exit 0) |
+
+| Check              | Environment | Command                                                 | Result                                                         |
+| ------------------ | ----------- | ------------------------------------------------------- | -------------------------------------------------------------- |
+| E2E Arabic Suite   | WSL Ubuntu  | `cargo test -p warshad --test e2e_real_arabic_request`  | PASS, 2 passed (exit 0)                                        |
+| Clippy Clean       | WSL Ubuntu  | `cargo clippy --workspace --all-targets -- -D warnings` | PASS, 0 warnings (exit 0)                                      |
+| Format Check       | WSL Ubuntu  | `cargo fmt --all --check`                               | PASS (exit 0)                                                  |
+| Full 21-Check Gate | WSL Ubuntu  | `bash scripts/wsl-setup.sh`                             | PASS, 21 PASS, 0 FAIL, `RESULT: M0 validation PASSED` (exit 0) |
+| Playwright Visual  | WSL Ubuntu  | `pnpm visual`                                           | PASS, 240 passed (exit 0)                                      |
 
 ### MCP Client & BackendKit Integration ✅ DONE (validated 2026-10-31, exit=0, all checks green)
 
@@ -4514,23 +4584,24 @@ Checks:
   - Strict compliance with architecture boundary rules R1-R6 (`node scripts/check-arch.mjs`: 0 violations). Zero real network calls made in tests.
 
 Checks:
-| Check | Environment | Command | Result |
-|---|---|---|---|
-| Pipeline Tests | WSL Ubuntu | `cargo test -p warsha-pipeline` | PASS, 298 passed, 0 failed, 7 ignored (exit 0) |
-| Daemon Tests | WSL Ubuntu | `cargo test -p warshad` | PASS, 31 passed, 0 failed, 3 ignored (exit 0) |
-| Format Check | WSL Ubuntu | `cargo fmt --all --check` | PASS (exit 0) |
-| Clippy Clean | WSL Ubuntu | `cargo clippy --workspace --all-targets -- -D warnings` | PASS, 0 warnings (exit 0) |
-| Architecture Rules | WSL Ubuntu | `node scripts/check-arch.mjs` | PASS, 5 rules, 0 violations (exit 0) |
-| Architecture Self-Test | WSL Ubuntu | `node scripts/check-arch.mjs --self-test` | PASS, 5/5 rules fire, clean fixture clean (exit 0) |
+
+| Check                  | Environment | Command                                                 | Result                                             |
+| ---------------------- | ----------- | ------------------------------------------------------- | -------------------------------------------------- |
+| Pipeline Tests         | WSL Ubuntu  | `cargo test -p warsha-pipeline`                         | PASS, 298 passed, 0 failed, 7 ignored (exit 0)     |
+| Daemon Tests           | WSL Ubuntu  | `cargo test -p warshad`                                 | PASS, 31 passed, 0 failed, 3 ignored (exit 0)      |
+| Format Check           | WSL Ubuntu  | `cargo fmt --all --check`                               | PASS (exit 0)                                      |
+| Clippy Clean           | WSL Ubuntu  | `cargo clippy --workspace --all-targets -- -D warnings` | PASS, 0 warnings (exit 0)                          |
+| Architecture Rules     | WSL Ubuntu  | `node scripts/check-arch.mjs`                           | PASS, 5 rules, 0 violations (exit 0)               |
+| Architecture Self-Test | WSL Ubuntu  | `node scripts/check-arch.mjs --self-test`               | PASS, 5/5 rules fire, clean fixture clean (exit 0) |
 
 ### UI/UX Simplification & Website Overhaul ✅ DONE (validated 2026-10-31, exit=0, all 240 visual tests green)
 
 - **UX Issue Analysis & Resolutions**:
-  1. *Issue 1 (Onboarding cognitive load & mystery)*: Users didn't know what Warsha was doing or how many steps remained. Added explicit step counter (`Step 1 of 5`) and clear explanatory hint (`onboarding.steps_hint`) in `Onboarding.tsx`.
-  2. *Issue 2 (Provider choice paralysis)*: New users were faced with a flat list of 9 unguided provider options. Highlighted DeepSeek as the recommended starter option with badge and contextual hints explaining speed, cost, and strengths.
-  3. *Issue 3 (Dead-end on project creation failure)*: If daemon failed to create initial project during onboarding, users were stuck with red text and no way forward. Added explicit retry button (`onboarding-project-retry`) to recover without restarting wizard.
-  4. *Issue 4 (Sidebar cognitive clutter in SimpleMode)*: All 12 agents (even 11 idle ones) competed for attention. Reorganized to highlight the currently active agent (`simple-active-agent`) with status indicator, and collapsed idle agents behind a clean toggle (`simple-toggle-agents`).
-  5. *Issue 5 (Empty state abandonment in ProjectsBoard)*: A new user visiting the Projects Board without projects saw a barren empty grid. Implemented an inviting empty state card (`projects-empty-state`) with explanatory copy and a direct primary CTA button to create a first project.
+  1. _Issue 1 (Onboarding cognitive load & mystery)_: Users didn't know what Warsha was doing or how many steps remained. Added explicit step counter (`Step 1 of 5`) and clear explanatory hint (`onboarding.steps_hint`) in `Onboarding.tsx`.
+  2. _Issue 2 (Provider choice paralysis)_: New users were faced with a flat list of 9 unguided provider options. Highlighted DeepSeek as the recommended starter option with badge and contextual hints explaining speed, cost, and strengths.
+  3. _Issue 3 (Dead-end on project creation failure)_: If daemon failed to create initial project during onboarding, users were stuck with red text and no way forward. Added explicit retry button (`onboarding-project-retry`) to recover without restarting wizard.
+  4. _Issue 4 (Sidebar cognitive clutter in SimpleMode)_: All 12 agents (even 11 idle ones) competed for attention. Reorganized to highlight the currently active agent (`simple-active-agent`) with status indicator, and collapsed idle agents behind a clean toggle (`simple-toggle-agents`).
+  5. _Issue 5 (Empty state abandonment in ProjectsBoard)_: A new user visiting the Projects Board without projects saw a barren empty grid. Implemented an inviting empty state card (`projects-empty-state`) with explanatory copy and a direct primary CTA button to create a first project.
 - **Website & Documentation Overhaul (`docs/src/index.md` & `custom.css`)**:
   - Redesigned landing page inspired by Qoder's structural clarity without copying assets or text.
   - Arabic-first presentation with genuine RTL typography, structured into Hero, 3-Step Journey (Intake -> Team/Gates -> Code/Preview), real screenshots from the actual app, verified 6 core capabilities, honest "For whom / Not for whom" distinction, and fully verified FAQ.
@@ -4553,16 +4624,17 @@ Checks:
   - `mdbook test`: all documentation chapters verified.
 
 Checks:
-| Check | Environment | Command | Result |
-|---|---|---|---|
-| Complete Visual Suite | WSL Ubuntu | `pnpm visual` | PASS, 240 passed, 0 failed (exit 0) |
-| Frontend Tests | WSL Ubuntu | `pnpm -r test` | PASS, 200 passed across 28 files (exit 0) |
-| TypeScript Strict Check | WSL Ubuntu | `pnpm -r typecheck` | PASS, 8/8 projects clean (exit 0) |
-| ESLint Check | WSL Ubuntu | `pnpm lint` | PASS (exit 0) |
-| Documentation Tests | WSL Ubuntu | `pnpm -C docs test` | PASS, 22 chapters tested (exit 0) |
-| Rust Pipeline Suite | WSL Ubuntu | `cargo test -p warsha-pipeline` | PASS, 298 passed (exit 0) |
-| Rust Daemon Suite | WSL Ubuntu | `cargo test -p warshad` | PASS, 31 passed (exit 0) |
-| Architecture Guardrails | WSL Ubuntu | `node scripts/check-arch.mjs` | PASS, 5 rules, 0 violations (exit 0) |
+
+| Check                   | Environment | Command                         | Result                                    |
+| ----------------------- | ----------- | ------------------------------- | ----------------------------------------- |
+| Complete Visual Suite   | WSL Ubuntu  | `pnpm visual`                   | PASS, 240 passed, 0 failed (exit 0)       |
+| Frontend Tests          | WSL Ubuntu  | `pnpm -r test`                  | PASS, 200 passed across 28 files (exit 0) |
+| TypeScript Strict Check | WSL Ubuntu  | `pnpm -r typecheck`             | PASS, 8/8 projects clean (exit 0)         |
+| ESLint Check            | WSL Ubuntu  | `pnpm lint`                     | PASS (exit 0)                             |
+| Documentation Tests     | WSL Ubuntu  | `pnpm -C docs test`             | PASS, 22 chapters tested (exit 0)         |
+| Rust Pipeline Suite     | WSL Ubuntu  | `cargo test -p warsha-pipeline` | PASS, 298 passed (exit 0)                 |
+| Rust Daemon Suite       | WSL Ubuntu  | `cargo test -p warshad`         | PASS, 31 passed (exit 0)                  |
+| Architecture Guardrails | WSL Ubuntu  | `node scripts/check-arch.mjs`   | PASS, 5 rules, 0 violations (exit 0)      |
 
 ### Continuous Evolution Automation (M16) ✅ DONE (validated 2026-10-31, exit=0 across full workspace)
 
@@ -4572,8 +4644,8 @@ Checks:
   - Zero auto-merging: `automerge: false` across all managers; minor/patch grouped; majors segregated.
   - Dedicated Goose tracking: Custom regex manager watches pinned Goose tag in `Cargo.toml`; major/minor bumps require full workspace green suite and 3-day minimum release age.
   - **Human-Only Steps (Repo Owner)**:
-    1. *Renovate GitHub App Installation*: Must be installed manually on the GitHub repository or organization by the repository owner (no programmatic API token creation).
-    2. *Branch Protection Rules*: Branch protection for `main` must be enabled manually in repository settings requiring status checks (`Summary`, `Rust (*)`, `TypeScript`, `Actionlint`) and restricting direct pushes.
+    1. _Renovate GitHub App Installation_: Must be installed manually on the GitHub repository or organization by the repository owner (no programmatic API token creation).
+    2. _Branch Protection Rules_: Branch protection for `main` must be enabled manually in repository settings requiring status checks (`Summary`, `Rust (*)`, `TypeScript`, `Actionlint`) and restricting direct pushes.
 - **Goose Routines Scheduler (`crates/warsha-pipeline/src/routines.rs` & `crates/warshad/src/lib.rs`)**:
   - Implemented `RoutineScheduler` driving periodic routine execution via `RwLock<RoutineRegistry>` and `RoutineRunner`:
     - Periodic background ticking loop via `start(interval)` with graceful shutdown via `stop()`.
@@ -4602,17 +4674,18 @@ Checks:
   - `pnpm visual`: 240/240 passed (exit 0).
 
 Checks:
-| Check | Environment | Command | Result |
-|---|---|---|---|
-| Complete Visual Suite | WSL Ubuntu | `pnpm visual` | PASS, 240 passed, 0 failed (exit 0) |
-| Frontend Tests | WSL Ubuntu | `pnpm -r test` | PASS, 200 passed across 28 files (exit 0) |
-| TypeScript Strict Check | WSL Ubuntu | `pnpm -r typecheck` | PASS, 8/8 projects clean (exit 0) |
-| ESLint Check | WSL Ubuntu | `pnpm lint` | PASS, 0 errors (exit 0) |
-| Workspace Rust Tests | WSL Ubuntu | `cargo test --workspace` | PASS, 412 passed, 0 failed, 12 ignored (exit 0) |
-| Clippy Strict Check | WSL Ubuntu | `cargo clippy --workspace --all-targets -- -D warnings` | PASS, 0 warnings (exit 0) |
-| Rust Formatting Check | WSL Ubuntu | `cargo fmt --all --check` | PASS (exit 0) |
-| Architecture Guardrails | WSL Ubuntu | `node scripts/check-arch.mjs` | PASS, 5 rules, 0 violations (exit 0) |
-| Architecture Self-Test | WSL Ubuntu | `node scripts/check-arch.mjs --self-test` | PASS, 5/5 rules fire, clean fixture clean (exit 0) |
+
+| Check                   | Environment | Command                                                 | Result                                             |
+| ----------------------- | ----------- | ------------------------------------------------------- | -------------------------------------------------- |
+| Complete Visual Suite   | WSL Ubuntu  | `pnpm visual`                                           | PASS, 240 passed, 0 failed (exit 0)                |
+| Frontend Tests          | WSL Ubuntu  | `pnpm -r test`                                          | PASS, 200 passed across 28 files (exit 0)          |
+| TypeScript Strict Check | WSL Ubuntu  | `pnpm -r typecheck`                                     | PASS, 8/8 projects clean (exit 0)                  |
+| ESLint Check            | WSL Ubuntu  | `pnpm lint`                                             | PASS, 0 errors (exit 0)                            |
+| Workspace Rust Tests    | WSL Ubuntu  | `cargo test --workspace`                                | PASS, 412 passed, 0 failed, 12 ignored (exit 0)    |
+| Clippy Strict Check     | WSL Ubuntu  | `cargo clippy --workspace --all-targets -- -D warnings` | PASS, 0 warnings (exit 0)                          |
+| Rust Formatting Check   | WSL Ubuntu  | `cargo fmt --all --check`                               | PASS (exit 0)                                      |
+| Architecture Guardrails | WSL Ubuntu  | `node scripts/check-arch.mjs`                           | PASS, 5 rules, 0 violations (exit 0)               |
+| Architecture Self-Test  | WSL Ubuntu  | `node scripts/check-arch.mjs --self-test`               | PASS, 5/5 rules fire, clean fixture clean (exit 0) |
 
 ### Owner-only completion backlog — code signing, auto-updater, and M17–M19 (documented 2026-11-01)
 
@@ -4620,24 +4693,25 @@ Checks:
 
 Current state of signing configuration and credentials across the repository (verified against files in this session):
 
-| Knob / Setting | Location | Exact Current Value | Status / Description |
-|---|---|---|---|
-| `bundle.createUpdaterArtifacts` | `apps/desktop/src-tauri/tauri.conf.json:38` | `true` | Enabled; tells bundler to produce `.sig` signature files alongside installer bundles |
-| `bundle.windows.certificateThumbprint` | `apps/desktop/src-tauri/tauri.conf.json:64` | `null` | Unset; Windows Authenticode signing disabled in config |
-| `bundle.windows.digestAlgorithm` | `apps/desktop/src-tauri/tauri.conf.json:65` | `"sha256"` | Standard SHA-256 digest algorithm for Authenticode |
-| `bundle.windows.timestampUrl` | `apps/desktop/src-tauri/tauri.conf.json:66` | `""` | Empty string; RFC 3161 timestamp server URL not configured |
-| `bundle.windows.tsp` | `apps/desktop/src-tauri/tauri.conf.json:67` | `false` | Disabled; does not enforce RFC 3161 Timestamp Protocol |
-| `bundle.macOS.signingIdentity` | `apps/desktop/src-tauri/tauri.conf.json:61` | `null` | Unset; macOS Developer ID signing disabled in config |
-| `bundle.macOS.entitlements` | `apps/desktop/src-tauri/tauri.conf.json:57` | `"entitlements.plist"` | Resolves to `apps/desktop/src-tauri/entitlements.plist` (empty dict `<dict/>`) |
-| `env.TAURI_SIGNING_PRIVATE_KEY` | `.github/workflows/release.yml:204` | `${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}` | Secret reference for Minisign private updater key |
-| `env.TAURI_SIGNING_KEY_PASSWORD` | `.github/workflows/release.yml:205` | `${{ secrets.TAURI_SIGNING_KEY_PASSWORD }}` | **Defect**: CLI reads `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (missing `PRIVATE_`) |
-| `env.APPLE_CERTIFICATE` | `.github/workflows/release.yml:206` | `${{ secrets.APPLE_CERTIFICATE }}` | Secret reference for base64 Apple Developer ID certificate (.p12) |
-| `env.APPLE_CERTIFICATE_PASSWORD` | `.github/workflows/release.yml:207` | `${{ secrets.APPLE_CERTIFICATE_PASSWORD }}` | Secret reference for Apple certificate password |
-| `env.APPLE_ID` | `.github/workflows/release.yml:208` | `${{ secrets.APPLE_ID }}` | Secret reference for Apple Developer Apple ID account |
-| `env.APPLE_TEAM_ID` | `.github/workflows/release.yml:209` | `${{ secrets.APPLE_TEAM_ID }}` | Secret reference for Apple Developer 10-character Team ID |
-| `env.WINDOWS_CERTIFICATE_THUMBPRINT` | `.github/workflows/release.yml:210` | `${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}` | Secret reference for installed Windows certificate thumbprint |
+| Knob / Setting                         | Location                                    | Exact Current Value                             | Status / Description                                                                 |
+| -------------------------------------- | ------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `bundle.createUpdaterArtifacts`        | `apps/desktop/src-tauri/tauri.conf.json:38` | `true`                                          | Enabled; tells bundler to produce `.sig` signature files alongside installer bundles |
+| `bundle.windows.certificateThumbprint` | `apps/desktop/src-tauri/tauri.conf.json:64` | `null`                                          | Unset; Windows Authenticode signing disabled in config                               |
+| `bundle.windows.digestAlgorithm`       | `apps/desktop/src-tauri/tauri.conf.json:65` | `"sha256"`                                      | Standard SHA-256 digest algorithm for Authenticode                                   |
+| `bundle.windows.timestampUrl`          | `apps/desktop/src-tauri/tauri.conf.json:66` | `""`                                            | Empty string; RFC 3161 timestamp server URL not configured                           |
+| `bundle.windows.tsp`                   | `apps/desktop/src-tauri/tauri.conf.json:67` | `false`                                         | Disabled; does not enforce RFC 3161 Timestamp Protocol                               |
+| `bundle.macOS.signingIdentity`         | `apps/desktop/src-tauri/tauri.conf.json:61` | `null`                                          | Unset; macOS Developer ID signing disabled in config                                 |
+| `bundle.macOS.entitlements`            | `apps/desktop/src-tauri/tauri.conf.json:57` | `"entitlements.plist"`                          | Resolves to `apps/desktop/src-tauri/entitlements.plist` (empty dict `<dict/>`)       |
+| `env.TAURI_SIGNING_PRIVATE_KEY`        | `.github/workflows/release.yml:204`         | `${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}`      | Secret reference for Minisign private updater key                                    |
+| `env.TAURI_SIGNING_KEY_PASSWORD`       | `.github/workflows/release.yml:205`         | `${{ secrets.TAURI_SIGNING_KEY_PASSWORD }}`     | **Defect**: CLI reads `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (missing `PRIVATE_`)      |
+| `env.APPLE_CERTIFICATE`                | `.github/workflows/release.yml:206`         | `${{ secrets.APPLE_CERTIFICATE }}`              | Secret reference for base64 Apple Developer ID certificate (.p12)                    |
+| `env.APPLE_CERTIFICATE_PASSWORD`       | `.github/workflows/release.yml:207`         | `${{ secrets.APPLE_CERTIFICATE_PASSWORD }}`     | Secret reference for Apple certificate password                                      |
+| `env.APPLE_ID`                         | `.github/workflows/release.yml:208`         | `${{ secrets.APPLE_ID }}`                       | Secret reference for Apple Developer Apple ID account                                |
+| `env.APPLE_TEAM_ID`                    | `.github/workflows/release.yml:209`         | `${{ secrets.APPLE_TEAM_ID }}`                  | Secret reference for Apple Developer 10-character Team ID                            |
+| `env.WINDOWS_CERTIFICATE_THUMBPRINT`   | `.github/workflows/release.yml:210`         | `${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}` | Secret reference for installed Windows certificate thumbprint                        |
 
 ##### Credential & Key Audit
+
 - **Zero private keys or certificates in repo or history**: Confirmed via `git ls-files` and `git log --all --diff-filter=A --name-only --pretty=format:` filtered against `\.(pfx|p12|pem|key|minisign)$`. No certificate, private key, or keystore exists in the working tree or commit history.
 - **`plugins.updater.pubkey` is a public key**: The committed value `dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk3MzFEREJGNTAyNjRBOEMKUldTTVNpWlF2OTB4bDdnU1pVbHExdytpaWw2d2lSb29mWkVEaUVtbVBBS2NWNnZ5WTFzVTAvbzYK` in `apps/desktop/src-tauri/tauri.conf.json:76` decodes to:
   ```text
@@ -4647,6 +4721,7 @@ Current state of signing configuration and credentials across the repository (ve
   This is a **Minisign public verification key** (Key ID `9731DDBF50264A8C`). Minisign public keys contain only the public Ed25519 verification key and key ID. A public key is safe and intended to be committed to the repository so client installations can verify update signatures; no secret or private signing capability is leaked by this value.
 
 ##### Owner-Only Checklist (Code Signing)
+
 1. **Generate Minisign key pair on the owner's workstation**:
    ```bash
    pnpm --filter warsha-desktop tauri signer generate -w "$HOME/.tauri/warsha.key"
@@ -4655,13 +4730,13 @@ Current state of signing configuration and credentials across the repository (ve
 2. **Configure CI secrets in GitHub repository settings**:
    - `TAURI_SIGNING_PRIVATE_KEY`: Content of the generated Minisign private key file.
    - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: Password chosen when creating the private key.
-   - *Workflow Defect to Fix*: Note that `.github/workflows/release.yml:205` currently exports `TAURI_SIGNING_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_KEY_PASSWORD }}`. Verification of the installed CLI (`@tauri-apps/cli 2.12.4` via `tauri signer sign --help`) shows the CLI exclusively reads `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Until line 205 of `.github/workflows/release.yml` is updated to map `TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}`, the CLI will not receive the password in CI.
+   - _Workflow Defect to Fix_: Note that `.github/workflows/release.yml:205` currently exports `TAURI_SIGNING_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_KEY_PASSWORD }}`. Verification of the installed CLI (`@tauri-apps/cli 2.12.4` via `tauri signer sign --help`) shows the CLI exclusively reads `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Until line 205 of `.github/workflows/release.yml` is updated to map `TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}`, the CLI will not receive the password in CI.
 3. **Windows Authenticode Signing & SmartScreen**:
-   - *Current Gap*: The workflow exports `WINDOWS_CERTIFICATE_THUMBPRINT`, but Tauri's Windows bundler requires the thumbprint in `bundle.windows.certificateThumbprint` (currently `null`) or expects a custom signing script via `bundle.windows.signCommand`.
-   - *Two Lawful Ways to Close*:
+   - _Current Gap_: The workflow exports `WINDOWS_CERTIFICATE_THUMBPRINT`, but Tauri's Windows bundler requires the thumbprint in `bundle.windows.certificateThumbprint` (currently `null`) or expects a custom signing script via `bundle.windows.signCommand`.
+   - _Two Lawful Ways to Close_:
      - **Option A (Runner Import & Dynamic Config)**: Import the Authenticode certificate into the Windows runner's certificate store (`certutil -p <pass> -importpfx`) in CI, and dynamically inject the thumbprint into `tauri.conf.json` during the workflow before invoking `tauri build`.
      - **Option B (Dedicated Signing Service / `signCommand`)**: Configure `bundle.windows.signCommand` to delegate signing to a cloud signing service such as Azure Trusted Signing (Microsoft Trusted Signing) or SignPath using Azure CLI/dlib tools without exposing raw PFX credentials.
-   - *SmartScreen Reality*: An unsigned installer or an installer signed with a newly issued certificate triggers Windows Defender SmartScreen ("Windows protected your PC"). Microsoft SmartScreen reputation is tied to certificate identity and download volume over time; EV (Extended Validation) or Azure Trusted Signing provide immediate reputation.
+   - _SmartScreen Reality_: An unsigned installer or an installer signed with a newly issued certificate triggers Windows Defender SmartScreen ("Windows protected your PC"). Microsoft SmartScreen reputation is tied to certificate identity and download volume over time; EV (Extended Validation) or Azure Trusted Signing provide immediate reputation.
 4. **macOS Developer ID & Notarization**:
    - `bundle.macOS.signingIdentity` is currently `null`.
    - The owner must supply an Apple Developer ID Application certificate (`APPLE_CERTIFICATE` base64 `.p12` and `APPLE_CERTIFICATE_PASSWORD`) plus notarization credentials (`APPLE_ID` and `APPLE_TEAM_ID`) as referenced in `.github/workflows/release.yml`.
@@ -4670,6 +4745,7 @@ Current state of signing configuration and credentials across the repository (ve
 #### Auto-updater and latest.json
 
 ##### Current `plugins.updater` Configuration (`apps/desktop/src-tauri/tauri.conf.json:70-78`)
+
 ```json
   "plugins": {
     "updater": {
@@ -4681,17 +4757,20 @@ Current state of signing configuration and credentials across the repository (ve
     }
   }
 ```
+
 - **Active**: `true`
 - **Endpoints**: `["https://github.com/athar-studios/warsha/releases/latest/download/latest.json"]`
 - **Pubkey ID**: `9731DDBF50264A8C`
 - **Endpoint URL**: `https://github.com/athar-studios/warsha/releases/latest/download/latest.json`
 
 ##### The Three Exact Gaps
+
 1. **Dependencies missing**: Neither `tauri-plugin-updater` is declared in `apps/desktop/src-tauri/Cargo.toml` (which intentionally declares no plugin crates), nor is `@tauri-apps/plugin-updater` present in `apps/desktop/package.json` (only `@tauri-apps/api` and `@tauri-apps/plugin-opener` are present).
 2. **Plugin unregistered in Rust**: `apps/desktop/src-tauri/src/lib.rs` does not register the updater plugin (`tauri_plugin_updater::Builder::new().build()`). Grepping for `updater` in `apps/desktop/src-tauri/src/lib.rs` returns 0 matches.
 3. **Workflow does not generate `latest.json`**: `.github/workflows/release.yml` builds installers and uploads bundles, but never generates or uploads `latest.json` to GitHub Release assets (grepping for `latest.json` in `release.yml` returns 0 matches).
 
 ##### Owner Checklist per Release
+
 1. **Bump Version**: Bump `"version"` in `apps/desktop/src-tauri/tauri.conf.json`, `apps/desktop/src-tauri/Cargo.toml`, and `apps/desktop/package.json` to the target `X.Y.Z`.
 2. **Tag Release**: Tag the commit with `vX.Y.Z` and push the tag to GitHub (`git tag vX.Y.Z && git push origin vX.Y.Z`).
 3. **Build Artifacts**: CI release workflow runs `desktop-build` on Linux, macOS, and Windows runners, compiling the app and generating signed installer packages along with `.sig` signature files (due to `createUpdaterArtifacts: true`).
@@ -4703,9 +4782,11 @@ Current state of signing configuration and credentials across the repository (ve
 6. **Publish Release**: **Publish** the release from draft status. GitHub's download URL redirection `/releases/latest/download/...` returns HTTP 404 for draft releases; the updater manifest cannot be fetched by clients until the release is publicly published.
 
 ##### The One-Line Rule for the Owner
+
 The desktop build can only install an update whose signature verifies against the committed pubkey, and the app must ask the owner before installing (never silent).
 
 ##### Example `latest.json` (Placeholder Reference)
+
 ```json
 {
   "version": "0.3.0",
@@ -4734,21 +4815,23 @@ The desktop build can only install an update whose signature verifies against th
 
 #### M17–M19 items that need the owner
 
-| # | Item | What exists today (file + type) | What is missing | What the owner must supply or decide | Where the remaining work lands |
-|---|---|---|---|---|---|
-| 1 | Crash reporting to GlitchTip/Sentry | `crates/warsha-pipeline/src/post_launch.rs:136-206` (`CrashReport`, `CrashReportStore`, `InMemoryCrashReportStore` with `record`, `list`, `mark_sent`), `crates/warshad/src/lib.rs:511-513, 1293-1306` (`postlaunch.crashes` RPC), `apps/desktop/src/screens/CrashReports.tsx` | No HTTP crash collector exists anywhere in codebase; no client for GlitchTip/Sentry; no opt-in telemetry consent toggle; no panic hook or error dispatcher | GlitchTip or Sentry DSN endpoint URL and auth token; privacy policy and telemetry opt-in terms for users | HTTP collector client in `warsha-pipeline` or `warshad`, panic hook, opt-in consent toggle in `apps/desktop/src/screens/SettingsScreen.tsx` |
-| 2 | Store-review ingestion API client | `crates/warsha-pipeline/src/post_launch.rs:260-323` (`StoreReview`, `StoreReviewStore`, `InMemoryStoreReviewStore` with `record`, `list`, `list_by_store`), `crates/warshad/src/lib.rs:514-516, 1308-1317` (`postlaunch.reviews` RPC), `apps/desktop/src/screens/StoreReviews.tsx` | No store review ingestion API client exists in codebase; no polling job or background fetcher; no persistent store for reviews | Developer portal credentials and API keys (Microsoft Store Analytics API, Apple App Store Connect API, Google Play Developer API); sync schedule | Background review ingestion client/routine in `warsha-pipeline`, persistent table in `warsha-store` |
-| 3 | Real Goose-backed scheduler | `crates/warsha-pipeline/src/routines.rs:153-213, 398-435` (`RoutineScheduler`, `RoutineRunner` trait, `MockRoutineRunner`, `RoutineRegistry`), `crates/warshad/src/lib.rs:369-378, 607-620, 1570-1620` (`routines.*` RPCs); root `Cargo.toml:84` (commented-out `# goose = ...` placeholder) | Real Goose integration: Goose is purely a trait seam behind `RoutineRunner` today, not a compiled dependency; full cron expressions deferred | Decision on Goose integration model (compiled git dependency vs. separate `goosed` sidecar process); pin specific Goose release tag; approve Apache-2.0 license | Implement `RoutineRunner` wrapping Goose in `warsha-pipeline/src/routines.rs`; enable `goose` dependency in root `Cargo.toml` |
-| 4 | Simple-mode routines UI | `apps/desktop/src/screens/Routines.tsx` (`RoutinesProps`), `apps/desktop/src/components/RoutineRow.tsx`; daemon `routines.list/get/run_now/pause/resume` in `crates/warshad/src/lib.rs:607-620` | `packages/client/src/index.ts` exposes no `routines.*` methods; `apps/desktop/src/App.tsx:314, 402-410` has empty `useState<Routine[]>([])` and no-op `handleRoutineRun/Pause/Resume` stubs (`// TODO(M20 wiring)`) | Decision on default system automations/routines shipped out of the box (e.g. daily standup summary, weekly dependency check) | Add `routines.*` methods to `WarshaClient` in `packages/client/src/index.ts`; wire `App.tsx` state and handlers to client methods |
-| 5 | Activepieces connection/toggle & deployment target | `docs/launch/activepieces.md` (documents MIT core boundary, never `packages/ee`, failure modes), `THIRD_PARTY_NOTICES.md:15, 18-24` (license notice for Activepieces CE MIT core) | No Activepieces client, API calls, or UI settings toggle exist anywhere in codebase | Choose deployment target: bundled local CE Docker container vs. owner-hosted CE instance URL; supply CE API key; select allowed event webhook triggers | Settings toggle in `apps/desktop/src/screens/SettingsScreen.tsx`; webhook/HTTP dispatch client in `warsha-pipeline` |
-| 6 | Provider auto-update Settings UI | `crates/warsha-providers/src/provider_update.rs:27-75, 360-400` (`ModelCatalogDiff`, `reconcile_model_catalog`, `ProviderUpdatePlanner`), `crates/warshad/src/lib.rs:462-466` (`providers.check_models` RPC), `apps/desktop/src/screens/SettingsProviders.tsx` | Real per-provider release-channel scrapers/clients do not exist (only model endpoint catalog diffs); no UI for changelog preview, automated health checks, or rollbacks | Rate limits policy, API tokens for release channels, decision on which providers permit auto-update vs. manual pin | Upstream release-channel clients in `warsha-providers/src/provider_update.rs`; changelog/rollback/health-check UI in `apps/desktop/src/screens/SettingsProviders.tsx` |
-| 7 | Wiring Plan→Agent to actual run & post-launch RPC | `crates/warsha-pipeline/src/post_launch.rs:515-685` (`PlainLanguageChangeRequest`, `ChangeRequestStatus`, `ChangeRequestStore`), `crates/warshad/src/lib.rs:518-523, 1319-1335` (`skills.list`, `agent.turn` RPCs), `agent_loop.approve_agent_mode` | No RPC exposes `ChangeRequestStore` in `warshad`; no RPC creates or launches a pipeline `Run` from an approved change request; no RPC exposes mode transition (`approve_agent_mode`) over JSON-RPC wire | Decision on change request lifecycle: whether approved change request creates a new pipeline `Run` or appends tasks to existing run; Gate A review flow | New RPC methods in `crates/warshad/src/lib.rs` (`postlaunch.change_requests`, `runs.start_from_change_request`, `agent.approve_mode`); UI wiring in `apps/desktop` |
-| 8 | Backend-kit SQL dump export to real file | `crates/warsha-pipeline/src/backend_kit.rs:821` (`BackendKit::export_to_dir`) writes `schema.sql` via `std::fs::write`; `crates/warshad/src/lib.rs:1220` (`backend.export` RPC) calls `kit.export_to_dir(&output_dir)` and returns the written path string; tested in `crates/warshad/src/lib.rs:2539` (`export_backend_names_the_dump_after_the_run_project`) | While `export()` in memory previously was noted as writing nothing, `export_to_dir` and the daemon RPC `backend.export` *do* write `schema.sql` to disk today. Missing: packaging the storage archive (`<slug>-storage.tar.gz`, currently only path string generated) and replaying dump into fresh live instance | Storage archive destination and compression choice; live backend database credentials for round-trip replay verification | Storage archive creation in `warsha-pipeline/src/backend_kit.rs`; live database migration executor in `warshad` or CLI |
+| #   | Item                                               | What exists today (file + type)                                                                                                                                                                                                                                                                                                                                | What is missing                                                                                                                                                                                                                                                                                                   | What the owner must supply or decide                                                                                                                            | Where the remaining work lands                                                                                                                                        |
+| --- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Crash reporting to GlitchTip/Sentry                | `crates/warsha-pipeline/src/post_launch.rs:136-206` (`CrashReport`, `CrashReportStore`, `InMemoryCrashReportStore` with `record`, `list`, `mark_sent`), `crates/warshad/src/lib.rs:511-513, 1293-1306` (`postlaunch.crashes` RPC), `apps/desktop/src/screens/CrashReports.tsx`                                                                                 | No HTTP crash collector exists anywhere in codebase; no client for GlitchTip/Sentry; no opt-in telemetry consent toggle; no panic hook or error dispatcher                                                                                                                                                        | GlitchTip or Sentry DSN endpoint URL and auth token; privacy policy and telemetry opt-in terms for users                                                        | HTTP collector client in `warsha-pipeline` or `warshad`, panic hook, opt-in consent toggle in `apps/desktop/src/screens/SettingsScreen.tsx`                           |
+| 2   | Store-review ingestion API client                  | `crates/warsha-pipeline/src/post_launch.rs:260-323` (`StoreReview`, `StoreReviewStore`, `InMemoryStoreReviewStore` with `record`, `list`, `list_by_store`), `crates/warshad/src/lib.rs:514-516, 1308-1317` (`postlaunch.reviews` RPC), `apps/desktop/src/screens/StoreReviews.tsx`                                                                             | No store review ingestion API client exists in codebase; no polling job or background fetcher; no persistent store for reviews                                                                                                                                                                                    | Developer portal credentials and API keys (Microsoft Store Analytics API, Apple App Store Connect API, Google Play Developer API); sync schedule                | Background review ingestion client/routine in `warsha-pipeline`, persistent table in `warsha-store`                                                                   |
+| 3   | Real Goose-backed scheduler                        | `crates/warsha-pipeline/src/routines.rs:153-213, 398-435` (`RoutineScheduler`, `RoutineRunner` trait, `MockRoutineRunner`, `RoutineRegistry`), `crates/warshad/src/lib.rs:369-378, 607-620, 1570-1620` (`routines.*` RPCs); root `Cargo.toml:84` (commented-out `# goose = ...` placeholder)                                                                   | Real Goose integration: Goose is purely a trait seam behind `RoutineRunner` today, not a compiled dependency; full cron expressions deferred                                                                                                                                                                      | Decision on Goose integration model (compiled git dependency vs. separate `goosed` sidecar process); pin specific Goose release tag; approve Apache-2.0 license | Implement `RoutineRunner` wrapping Goose in `warsha-pipeline/src/routines.rs`; enable `goose` dependency in root `Cargo.toml`                                         |
+| 4   | Simple-mode routines UI                            | `apps/desktop/src/screens/Routines.tsx` (`RoutinesProps`), `apps/desktop/src/components/RoutineRow.tsx`; daemon `routines.list/get/run_now/pause/resume` in `crates/warshad/src/lib.rs:607-620`                                                                                                                                                                | `packages/client/src/index.ts` exposes no `routines.*` methods; `apps/desktop/src/App.tsx:314, 402-410` has empty `useState<Routine[]>([])` and no-op `handleRoutineRun/Pause/Resume` stubs (`// TODO(M20 wiring)`)                                                                                               | Decision on default system automations/routines shipped out of the box (e.g. daily standup summary, weekly dependency check)                                    | Add `routines.*` methods to `WarshaClient` in `packages/client/src/index.ts`; wire `App.tsx` state and handlers to client methods                                     |
+| 5   | Activepieces connection/toggle & deployment target | `docs/launch/activepieces.md` (documents MIT core boundary, never `packages/ee`, failure modes), `THIRD_PARTY_NOTICES.md:15, 18-24` (license notice for Activepieces CE MIT core)                                                                                                                                                                              | No Activepieces client, API calls, or UI settings toggle exist anywhere in codebase                                                                                                                                                                                                                               | Choose deployment target: bundled local CE Docker container vs. owner-hosted CE instance URL; supply CE API key; select allowed event webhook triggers          | Settings toggle in `apps/desktop/src/screens/SettingsScreen.tsx`; webhook/HTTP dispatch client in `warsha-pipeline`                                                   |
+| 6   | Provider auto-update Settings UI                   | `crates/warsha-providers/src/provider_update.rs:27-75, 360-400` (`ModelCatalogDiff`, `reconcile_model_catalog`, `ProviderUpdatePlanner`), `crates/warshad/src/lib.rs:462-466` (`providers.check_models` RPC), `apps/desktop/src/screens/SettingsProviders.tsx`                                                                                                 | Real per-provider release-channel scrapers/clients do not exist (only model endpoint catalog diffs); no UI for changelog preview, automated health checks, or rollbacks                                                                                                                                           | Rate limits policy, API tokens for release channels, decision on which providers permit auto-update vs. manual pin                                              | Upstream release-channel clients in `warsha-providers/src/provider_update.rs`; changelog/rollback/health-check UI in `apps/desktop/src/screens/SettingsProviders.tsx` |
+| 7   | Wiring Plan→Agent to actual run & post-launch RPC  | `crates/warsha-pipeline/src/post_launch.rs:515-685` (`PlainLanguageChangeRequest`, `ChangeRequestStatus`, `ChangeRequestStore`), `crates/warshad/src/lib.rs:518-523, 1319-1335` (`skills.list`, `agent.turn` RPCs), `agent_loop.approve_agent_mode`                                                                                                            | No RPC exposes `ChangeRequestStore` in `warshad`; no RPC creates or launches a pipeline `Run` from an approved change request; no RPC exposes mode transition (`approve_agent_mode`) over JSON-RPC wire                                                                                                           | Decision on change request lifecycle: whether approved change request creates a new pipeline `Run` or appends tasks to existing run; Gate A review flow         | New RPC methods in `crates/warshad/src/lib.rs` (`postlaunch.change_requests`, `runs.start_from_change_request`, `agent.approve_mode`); UI wiring in `apps/desktop`    |
+| 8   | Backend-kit SQL dump export to real file           | `crates/warsha-pipeline/src/backend_kit.rs:821` (`BackendKit::export_to_dir`) writes `schema.sql` via `std::fs::write`; `crates/warshad/src/lib.rs:1220` (`backend.export` RPC) calls `kit.export_to_dir(&output_dir)` and returns the written path string; tested in `crates/warshad/src/lib.rs:2539` (`export_backend_names_the_dump_after_the_run_project`) | While `export()` in memory previously was noted as writing nothing, `export_to_dir` and the daemon RPC `backend.export` _do_ write `schema.sql` to disk today. Missing: packaging the storage archive (`<slug>-storage.tar.gz`, currently only path string generated) and replaying dump into fresh live instance | Storage archive destination and compression choice; live backend database credentials for round-trip replay verification                                        | Storage archive creation in `warsha-pipeline/src/backend_kit.rs`; live database migration executor in `warshad` or CLI                                                |
 
 #### Notes
+
 Documentation only: no application code, manifests, workflows, or configuration files were modified. No signing key or cryptographic key pair was generated, no secret was stored or committed, and no commit, tag, or push was performed.
 
 ### Verification run — 2026-11-01
+
 - `cargo fmt --all --check`: PASS.
 - `node scripts/check-arch.mjs`: PASS (`5 rules, 0 violations`).
 - `pnpm -r typecheck`: PASS (all 7 participating projects completed).
@@ -4769,6 +4852,7 @@ Documentation only: no application code, manifests, workflows, or configuration 
 - الوصول: focus-visible و`prefers-reduced-motion` موجودان، لكن حالات disabled/hover الموحدة والتباين/keyboard لكل شاشة تحتاج مراجعة إضافية.
 
 **بحث GitHub (قراءة فقط)**
+
 - [waveui](https://github.com/mortenbrudvik/waveui): MIT، React/TypeScript، RTL وlight/dark/high-contrast؛ مرشح أفكار، لكن صغير (2 stars) ومبني Tailwind v4، لذا **مرفوض كاعتماد الآن**.
 - [Yugen-UI](https://github.com/trandat1114/Yugen-UI): MIT، RTL/light/dark/high-contrast/WCAG؛ 2 stars وTailwind v4/shadcn، لذا **مرفوض الآن** لعدم النضج.
 - [idira-design-system](https://github.com/AyelletCyber/idira-design-system): React/TypeScript مع dark/RTL؛ **مرفوض** لغياب ترخيص واضح و0 stars.
@@ -4776,11 +4860,13 @@ Documentation only: no application code, manifests, workflows, or configuration 
 - بحث GitHub API لعبارة `tauri react component library typescript` لم يجد مكتبة ناضجة خاصة بـTauri؛ مكتبة React العامة تعمل داخل Tauri webview ما دامت لا تحتاج DOM APIs غير متاحة أو شبكة خارجية. التوصية: الاستمرار في `@warsha/ui` الداخلي، وspike لاحق يقيس bundle/tree-shaking/accessibility/RTL snapshots وتوافق React 18/Tauri WebView قبل أي تثبيت.
 
 **التحققات**
+
 - فحص `glob`/`grep`/قراءة الملفات: PASS كمراجعة ساكنة.
 - `cargo fmt --all --check`: PASS؛ `node scripts/check-arch.mjs`: PASS (`5 rules, 0 violations`)؛ `pnpm -r typecheck`: PASS (7 مشاريع).
 - لم أعد تشغيل `cargo clippy`/`cargo test`/`pnpm -r build`/`pnpm -r test`/`pnpm visual`؛ نتائجها الحالية موثقة أعلاه كـBLOCKED/FAIL بسبب MSVC/ring وmdBook وPlaywright. لم تُثبت حزم ولم يُعدّل functional code أو يُنفّذ commit/push أو حذف.
 
 ### مراجعة الموقع وملفات graphify والمهام البشرية — 2026-11-01
+
 - تم التأكد من وجود مجلد `graphify-out/` والملفات المطلوبة: `graph.json` و`graph.html` و`GRAPH_REPORT.md`. لم يتم إنشاء رسم جديد. تقرير الرسم يذكر أنه بُني من commit `4e8b06d0`؛ لذلك يجب اعتباره stale إذا كان `HEAD` مختلفاً، ولا ينبغي تحديثه دون طلب صريح.
 - تمت مراجعة `docs/src/index.md`: الصفحة تحتوي Hero عربي وإنجليزي، رحلة من 3 خطوات، لقطات واجهة حقيقية، قسم المميزات، FAQ، قسم English، وجدولاً يربط الأرقام بمصادر داخل المستودع. لا يوجد ذكر لـ Qoder ولا نسخ ظاهر لنص أو صورة منه. توجد ادعاءات تشغيلية يجب إبقاؤها متزامنة مع نتائج CI الفعلية، خصوصاً عبارات الدعم والمنصات.
 - تمت مراجعة `docs/src/custom.css`: توجد قواعد RTL للصفحة والشريط الجانبي، tokens للثيم الفاتح والداكن، grids تعتمد `auto-fit/minmax`، و`flex-wrap` للأزرار؛ وهذا يدعم الضيق جزئياً. لم يُجرَ اختبار بصري فعلي عند 320/390/768/1280px في RTL وLTR، لذلك تبقى هذه فجوة بشرية موثقة وليست نتيجة PASS.
@@ -4789,19 +4875,13 @@ Documentation only: no application code, manifests, workflows, or configuration 
 - أداة `delegate` لا تزال معطلة خارج المستودع برسالة `delegate takes a lane or a confirmed model, not both`; لم تُستخدم في هذه الجولة. الكود الوظيفي لم يتغير، ولم تُنشأ Release، ولم يُعدل `latest.json`، ولم يحدث commit أو push أو حذف ملفات.
 
 ### تدقيق skills/MCP/scout — 2026-11-01
+
 - تمت مراجعة `crates/warsha-pipeline/src/skills.rs` و`scout.rs` و`mcp.rs` وواجهة التصدير في `src/lib.rs`. لا يوجد تغيير معماري: `skills` و`scout` وحدتان داخليتان مع إعادة تصدير عامة، و`mcp` وحدة عامة مع إعادة تصدير؛ لا حافة اعتماد جديدة ولا وصول إلى وحدة خاصة عبر صندوق آخر.
 - سياسة الترخيص موثقة ومطبقة في المسار الحالي: `Permissive` مسموح، و`Copyleft` مرفوض عند التسجيل، بينما `Custom` و`Unknown` لا يُحزّمان ويُرشّحان حسب إعداد scout. التثبيت يسجل الإصدار والـ commit والتصنيف والمصدر في `SkillsLockfile` (ولم يتم لمس `latest.json`).
 - الاختبارات الموجودة: 6 اختبارات skills و3 اختبارات scout، إضافة إلى اختبارات MCP داخل `mcp.rs`/`mcp_transport.rs`. أمر `cargo test -p warsha-pipeline --lib` لم يكتمل بسبب فشل بناء `ring v0.17.14` المحلي على MSVC أثناء `curve25519.c`، وليس بسبب تشخيص Rust.
 - `node scripts/check-arch.mjs`: PASS — `arch: 5 rules, 0 violations`.
 - `node scripts/check-arch.mjs --self-test`: PASS — القواعد الخمس اشتغلت، و`clean fixture is clean`.
 - أمر التحقق الأول `cargo test -p warsha-pipeline skills scout mcp --lib` رُفض من Cargo بسبب معاملات أسماء اختبار متعددة؛ أُعيد تشغيل الأمر الصحيح أعلاه، ثم ظهر عائق بناء MSVC المذكور.
-
-
-
-
-
-
-
 
 ---
 
@@ -4834,39 +4914,39 @@ Nothing here is committed, pushed, tagged or released.
 the failure was the call shape, not the fleet: dispatching with **`lane` only and no `model` argument**
 works. All three lanes were smoke-tested with one tiny task each.
 
-| Lane | Lane id | Fleet worker | Smoke attempt | Result | Evidence |
-|---|---|---|---|---|---|
-| coder | `lane-f9e3c44d-1543-4d7f-938b-04d6ac7cf709` | `p5dc21943747505c2/Coder` | `attempt-0f81bf66` | **WORKS** | `bridge-io/smoke/lane-coder.md` (100 lines); check `pwsh ... SMOKE-CODER-OK` exit 0 |
-| Debugger | `lane-c43f3f96-c20c-4169-a732-8eb939a85f8e` | `p5dc21943747505c2/Debuger` | `attempt-15f8d145` | see below | `bridge-io/smoke/lane-debugger.md` |
-| debater | `lane-fb976636-a01d-46ed-b2d1-53d3f0538127` | `p5dc21943747505c2/Orchesterar` | `attempt-42ed50d8` | see below | `bridge-io/smoke/lane-debater.md` |
+| Lane     | Lane id                                     | Fleet worker                    | Smoke attempt      | Result    | Evidence                                                                            |
+| -------- | ------------------------------------------- | ------------------------------- | ------------------ | --------- | ----------------------------------------------------------------------------------- |
+| coder    | `lane-f9e3c44d-1543-4d7f-938b-04d6ac7cf709` | `p5dc21943747505c2/Coder`       | `attempt-0f81bf66` | **WORKS** | `bridge-io/smoke/lane-coder.md` (100 lines); check `pwsh ... SMOKE-CODER-OK` exit 0 |
+| Debugger | `lane-c43f3f96-c20c-4169-a732-8eb939a85f8e` | `p5dc21943747505c2/Debuger`     | `attempt-15f8d145` | see below | `bridge-io/smoke/lane-debugger.md`                                                  |
+| debater  | `lane-fb976636-a01d-46ed-b2d1-53d3f0538127` | `p5dc21943747505c2/Orchesterar` | `attempt-42ed50d8` | see below | `bridge-io/smoke/lane-debater.md`                                                   |
 
 Concurrency observed: 3 attempts ran side by side on 3 different lanes without an `attempt-limit`
 refusal, so the working set for this session is 3 parallel lanes.
 
 Lane behavioural note: the coder lane wrote an invented date header (`2026-04-18`) into its smoke file.
-Every brief from here on states explicitly: *never invent a number, date or path; if not found, say
-"not found" and show the command that proved it.*
+Every brief from here on states explicitly: _never invent a number, date or path; if not found, say
+"not found" and show the command that proved it._
 
 `bridge-io/` is gitignored (`.gitignore:73`), so delegated evidence written there does not appear in a
 `git status` change list. Verification therefore reads the delivered files on disk, not the diff.
 
 ### Environment facts established in step 0 (real command output)
 
-| Fact | Value | How proven |
-|---|---|---|
-| Windows node (ambient) | v26.8.1 at `C:\Program Files\nodejs\node.exe` | `node --version` |
-| Bundled node / pnpm | v24.21.0 / 9.0.0 | `load_workspace_dependencies` + `pnpm --version` |
-| Cargo / active toolchain | 1.99.1 / `stable-x86_64-pc-windows-msvc` | `cargo --version`, `rustup show active-toolchain` |
-| VS Build Tools | present at `C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools` (vswhere) | `vswhere -all -products * -property installationPath` |
-| Windows SDK | `10.0.26100.0` | `C:\Program Files (x86)\Windows Kits\10\Include` |
-| `cl.exe` on PATH | **absent** (no `CFLAGS`/`CL`/`RUSTFLAGS`/`LIB`/`INCLUDE` env pollution either) | `Get-Command cl.exe` |
-| Windows `mdbook.exe` | 20,183,341 bytes, crashes `0xC0000005` (exit `-1073741819`) on `--version` | direct run |
-| WSL `mdbook` | v0.5.4 at `/root/.cargo/bin/mdbook`, works | `wsl -d Ubuntu ... mdbook --version` |
-| WSL bridge | `wsl.exe -d Ubuntu -u root` runs directly from this session; `/root/warsha` exists but is **stale at `4e8b06d`** (HEAD is `2f042d1`) — the next rsync refreshes it | `wsl ... git rev-parse --short HEAD` |
-| WSL Playwright browsers | `chromium-1148`, `chromium_headless_shell-1148`, `ffmpeg-1010` in `~/.cache/ms-playwright` | `ls ~/.cache/ms-playwright` |
-| Windows Playwright | `@playwright/test@1.49.1` **declared** in root `package.json` but **not installed**: no `node_modules/playwright`, no `node_modules/@playwright/test`, no `.bin/playwright*`, no `*playwright*` in `.pnpm` | smoke `lane-coder.md` §4/§5 |
-| Why Windows CLIs fail | `node_modules/.bin` holds **POSIX** launchers because the tree was installed from WSL; `scripts/windows-setup.ps1` documents and fixes exactly this | read `scripts/windows-setup.ps1` |
-| Network | `registry.npmjs.org` 200, `github.com` 200 | `Invoke-WebRequest -Method Head` |
+| Fact                     | Value                                                                                                                                                                                                      | How proven                                            |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Windows node (ambient)   | v26.8.1 at `C:\Program Files\nodejs\node.exe`                                                                                                                                                              | `node --version`                                      |
+| Bundled node / pnpm      | v24.21.0 / 9.0.0                                                                                                                                                                                           | `load_workspace_dependencies` + `pnpm --version`      |
+| Cargo / active toolchain | 1.99.1 / `stable-x86_64-pc-windows-msvc`                                                                                                                                                                   | `cargo --version`, `rustup show active-toolchain`     |
+| VS Build Tools           | present at `C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools` (vswhere)                                                                                                                      | `vswhere -all -products * -property installationPath` |
+| Windows SDK              | `10.0.26100.0`                                                                                                                                                                                             | `C:\Program Files (x86)\Windows Kits\10\Include`      |
+| `cl.exe` on PATH         | **absent** (no `CFLAGS`/`CL`/`RUSTFLAGS`/`LIB`/`INCLUDE` env pollution either)                                                                                                                             | `Get-Command cl.exe`                                  |
+| Windows `mdbook.exe`     | 20,183,341 bytes, crashes `0xC0000005` (exit `-1073741819`) on `--version`                                                                                                                                 | direct run                                            |
+| WSL `mdbook`             | v0.5.4 at `/root/.cargo/bin/mdbook`, works                                                                                                                                                                 | `wsl -d Ubuntu ... mdbook --version`                  |
+| WSL bridge               | `wsl.exe -d Ubuntu -u root` runs directly from this session; `/root/warsha` exists but is **stale at `4e8b06d`** (HEAD is `2f042d1`) — the next rsync refreshes it                                         | `wsl ... git rev-parse --short HEAD`                  |
+| WSL Playwright browsers  | `chromium-1148`, `chromium_headless_shell-1148`, `ffmpeg-1010` in `~/.cache/ms-playwright`                                                                                                                 | `ls ~/.cache/ms-playwright`                           |
+| Windows Playwright       | `@playwright/test@1.49.1` **declared** in root `package.json` but **not installed**: no `node_modules/playwright`, no `node_modules/@playwright/test`, no `.bin/playwright*`, no `*playwright*` in `.pnpm` | smoke `lane-coder.md` §4/§5                           |
+| Why Windows CLIs fail    | `node_modules/.bin` holds **POSIX** launchers because the tree was installed from WSL; `scripts/windows-setup.ps1` documents and fixes exactly this                                                        | read `scripts/windows-setup.ps1`                      |
+| Network                  | `registry.npmjs.org` 200, `github.com` 200                                                                                                                                                                 | `Invoke-WebRequest -Method Head`                      |
 
 So A3's root cause is not "Playwright is missing from the lockfile" — it is a cross-platform
 `node_modules` plus never-downloaded browsers. A1's root cause is a missing MSVC developer
@@ -4878,33 +4958,33 @@ while the WSL copy is fine.
 Write scopes are chosen so that no two tasks running at the same time touch the same path.
 "Verify" is the command the orchestrator re-runs itself before accepting the task.
 
-| ID | Task | Owner lane | Write scope | Inputs | Definition of done | Verify command |
-|---|---|---|---|---|---|---|
-| A-ENV | A1+A2+A3 as one environment task: make the Windows-native gate runnable (MSVC env for `ring`, working `mdbook`, installed Playwright + browsers) | Debugger | `.cargo/config.toml`, `scripts/windows-setup.ps1`, `scripts/windows-msvc-env.ps1` (new), `docs/DEVELOPERS.md`, `docs/package.json`, root `package.json` (devDeps only), plus binaries outside the repo (`~/.cargo/bin`, `node_modules`, browser cache) | vswhere output, `.cargo/config.toml`, `scripts/windows-setup.ps1`, `docs/INSTALL.md` §ring note | `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace` pass on Windows under the documented env; `pnpm -C docs build` and `pnpm -C docs test` pass on Windows; `pnpm exec playwright --version` resolves on Windows; `pnpm -r build` and `pnpm -r test` pass; the exact one-time owner steps (if any) are written in `docs/DEVELOPERS.md` | `scripts\windows-msvc-env.ps1 { cargo clippy --workspace --all-targets -- -D warnings }` then `... { cargo test --workspace }` |
-| AUDIT-1 | Pre-redesign inventory: hard-coded colors/strings, screen+component inventory, i18n key parity, a11y + contrast baseline | coder | `bridge-io/audit/**` only (read-only on product code) | `apps/`, `packages/`, `docs/ARCH_RULES.md` | 3 files with file:line citations and reproducible ripgrep commands; WCAG contrast computed for both themes | `pwsh -NoProfile -Command "Get-ChildItem bridge-io/audit -File \| Measure-Object \| % Count"` = 3 |
-| B0 | GitHub design-skill intake with LICENSE audit; permissive skills usable, unclear ones reference-only | debater | `bridge-io/skills/**`, `THIRD_PARTY_NOTICES.md` | the 3 skill repos named in the objective | each skill recorded with source URL, commit SHA, license id and a use/reference-only verdict; `THIRD_PARTY_NOTICES.md` updated; no copied text/code from anything not clearly permissive | read `THIRD_PARTY_NOTICES.md` diff + `bridge-io/skills/LOCKFILE.md` |
-| B1 | Design direction: `docs/design/REDESIGN.md` + 6 high-fidelity HTML mockups (AR/EN, light/dark, desktop + 390px) + screenshots to `bridge-io/shots/redesign/`; ONE direction chosen and locked in `DECISIONS.md` | coder | `docs/design/**`, `bridge-io/mock/**`, `bridge-io/shots/redesign/**`, `DECISIONS.md` (append one section) | B0 output, AUDIT-1, brand rules, `packages/ui/src/tokens/tokens.css`, https://warsha-dev.pages.dev | REDESIGN.md covers user, IA (simple mode first), navigation, screen list, component inventory, states, motion, a11y targets; 6 mockups render in all 4 combos; screenshots on disk; decision appended to `DECISIONS.md` | `pwsh -NoProfile -Command "(Get-ChildItem bridge-io/shots/redesign -Filter *.png \| Measure-Object).Count"` >= 24 |
-| B2 | Rebuild `packages/ui` tokens + 14 components to the B1 direction, RTL-first logical properties, breakpoints 320/390/768/1024/1440, every component in Storybook with AR/EN x light/dark stories | coder | `packages/ui/**` | B1 REDESIGN.md, AUDIT-1 | token layer has no color literal outside tokens; all 14 components exported, typed, tested; stories for each; `tokenDrift.test.ts` green; `check-arch` green | `pnpm --filter @warsha/ui test` + `pnpm --filter @warsha/ui typecheck` + `node scripts/check-arch.mjs` |
-| B3a | Screens: Onboarding + Provider wizard | coder | `apps/desktop/src/screens/Onboarding.tsx`, `apps/desktop/src/components/ProviderSetupWizard.tsx`, `ProviderRow.tsx`, related tests | B2 | no hard-coded color/string; new components used; tests updated and green | `pnpm --filter warsha-desktop test` + `pnpm --filter warsha-desktop typecheck` |
-| B3b | Screens: Simple mode + Run view + Gates/approvals | Debugger | `apps/desktop/src/screens/SimpleMode.tsx`, `RunView.tsx`, `GatesInbox.tsx`, `AdvancedMode.tsx` (shared shell only if B3d agrees), related components/tests | B2 | same as B3a | same as B3a |
-| B3c | Screens: Projects board + Artifact viewer + Live preview | debater→coder | `apps/desktop/src/screens/ProjectsBoard.tsx`, `ArtifactViewer.tsx`, `components/LivePreview.tsx`, `PreviewToolbar.tsx`, related tests | B2 | same as B3a | same as B3a |
-| B3d | Screens: Settings family (providers, roles, budgets, devices, routines, backend kit) + Advanced mode | coder | `apps/desktop/src/screens/Settings*.tsx`, `ProvidersSettings.tsx`, `RolesSettings.tsx`, `Budgets.tsx`, `Devices.tsx`, `Routines.tsx`, `components/BackendKitPanel.tsx`, `RoutineRow.tsx` | B2 | same as B3a | same as B3a |
-| B3e | Screens: Crash reports + Store reviews + app shell (`App.tsx`, `theme.tsx`, `index.css`, sidebar/top bar) | Debugger | `apps/desktop/src/App.tsx`, `theme.tsx`, `index.css`, `main.tsx`, `screens/CrashReports.tsx`, `screens/StoreReviews.tsx` | B2, B3a-d | same as B3a; shell rebuilt to the B1 navigation | same as B3a |
-| B4 | Visual QA: Playwright suite for the new screens (AR/EN x light/dark x 390/768/1440), long Arabic text, no overflow/clip/overlap, axe, keyboard nav; regenerate baselines | debater | `apps/desktop/e2e/**`, `apps/remote/e2e/**`, `playwright.config.ts`, root `package.json` (axe devDep) | B3a-e | suite runs and passes; axe violations = 0; overflow assertions present; baselines regenerated for the new design | `pnpm visual` (WSL bridge) |
-| B4-CRIT | Critique pass: compare screenshots against REDESIGN.md, list gaps, fix them; repeat until clean | debater + coder | `bridge-io/audit/critique-*.md`, then the files the gap list names | B4 screenshots, B1 REDESIGN.md | a written gap list per round and a final round with zero gaps | read the last `critique-*.md` |
-| C2 | Close gaps: agent mode on the real provider, all settings persist after restart, child processes reaped on exit, no orphan `warshad` | Debugger | `crates/warshad/**`, `apps/desktop/src-tauri/**`, `packages/client/**` | ARCH_AUDIT.md, PROGRESS.md gap list | each gap has a test that fails before and passes after; `cargo test --workspace` green | `cargo test -p warshad` (WSL + Windows) |
-| C3a | Fix `.github/workflows/release.yml` `TAURI_SIGNING_KEY_PASSWORD` -> `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` and the actionlint-flagged `softprops/action-gh-release@v1` | debugger | `.github/workflows/release.yml` only | independent static repair | both defects fixed; `actionlint` clean; no signing key generated or stored | `actionlint .github/workflows/ci.yml .github/workflows/release.yml` |
-| C3 | Rebuild installers after the redesign | Debugger | `apps/desktop/src-tauri/**` | B4 clean, C3a | fresh MSI + NSIS produced after the redesign; no signing key generated or stored | `pnpm --filter warsha-desktop tauri build` |
-| C1 | Real E2E from the INSTALLED app: wizard -> one API key -> test connection -> Arabic request -> questions -> plan -> real-model build under a cost cap -> tests -> live preview; screenshots of every step + real cost | Debugger | `bridge-io/shots/e2e/**`, `bridge-io/e2e-report.md` | C3 installer | every step screenshotted, the real cost recorded, the generated app visible in live preview | read `bridge-io/e2e-report.md` + shot count |
-| C4 | `docs/INSTALL.md` + short AR/EN user guide with the new screenshots; README screenshots refreshed | coder | `docs/INSTALL.md`, `docs/src/**`, `README.md`, `README.ar.md`, `docs/src/screenshots/**` | B4 shots, C1 shots | `mdbook build`/`mdbook test` green; both languages present; screenshots referenced by real paths | `pnpm -C docs build` + `pnpm -C docs test` |
-| Z | Full bridge run + native Windows run green; PROGRESS.md results table; final report | orchestrator | `PROGRESS.md` | everything above | every check in DoD §5.1 has a recorded PASS with the command and exit code | `bash scripts/wsl-setup.sh` in WSL |
+| ID      | Task                                                                                                                                                                                                                  | Owner lane      | Write scope                                                                                                                                                                                                                                            | Inputs                                                                                             | Definition of done                                                                                                                                                                                                                                                                                                                                                      | Verify command                                                                                                                 |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| A-ENV   | A1+A2+A3 as one environment task: make the Windows-native gate runnable (MSVC env for `ring`, working `mdbook`, installed Playwright + browsers)                                                                      | Debugger        | `.cargo/config.toml`, `scripts/windows-setup.ps1`, `scripts/windows-msvc-env.ps1` (new), `docs/DEVELOPERS.md`, `docs/package.json`, root `package.json` (devDeps only), plus binaries outside the repo (`~/.cargo/bin`, `node_modules`, browser cache) | vswhere output, `.cargo/config.toml`, `scripts/windows-setup.ps1`, `docs/INSTALL.md` §ring note    | `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace` pass on Windows under the documented env; `pnpm -C docs build` and `pnpm -C docs test` pass on Windows; `pnpm exec playwright --version` resolves on Windows; `pnpm -r build` and `pnpm -r test` pass; the exact one-time owner steps (if any) are written in `docs/DEVELOPERS.md` | `scripts\windows-msvc-env.ps1 { cargo clippy --workspace --all-targets -- -D warnings }` then `... { cargo test --workspace }` |
+| AUDIT-1 | Pre-redesign inventory: hard-coded colors/strings, screen+component inventory, i18n key parity, a11y + contrast baseline                                                                                              | coder           | `bridge-io/audit/**` only (read-only on product code)                                                                                                                                                                                                  | `apps/`, `packages/`, `docs/ARCH_RULES.md`                                                         | 3 files with file:line citations and reproducible ripgrep commands; WCAG contrast computed for both themes                                                                                                                                                                                                                                                              | `pwsh -NoProfile -Command "Get-ChildItem bridge-io/audit -File \| Measure-Object \| % Count"` = 3                              |
+| B0      | GitHub design-skill intake with LICENSE audit; permissive skills usable, unclear ones reference-only                                                                                                                  | debater         | `bridge-io/skills/**`, `THIRD_PARTY_NOTICES.md`                                                                                                                                                                                                        | the 3 skill repos named in the objective                                                           | each skill recorded with source URL, commit SHA, license id and a use/reference-only verdict; `THIRD_PARTY_NOTICES.md` updated; no copied text/code from anything not clearly permissive                                                                                                                                                                                | read `THIRD_PARTY_NOTICES.md` diff + `bridge-io/skills/LOCKFILE.md`                                                            |
+| B1      | Design direction: `docs/design/REDESIGN.md` + 6 high-fidelity HTML mockups (AR/EN, light/dark, desktop + 390px) + screenshots to `bridge-io/shots/redesign/`; ONE direction chosen and locked in `DECISIONS.md`       | coder           | `docs/design/**`, `bridge-io/mock/**`, `bridge-io/shots/redesign/**`, `DECISIONS.md` (append one section)                                                                                                                                              | B0 output, AUDIT-1, brand rules, `packages/ui/src/tokens/tokens.css`, https://warsha-dev.pages.dev | REDESIGN.md covers user, IA (simple mode first), navigation, screen list, component inventory, states, motion, a11y targets; 6 mockups render in all 4 combos; screenshots on disk; decision appended to `DECISIONS.md`                                                                                                                                                 | `pwsh -NoProfile -Command "(Get-ChildItem bridge-io/shots/redesign -Filter *.png \| Measure-Object).Count"` >= 24              |
+| B2      | Rebuild `packages/ui` tokens + 14 components to the B1 direction, RTL-first logical properties, breakpoints 320/390/768/1024/1440, every component in Storybook with AR/EN x light/dark stories                       | coder           | `packages/ui/**`                                                                                                                                                                                                                                       | B1 REDESIGN.md, AUDIT-1                                                                            | token layer has no color literal outside tokens; all 14 components exported, typed, tested; stories for each; `tokenDrift.test.ts` green; `check-arch` green                                                                                                                                                                                                            | `pnpm --filter @warsha/ui test` + `pnpm --filter @warsha/ui typecheck` + `node scripts/check-arch.mjs`                         |
+| B3a     | Screens: Onboarding + Provider wizard                                                                                                                                                                                 | coder           | `apps/desktop/src/screens/Onboarding.tsx`, `apps/desktop/src/components/ProviderSetupWizard.tsx`, `ProviderRow.tsx`, related tests                                                                                                                     | B2                                                                                                 | no hard-coded color/string; new components used; tests updated and green                                                                                                                                                                                                                                                                                                | `pnpm --filter warsha-desktop test` + `pnpm --filter warsha-desktop typecheck`                                                 |
+| B3b     | Screens: Simple mode + Run view + Gates/approvals                                                                                                                                                                     | Debugger        | `apps/desktop/src/screens/SimpleMode.tsx`, `RunView.tsx`, `GatesInbox.tsx`, `AdvancedMode.tsx` (shared shell only if B3d agrees), related components/tests                                                                                             | B2                                                                                                 | same as B3a                                                                                                                                                                                                                                                                                                                                                             | same as B3a                                                                                                                    |
+| B3c     | Screens: Projects board + Artifact viewer + Live preview                                                                                                                                                              | debater→coder   | `apps/desktop/src/screens/ProjectsBoard.tsx`, `ArtifactViewer.tsx`, `components/LivePreview.tsx`, `PreviewToolbar.tsx`, related tests                                                                                                                  | B2                                                                                                 | same as B3a                                                                                                                                                                                                                                                                                                                                                             | same as B3a                                                                                                                    |
+| B3d     | Screens: Settings family (providers, roles, budgets, devices, routines, backend kit) + Advanced mode                                                                                                                  | coder           | `apps/desktop/src/screens/Settings*.tsx`, `ProvidersSettings.tsx`, `RolesSettings.tsx`, `Budgets.tsx`, `Devices.tsx`, `Routines.tsx`, `components/BackendKitPanel.tsx`, `RoutineRow.tsx`                                                               | B2                                                                                                 | same as B3a                                                                                                                                                                                                                                                                                                                                                             | same as B3a                                                                                                                    |
+| B3e     | Screens: Crash reports + Store reviews + app shell (`App.tsx`, `theme.tsx`, `index.css`, sidebar/top bar)                                                                                                             | Debugger        | `apps/desktop/src/App.tsx`, `theme.tsx`, `index.css`, `main.tsx`, `screens/CrashReports.tsx`, `screens/StoreReviews.tsx`                                                                                                                               | B2, B3a-d                                                                                          | same as B3a; shell rebuilt to the B1 navigation                                                                                                                                                                                                                                                                                                                         | same as B3a                                                                                                                    |
+| B4      | Visual QA: Playwright suite for the new screens (AR/EN x light/dark x 390/768/1440), long Arabic text, no overflow/clip/overlap, axe, keyboard nav; regenerate baselines                                              | debater         | `apps/desktop/e2e/**`, `apps/remote/e2e/**`, `playwright.config.ts`, root `package.json` (axe devDep)                                                                                                                                                  | B3a-e                                                                                              | suite runs and passes; axe violations = 0; overflow assertions present; baselines regenerated for the new design                                                                                                                                                                                                                                                        | `pnpm visual` (WSL bridge)                                                                                                     |
+| B4-CRIT | Critique pass: compare screenshots against REDESIGN.md, list gaps, fix them; repeat until clean                                                                                                                       | debater + coder | `bridge-io/audit/critique-*.md`, then the files the gap list names                                                                                                                                                                                     | B4 screenshots, B1 REDESIGN.md                                                                     | a written gap list per round and a final round with zero gaps                                                                                                                                                                                                                                                                                                           | read the last `critique-*.md`                                                                                                  |
+| C2      | Close gaps: agent mode on the real provider, all settings persist after restart, child processes reaped on exit, no orphan `warshad`                                                                                  | Debugger        | `crates/warshad/**`, `apps/desktop/src-tauri/**`, `packages/client/**`                                                                                                                                                                                 | ARCH_AUDIT.md, PROGRESS.md gap list                                                                | each gap has a test that fails before and passes after; `cargo test --workspace` green                                                                                                                                                                                                                                                                                  | `cargo test -p warshad` (WSL + Windows)                                                                                        |
+| C3a     | Fix `.github/workflows/release.yml` `TAURI_SIGNING_KEY_PASSWORD` -> `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` and the actionlint-flagged `softprops/action-gh-release@v1`                                                  | debugger        | `.github/workflows/release.yml` only                                                                                                                                                                                                                   | independent static repair                                                                          | both defects fixed; `actionlint` clean; no signing key generated or stored                                                                                                                                                                                                                                                                                              | `actionlint .github/workflows/ci.yml .github/workflows/release.yml`                                                            |
+| C3      | Rebuild installers after the redesign                                                                                                                                                                                 | Debugger        | `apps/desktop/src-tauri/**`                                                                                                                                                                                                                            | B4 clean, C3a                                                                                      | fresh MSI + NSIS produced after the redesign; no signing key generated or stored                                                                                                                                                                                                                                                                                        | `pnpm --filter warsha-desktop tauri build`                                                                                     |
+| C1      | Real E2E from the INSTALLED app: wizard -> one API key -> test connection -> Arabic request -> questions -> plan -> real-model build under a cost cap -> tests -> live preview; screenshots of every step + real cost | Debugger        | `bridge-io/shots/e2e/**`, `bridge-io/e2e-report.md`                                                                                                                                                                                                    | C3 installer                                                                                       | every step screenshotted, the real cost recorded, the generated app visible in live preview                                                                                                                                                                                                                                                                             | read `bridge-io/e2e-report.md` + shot count                                                                                    |
+| C4      | `docs/INSTALL.md` + short AR/EN user guide with the new screenshots; README screenshots refreshed                                                                                                                     | coder           | `docs/INSTALL.md`, `docs/src/**`, `README.md`, `README.ar.md`, `docs/src/screenshots/**`                                                                                                                                                               | B4 shots, C1 shots                                                                                 | `mdbook build`/`mdbook test` green; both languages present; screenshots referenced by real paths                                                                                                                                                                                                                                                                        | `pnpm -C docs build` + `pnpm -C docs test`                                                                                     |
+| Z       | Full bridge run + native Windows run green; PROGRESS.md results table; final report                                                                                                                                   | orchestrator    | `PROGRESS.md`                                                                                                                                                                                                                                          | everything above                                                                                   | every check in DoD §5.1 has a recorded PASS with the command and exit code                                                                                                                                                                                                                                                                                              | `bash scripts/wsl-setup.sh` in WSL                                                                                             |
 
 ### Serialization rules used by this board
 
 - `A-ENV` owns every build-tool path; nothing else may touch `.cargo/config.toml`,
   `scripts/windows-setup.ps1` or root `package.json` while it runs.
 - `B0` and `AUDIT-1` are read-only on product code and run in parallel with `A-ENV`.
-- `B1` needs `B0` + `AUDIT-1`. `B2` needs `B1`. `B3a..B3e` need `B2` and are split by *file*, so they
+- `B1` needs `B0` + `AUDIT-1`. `B2` needs `B1`. `B3a..B3e` need `B2` and are split by _file_, so they
   may run in parallel; `B3e` owns `App.tsx` and the shell, which is why `B3b` must not touch it.
 - `B4` needs all of `B3`. `C3` needs `B4` clean. `C1` needs the `C3` installer. `C4` needs `B4`+`C1` shots.
 - `pnpm install` is a global mutation: only `A-ENV` may run it, and only one task at a time may run
@@ -4922,14 +5002,15 @@ API key used for the C1 real-model run.
 Rule: one READ-ONLY audit first, then fix only HIGH items with minimal same-stack changes; MEDIUM and
 LOW are listed for the owner. No secret is ever printed.
 
-| ID | Task | Owner lane | Write scope | Definition of done | Verify command |
-|---|---|---|---|---|---|
-| S0 | Read-only security audit: (1) rate limiting/429 on every public warshad+relay endpoint and loopback-only bind unless self-host, (2) identity only from verified sessions/pairing never client-sent ids/roles, (3) no secrets in frontend or `VITE_`/`PUBLIC_` vars, `.env` ignored + `.env.example`, gitleaks over full history, keys to rotate, (4) caches with expiry + heavy work in a retrying queue, (5) k6 smoke + expected + 5x spike vs a local staging warshad, p95 < 800 ms and errors < 1% | debater | `bridge-io/security/**` only (read-only on all product code) | `audit.md`, `gitleaks.md`, `load.md`, `summary.md` exist; every finding cited file:line; three k6 runs with real p95/error numbers; zero secret values printed | read `bridge-io/security/summary.md` + re-run one cited command |
-| S1a | Fix HIGH inbound/auth findings H-01..H-05 only, with minimal same-stack changes and regression tests; promote the k6 scripts | coder | `crates/warshad/**`, `crates/warsha-relay/**`, `crates/warsha-remote/**`, `crates/warsha-pipeline/src/lib.rs`, `scripts/load/**` | every assigned HIGH closed or explicitly re-classified with reasoning; daemon/relay tests green; `check-arch` green; no new dependency outside the existing stack | `cargo test -p warshad -p warsha-relay` + `node scripts/check-arch.mjs` |
-| S1b | Fix HIGH paid-work findings H-06/H-07: bounded expiring caches, bounded retry/backoff and spend-aware concurrency; add `.env.example` | coder | `crates/warsha-pipeline/src/llm_cache.rs`, `router_quality.rs`, `crates/warsha-providers/**`, `.env.example` | cache TTL/bounds and paid-call retry/concurrency tests green; no real model calls; no overlap with S1a files | `cargo test -p warsha-pipeline -p warsha-providers` |
-| S2 | Re-audit after S1a+S1b and record the security table in PROGRESS.md | debater | `bridge-io/security/reaudit.md`, `PROGRESS.md` security table | a before/after table per finding; anything still exposed listed honestly | read `bridge-io/security/reaudit.md` |
+| ID  | Task                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Owner lane | Write scope                                                                                                                      | Definition of done                                                                                                                                                | Verify command                                                          |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| S0  | Read-only security audit: (1) rate limiting/429 on every public warshad+relay endpoint and loopback-only bind unless self-host, (2) identity only from verified sessions/pairing never client-sent ids/roles, (3) no secrets in frontend or `VITE_`/`PUBLIC_` vars, `.env` ignored + `.env.example`, gitleaks over full history, keys to rotate, (4) caches with expiry + heavy work in a retrying queue, (5) k6 smoke + expected + 5x spike vs a local staging warshad, p95 < 800 ms and errors < 1% | debater    | `bridge-io/security/**` only (read-only on all product code)                                                                     | `audit.md`, `gitleaks.md`, `load.md`, `summary.md` exist; every finding cited file:line; three k6 runs with real p95/error numbers; zero secret values printed    | read `bridge-io/security/summary.md` + re-run one cited command         |
+| S1a | Fix HIGH inbound/auth findings H-01..H-05 only, with minimal same-stack changes and regression tests; promote the k6 scripts                                                                                                                                                                                                                                                                                                                                                                          | coder      | `crates/warshad/**`, `crates/warsha-relay/**`, `crates/warsha-remote/**`, `crates/warsha-pipeline/src/lib.rs`, `scripts/load/**` | every assigned HIGH closed or explicitly re-classified with reasoning; daemon/relay tests green; `check-arch` green; no new dependency outside the existing stack | `cargo test -p warshad -p warsha-relay` + `node scripts/check-arch.mjs` |
+| S1b | Fix HIGH paid-work findings H-06/H-07: bounded expiring caches, bounded retry/backoff and spend-aware concurrency; add `.env.example`                                                                                                                                                                                                                                                                                                                                                                 | coder      | `crates/warsha-pipeline/src/llm_cache.rs`, `router_quality.rs`, `crates/warsha-providers/**`, `.env.example`                     | cache TTL/bounds and paid-call retry/concurrency tests green; no real model calls; no overlap with S1a files                                                      | `cargo test -p warsha-pipeline -p warsha-providers`                     |
+| S2  | Re-audit after S1a+S1b and record the security table in PROGRESS.md                                                                                                                                                                                                                                                                                                                                                                                                                                   | debater    | `bridge-io/security/reaudit.md`, `PROGRESS.md` security table                                                                    | a before/after table per finding; anything still exposed listed honestly                                                                                          | read `bridge-io/security/reaudit.md`                                    |
 
 Security facts established before dispatching S0 (real command output, to be re-verified by the audit):
+
 - `warshad` binds loopback only: `crates/warshad/src/lib.rs:1911` and `:1982`.
 - `warsha-relay` defaults to a wildcard bind: `crates/warsha-relay/src/lib.rs:45` (`0.0.0.0:8767`), bound at `:184`.
 - No inbound rate limiter found anywhere in `crates/`; the only `429` handling is provider-side response
@@ -4947,17 +5028,17 @@ Security facts established before dispatching S0 (real command output, to be re-
 S0 was reviewed from `bridge-io/security/` and its artifact gate passed. This is an audit completion,
 not a security-pass completion.
 
-| ID | file:line | issue | severity | Status |
-|---|---|---|---|---|
-| H-01 | `crates/warshad/src/lib.rs:1911-1982`; `crates/warsha-relay/src/lib.rs:45-184` | No inbound rate limiting or 429 responses; pairing/auth/paid-AI paths lack strict limits | HIGH | Open; S1 |
-| H-02 | `crates/warsha-relay/src/lib.rs:104-149` | Relay/device identity and frame forwarding unauthenticated | HIGH | Open; S1 |
-| H-03 | `crates/warshad/src/lib.rs:413-428`; `crates/warsha-pipeline/src/lib.rs:607-624` | Gate approver identity is client-asserted | HIGH | Open; S1 |
-| H-04 | `crates/warshad/src/lib.rs:234-242`, `:1200-1217`, `:1548-1617` | Bearer token has no mapped identity/role authorization | HIGH | Open; S1 |
-| H-05 | `crates/warshad/src/lib.rs:1334-1420` | Any bearer holder can spawn arbitrary processes/configure MCP | HIGH | Open; S1 |
-| H-06 | `crates/warsha-pipeline/src/llm_cache.rs:175-217`; `router_quality.rs:224-266` | Paid-model response caches are unbounded/non-expiring | HIGH | Open; S1 |
-| H-07 | `crates/warsha-providers/src/lib.rs:361-430`; `openai.rs:43`; `anthropic.rs:45` | Paid provider calls lack bounded retry/backoff and spend-aware concurrency | HIGH | Open; S1 |
-| M-01..M-04 | See `bridge-io/security/summary.md:19-24` | Bind setting, CORS/auth distinction, relay map, external health retry | MEDIUM | For owner |
-| L-01..L-02 | See `bridge-io/security/summary.md:25-26` | In-memory vectors and missing `.env.example` | LOW | For owner |
+| ID         | file:line                                                                        | issue                                                                                    | severity | Status    |
+| ---------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | -------- | --------- |
+| H-01       | `crates/warshad/src/lib.rs:1911-1982`; `crates/warsha-relay/src/lib.rs:45-184`   | No inbound rate limiting or 429 responses; pairing/auth/paid-AI paths lack strict limits | HIGH     | Open; S1  |
+| H-02       | `crates/warsha-relay/src/lib.rs:104-149`                                         | Relay/device identity and frame forwarding unauthenticated                               | HIGH     | Open; S1  |
+| H-03       | `crates/warshad/src/lib.rs:413-428`; `crates/warsha-pipeline/src/lib.rs:607-624` | Gate approver identity is client-asserted                                                | HIGH     | Open; S1  |
+| H-04       | `crates/warshad/src/lib.rs:234-242`, `:1200-1217`, `:1548-1617`                  | Bearer token has no mapped identity/role authorization                                   | HIGH     | Open; S1  |
+| H-05       | `crates/warshad/src/lib.rs:1334-1420`                                            | Any bearer holder can spawn arbitrary processes/configure MCP                            | HIGH     | Open; S1  |
+| H-06       | `crates/warsha-pipeline/src/llm_cache.rs:175-217`; `router_quality.rs:224-266`   | Paid-model response caches are unbounded/non-expiring                                    | HIGH     | Open; S1  |
+| H-07       | `crates/warsha-providers/src/lib.rs:361-430`; `openai.rs:43`; `anthropic.rs:45`  | Paid provider calls lack bounded retry/backoff and spend-aware concurrency               | HIGH     | Open; S1  |
+| M-01..M-04 | See `bridge-io/security/summary.md:19-24`                                        | Bind setting, CORS/auth distinction, relay map, external health retry                    | MEDIUM   | For owner |
+| L-01..L-02 | See `bridge-io/security/summary.md:25-26`                                        | In-memory vectors and missing `.env.example`                                             | LOW      | For owner |
 
 S0 evidence: `cargo build -p warshad --release` passed in WSL. k6 smoke (1 VU/10s), expected
 (5 VUs/30s), and spike (25 VUs/30s) all failed with 100% connection failures because the staging
@@ -5027,13 +5108,13 @@ half-installed `node_modules`.
 
 The debugger agent fixed the Windows toolchain lane. Orchestrator independently re-ran the safe gates:
 
-| Gate | Result |
-|---|---|
-| `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows-msvc-env.ps1` | **PASS** — imports vcvars, collapses duplicate PATH entries, compiles the C probe |
-| `pnpm exec playwright --version` | **PASS** — 1.49.1 |
-| `pnpm --dir docs build` and `pnpm --dir docs test` | **PASS** — mdBook 0.5.4 builds/tests the book without the earlier `0xC0000005` crash |
+| Gate                                                                                                               | Result                                                                                |
+| ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows-msvc-env.ps1`                                       | **PASS** — imports vcvars, collapses duplicate PATH entries, compiles the C probe     |
+| `pnpm exec playwright --version`                                                                                   | **PASS** — 1.49.1                                                                     |
+| `pnpm --dir docs build` and `pnpm --dir docs test`                                                                 | **PASS** — mdBook 0.5.4 builds/tests the book without the earlier `0xC0000005` crash  |
 | `pnpm -r build`, `pnpm -r test`, `cargo clippy --workspace --all-targets -- -D warnings`, Storybook launcher check | Reported **exit 0** by A-ENV; retained for final board verification after WSL returns |
-| `cargo test --workspace` on Windows | **BLOCKED by owner-level OS security policy**, not product code |
+| `cargo test --workspace` on Windows                                                                                | **BLOCKED by owner-level OS security policy**, not product code                       |
 
 The script fix addresses the real defects: the npm `command-code` shim shadowed bare `cmd`, and Git
 Bash/MSYS rewrote `>nul` to `/dev/null`. It now invokes `%SystemRoot%\System32\cmd.exe` explicitly,
@@ -5085,7 +5166,7 @@ Orchestrator independently re-ran all gates:
 The implementation adds 22 compound sources, 20 new story files (25 total / 147 stories), contrast
 measurement tests, token-drift tests, keyboard tests, and behavior tests. Scanned owned source: no
 TODO/FIXME/stub/`as any` matches; raw colors are confined to token declarations, explanatory story text,
-and intentional drift-test fixtures. Two measured AA findings were corrected: light-theme signal *marks*
+and intentional drift-test fixtures. Two measured AA findings were corrected: light-theme signal _marks_
 now use `signal-text`, and the focus ring is asserted at the actual measured contrast value.
 
 B3 screen lanes must serialize because `packages/i18n/src/index.tsx` is a single shared catalog.
@@ -5105,6 +5186,7 @@ The debugger report for H-01..H-05 was reviewed and independently re-verified in
 - `git diff --check` on owned paths → exit 0; `Cargo.lock` and manifests unchanged
 
 Code review confirms fail-closed behavior:
+
 - authenticated identity decides rate buckets; unauthenticated traffic falls back to peer/shared bounded
   bucket rather than no bucket; key map has a hard cap and rejects new keys when full;
 - relay and daemon credentials, not request fields, create the `Actor`;
@@ -5170,15 +5252,15 @@ Debugger session `c89a90ee-9166-5c13-af55-5b1c511be75f` independently re-audited
 Evidence: `bridge-io/security/reaudit/summary.md` and `findings.md` (gitignored artifact directory).
 It writes only those evidence files and runs read-only inspection; no product mutation.
 
-| ID | Final status | Re-audit finding |
-|---|---|---|
-| H-01 | **Closed** | bounded token buckets/429/Retry-After across daemon/relay paths, strictest tier wins, key map fail-closed |
-| H-02 | **Closed** | relay identity only from pairing secret; claimed sender/device cross-checked |
-| H-03 | **Closed** | gate approver from transport-created Actor; mismatched legacy id rejected; pipeline refuses nil |
-| H-04 | **Closed** | exact two-way match between 56 registered RPC methods and policy table; owner/paired roles enforced |
-| H-05 | **Closed** | owner-only process/MCP, allow-list, shell/metacharacter and dangerous env rejection, TLS-or-loopback transports |
-| H-06 | **Closed** | both paid caches bounded by LRU and TTL; stale entries reaped, never returned |
-| H-07 | **Closed** | bounded jittered retries, per-target/total caps, budget checked every attempt, semaphore-capped in-flight calls |
+| ID   | Final status | Re-audit finding                                                                                                |
+| ---- | ------------ | --------------------------------------------------------------------------------------------------------------- |
+| H-01 | **Closed**   | bounded token buckets/429/Retry-After across daemon/relay paths, strictest tier wins, key map fail-closed       |
+| H-02 | **Closed**   | relay identity only from pairing secret; claimed sender/device cross-checked                                    |
+| H-03 | **Closed**   | gate approver from transport-created Actor; mismatched legacy id rejected; pipeline refuses nil                 |
+| H-04 | **Closed**   | exact two-way match between 56 registered RPC methods and policy table; owner/paired roles enforced             |
+| H-05 | **Closed**   | owner-only process/MCP, allow-list, shell/metacharacter and dangerous env rejection, TLS-or-loopback transports |
+| H-06 | **Closed**   | both paid caches bounded by LRU and TTL; stale entries reaped, never returned                                   |
+| H-07 | **Closed**   | bounded jittered retries, per-target/total caps, budget checked every attempt, semaphore-capped in-flight calls |
 
 No new HIGH. The re-audit tested and rejected two potential bypasses (WS transport Actor leakage and
 relay sender spoofing). New owner-facing findings:
@@ -5210,11 +5292,11 @@ Saved debugger session `5830e665-6ebf-53a9-a16e-0584403e5795` promoted runnable 
 the first valid p95/error evidence. Orchestrator reviewed `bridge-io/security/load/report.md`, metrics,
 runner, install, log-summarizer, metric extractor and secret scanner.
 
-| Scenario | Requests | Served | Transport 429 | Method -32004 | True errors | Error rate | served p95 |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| smoke 1 VU / 10s | 99 | 99 | 0 | 0 | 0 | **0.00%** | **0.57ms** |
-| expected 5 VU / 30s | 75 | 75 | 0 | 0 | 0 | **0.00%** | **1.58ms** |
-| spike 25 VU / 30s | 1,339,117 | 3,600 | 1,335,517 | 0 | 0 | **0.00%** | **2.36ms** |
+| Scenario            |  Requests | Served | Transport 429 | Method -32004 | True errors | Error rate | served p95 |
+| ------------------- | --------: | -----: | ------------: | ------------: | ----------: | ---------: | ---------: |
+| smoke 1 VU / 10s    |        99 |     99 |             0 |             0 |           0 |  **0.00%** | **0.57ms** |
+| expected 5 VU / 30s |        75 |     75 |             0 |             0 |           0 |  **0.00%** | **1.58ms** |
+| spike 25 VU / 30s   | 1,339,117 |  3,600 |     1,335,517 |             0 |           0 |  **0.00%** | **2.36ms** |
 
 Expected gate **PASS**: p95 1.58ms (<800ms) and true errors 0.00% (<1%). Spike refusals are explicitly
 reported as limiter behavior, not transport errors; served traffic matched the transport quota. Only
@@ -5223,6 +5305,7 @@ was checksum-verified. Teardown left no daemon, listener or lock, and `check-sec
 leaks in artifacts.
 
 New owner-facing load findings, deliberately not patched by this evidence-only lane:
+
 - read-method `Tier::Standard` quotas are inert because 24 measured read methods lack
   `with_extensions`, so only transport ceilings apply;
 - each transport refusal writes one WARN, producing a 161MB / 5.4MB-per-second log under spike; the
@@ -5251,6 +5334,7 @@ main/Advanced/Crash/Store and remaining shared desktop components). B3-remote is
 ### C2 accepted (2026-11-02)
 
 Saved Coder session `d720380f-8c92-550f-a202-22e6415bf5f7` closed the real-provider and lifecycle gaps:
+
 - configured provider registration from keychain-backed rows, with deferred startup and a fail-closed
   `RemovedProvider`;
 - real role routing and per-routing agent budget, restored across restart;
@@ -5264,14 +5348,14 @@ Saved Coder session `d720380f-8c92-550f-a202-22e6415bf5f7` closed the real-provi
 The only manifest change adds `futures`, which already exists in the workspace; no new external
 dependency was introduced. Orchestrator independently verified in `/root/warsha-c2`:
 
-| Gate | Exit |
-|---|---|
-| `cargo fmt --all --check` | 0 |
-| `cargo clippy --workspace --all-targets -- -D warnings` | 0 |
-| `cargo test --workspace --no-fail-fast` | 0, all result lines `ok` |
-| `pnpm --filter @warsha/client test` | 0, **38 / 38** |
-| `pnpm --filter @warsha/client typecheck` | 0 |
-| `git diff --check` on C2 paths | 0 |
+| Gate                                                    | Exit                     |
+| ------------------------------------------------------- | ------------------------ |
+| `cargo fmt --all --check`                               | 0                        |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 0                        |
+| `cargo test --workspace --no-fail-fast`                 | 0, all result lines `ok` |
+| `pnpm --filter @warsha/client test`                     | 0, **38 / 38**           |
+| `pnpm --filter @warsha/client typecheck`                | 0                        |
+| `git diff --check` on C2 paths                          | 0                        |
 
 Task #9 is accepted. C2 deliberately left the existing `providers.budget`/`providers.budget.status`
 client surface as a clear method-not-found path rather than inventing daemon behavior, documented in
@@ -5323,8 +5407,9 @@ the reported `Panel`/`GateCard` banner-role question in a real browser.
 Known remote production seams carried forward: manifest/service worker/icons are still absent;
 `gates.list` is unavailable so the queue uses run-stage fallback; `devices.pair-start`/QR payload is
 not wired. These are integration gaps, not design-system failures.
+
 > **Corrected 2026-11-03.** `gates.list` is now a served daemon method read from the run's own gate
-> states, and the queue's stage reading is the *fallback* path, not the only one. Pairing is still not
+> states, and the queue's stage reading is the _fallback_ path, not the only one. Pairing is still not
 > wired: `devices.pair` binds a `PairingData` struct while the client sends a string (board #58), so
 > the AR claim above is fixed and the pairing claim is not.
 
@@ -5349,14 +5434,14 @@ Coder session `c33499b4-fb0f-559a-a257-005202ea6b21` implemented the owner-appro
 
 Orchestrator independently verified:
 
-| Gate | Exit | Result |
-|---|---:|---|
-| WSL `/root/warsha-sec2` `cargo fmt --all --check` | 0 | clean |
-| WSL workspace `cargo clippy --all-targets -- -D warnings` | 0 | clean |
-| WSL workspace `cargo test --no-fail-fast` | 0 | all targets `ok` (including pipeline 323, providers 43, relay 17, remote 28, warshad 61 + integration suites) |
-| Windows native `cargo clippy --workspace --all-targets -- -D warnings` | 0 | required native gate clean |
-| architecture self-test/main scan | 0 | 5 rules fire, 0 violations |
-| `git diff --check` on Rust/load paths | 0 | clean |
+| Gate                                                                   | Exit | Result                                                                                                        |
+| ---------------------------------------------------------------------- | ---: | ------------------------------------------------------------------------------------------------------------- |
+| WSL `/root/warsha-sec2` `cargo fmt --all --check`                      |    0 | clean                                                                                                         |
+| WSL workspace `cargo clippy --all-targets -- -D warnings`              |    0 | clean                                                                                                         |
+| WSL workspace `cargo test --no-fail-fast`                              |    0 | all targets `ok` (including pipeline 323, providers 43, relay 17, remote 28, warshad 61 + integration suites) |
+| Windows native `cargo clippy --workspace --all-targets -- -D warnings` |    0 | required native gate clean                                                                                    |
+| architecture self-test/main scan                                       |    0 | 5 rules fire, 0 violations                                                                                    |
+| `git diff --check` on Rust/load paths                                  |    0 | clean                                                                                                         |
 
 `Cargo.lock` is unchanged. Relay adds `keyring` and daemon adds `futures`, both already declared as
 workspace dependencies; no external crate was introduced.
@@ -5371,11 +5456,11 @@ resumed through the proven LOAD-1 session instead of duplicating the lane.
 Fresh WSL build and load lane `/root/warsha-load2` completed all acceptance criteria. Sanitized evidence
 is under `bridge-io/security/load2/` and reusable harness under `scripts/load/`.
 
-| Scenario | Requests | Served | Transport 429 | Method -32004 | True errors | served p95 |
-|---|---:|---:|---:|---:|---:|---:|
-| smoke 1 VU / 10s | 99 | 99 | 0 | 0 | 0 | **0.89ms** |
-| expected 5 VU / 30s | 75 | 75 | 0 | 0 | 0 | **2.64ms** |
-| spike 25 VU / 30s | 1,609,517 | 839 | 1,605,918 | 2,760 | 0 | **2.30ms** |
+| Scenario            |  Requests | Served | Transport 429 | Method -32004 | True errors | served p95 |
+| ------------------- | --------: | -----: | ------------: | ------------: | ----------: | ---------: |
+| smoke 1 VU / 10s    |        99 |     99 |             0 |             0 |           0 | **0.89ms** |
+| expected 5 VU / 30s |        75 |     75 |             0 |             0 |           0 | **2.64ms** |
+| spike 25 VU / 30s   | 1,609,517 |    839 |     1,605,918 |         2,760 |           0 | **2.30ms** |
 
 Expected gate passes: p95 2.64ms and true error rate 0.00%. Spike refusals are limiter behavior,
 reported separately. Read-tier arithmetic now matches: only 839 were served because
@@ -5383,6 +5468,7 @@ reported separately. Read-tier arithmetic now matches: only 839 were served beca
 ceiling alone.
 
 S1c fixes are confirmed operationally:
+
 - refusal logging produced **6 lines / 954 bytes** for the whole run instead of LOAD-1's 1,335,523 lines
   / 161MB;
 - controlled probes reconcile the snapshot-style meter: 329 observed / 330 reported, and 5,846 observed
@@ -5393,6 +5479,7 @@ S1c fixes are confirmed operationally:
 - teardown left zero orphan processes/listeners and no credential in artifacts.
 
 Two owner-facing notes:
+
 1. `warshad.lock` intentionally remains after clean shutdown (C2 changed to never unlink the lock so
    two instances cannot race on different inodes); presence must not be interpreted as liveness—the
    advisory lock and PID hint decide.
@@ -5439,6 +5526,7 @@ failing baselines were deliberately deleted rather than committed. 452 clean scr
 under `bridge-io/shots/b4/`.
 
 Round 1 fixed or found:
+
 - **HIGH security:** remote bearer token was rewritten into the address bar/history by `LocationSync`;
   code/unit fix landed, browser verification is part of the rerun.
 - AA token contrast on recessed plate, sticky-top focus coverage, 320 instrument scroll, wizard
@@ -5451,6 +5539,7 @@ Round 1 fixed or found:
 
 B4 continues in the same lane to close §7 items #1–#7 and #9 until zero failures, then regenerate
 remaining baselines and rerun both platforms. Out-of-scope items were split:
+
 - **#25** wire missing gate/chat daemon seams after B4 (blocks installer #10).
 - **#26** install the same fonts in Linux visual CI. Initial launcher returned
   `APPLICATION_INTERNAL` after registering a failed cold session, then resumed in session
@@ -5463,6 +5552,7 @@ Task #26 added a pre-step to the Linux visual job that runs
 `actionlint .github/workflows/ci.yml .github/workflows/release.yml` (exit 0).
 
 The installer:
+
 - pins `google/fonts@6c1dbe27dcf7d817d4b62cec033ba77fa8e2a5ec`;
 - installs the same nine IBM Plex Sans Arabic / Plex Mono TTF faces used on the capture host;
 - checks each blob against an explicit SHA-256 and rejects non-font magic bytes;
@@ -5499,9 +5589,9 @@ The last authoritative stopped visual run is in `bridge-io/audit/gate-visual-b4.
   1. `desktop/e2e/screens.a11y.spec.ts`: settings 390×844 AR light — axe/keyboard
   2. `desktop/e2e/screens.a11y.spec.ts`: settings 390×844 AR dark — axe/keyboard
   3. `screens.visual`: gates 768×1024 EN dark
-  4–10. `screens.visual`: run cases at 320 AR/EN, 390 AR light, 768 AR dark, 1440 EN light/dark
-  11. `screens.visual`: onboarding-provider 768×1024 EN light
-  12–13. `states`: gates permission 390 EN light and 1440 EN light (7–10 pixel diffs)
+     4–10. `screens.visual`: run cases at 320 AR/EN, 390 AR light, 768 AR dark, 1440 EN light/dark
+  4. `screens.visual`: onboarding-provider 768×1024 EN light
+     12–13. `states`: gates permission 390 EN light and 1440 EN light (7–10 pixel diffs)
 
 Important: the final process was executing `--update-snapshots` after this run was interrupted; do not
 assume any new baselines beyond those already recorded were clean or complete. Treat the manifest and
@@ -5602,7 +5692,7 @@ Docs + validator change only; no runtime/product code touched.
 - `AGENTS.md` — two rules appended (read the policy; run the validator on policy/process changes);
   no existing rule removed. `package.json` — `"policy"` script added beside `"arch"`.
 - Verified on this host: `node scripts/check-engineering-policy.mjs` → `policy: 8 checks, 0
-  failures`; `--self-test` → all 8 checks fire, clean fixture clean; `npx pnpm@9.0.0 policy` green;
+failures`; `--self-test` → all 8 checks fire, clean fixture clean; `npx pnpm@9.0.0 policy` green;
   `git diff --check` clean. Full builds/tests/Playwright/cargo were not run for this docs-only
   change (focused checks only). `ENGINEERING_POLICY.md` is prettier-formatted; `AGENTS.md` and
   `package.json` markdown/json drift predates this change and was left untouched.
@@ -5612,7 +5702,7 @@ Docs + validator change only; no runtime/product code touched.
 ### B4 finisher: onboarding-provider 768x1024 EN light — diagnosed, no product pixel change (2026-11-03)
 
 - Reproduced the focused case (`playwright test --project=desktop -g "onboarding-provider 768x1024 en
-  light"`) 45+ times on this host. It fails bimodally (≈10 %, only while sibling lanes were editing the
+light"`) 45+ times on this host. It fails bimodally (≈10 %, only while sibling lanes were editing the
   shared tree or running concurrent chromium): failing frames differ from the baseline by 12k–16k PIL
   pixels (Playwright ratio 0.01) with every text line re-rounded ±1 px and drawn grayscale, while the
   baseline and passing frames carry LCD subpixel fringes.
@@ -5663,7 +5753,7 @@ rows 84–90): `run 320x568 ar light`, `run 320x568 en light|dark`, `run 390x844
 `run 768x1024 ar dark`, `run 1440x900 en light|dark`.
 
 - **Reproduced** every case with the gate itself (`pnpm exec playwright test --project=desktop
-  screens.visual -g "…"`), inspected the PNGs pixel-by-pixel, and probed the live DOM geometry with a
+screens.visual -g "…"`), inspected the PNGs pixel-by-pixel, and probed the live DOM geometry with a
   temporary spec (created and deleted again; no gate file touched).
 - **Host alignment (done)**: user-level `~/.config/fontconfig/fonts.conf` — antialias true, rgba rgb,
   hinting true, hintstyle hintslight, lcdfilter lcddefault. Before it, every visual case on this host
@@ -5709,7 +5799,7 @@ setup, `apps/desktop/e2e/harness.ts`). No product UI, no spec assertion, no base
   fragment through the include chain (`fc-match` flips to rgba 5 / hintstyle 0), so the assignment is
   final; (3) A/B serial run — system-config pin vs repo pin produced byte-identical captures for the
   deterministic cases; the one cross-run delta (gates 768 en light, 25 px in the topbar band, max
-  magnitude 16) is the documented 15–30 px topbar jitter, which flaps the same 14/4/4 px *without* the
+  magnitude 16) is the documented 15–30 px topbar jitter, which flaps the same 14/4/4 px _without_ the
   pin; (4) causal control — with the grayscale pin the onboarding-provider 768 en light and
   projects 390 en dark cases explode to 6,888 / 8,280 px (pre-alignment class), proving the env reaches
   chromium's rasterizer and the correct pin keeps the aligned rendering (≤4 px, byte-exact controls).
@@ -5729,22 +5819,22 @@ Own scope: capture harness/config only (`playwright.config.ts`, `scripts/ci/capt
 `scripts/ci/install-capture-fonts.sh`). No baseline, no assertion, no product UI, no bridge-io write,
 no commit/push.
 
-- **Diagnosis (harness/config, with the user-reported cases)**: the repo pin *does* reach chromium and
-  *is* honoured by the rasterizer — proven causally through the exact launch path: a temporary probe
+- **Diagnosis (harness/config, with the user-reported cases)**: the repo pin _does_ reach chromium and
+  _is_ honoured by the rasterizer — proven causally through the exact launch path: a temporary probe
   spec (created, used, deleted again — `zz-pin-probe.spec.ts`) measured 1186 LCD-fringe pixels
   (max |R−B| = 168) with the pin and 0 with a grayscale override via
   `WARSHA_CAPTURE_FONTCONFIG_FILE`, so `launchOptions.env` inheritance is real and effective. The
   reported failures were re-measured first: `gates 768x1024 en dark` 4 px, `gates permission` 320/390/
   1440 en light 1/268/8 px — all max-magnitude 1–2 ±coverage flips, i.e. the documented residual/
   jitter class (owner need (b)), not the 10k–25k grayscale class; `onboarding-provider 768x1024 en
-  light` passed in those focused runs.
+light` passed in those focused runs.
 - **The reported error reproduced and explained**: `Fontconfig error: Cannot load default config
-  file(: No such file)` appears on the browser stderr whenever `FONTCONFIG_FILE` names a file the
+file(: No such file)` appears on the browser stderr whenever `FONTCONFIG_FILE` names a file the
   process cannot open — an empty-string override (`??` did not guard `""`), a value relative to the
   browser's cwd, or a missing file (e.g. a checkout without the then-untracked pin). Chromium does
   not stop: it falls back to its built-in config, which on this host merges the stray
   `~/.config/fontconfig/fonts.conf` (via `50-user.conf` through the include chain) and therefore
-  *looks* aligned, while a bare CI runner would render grayscale. An empty value is worse still:
+  _looks_ aligned, while a bare CI runner would render grayscale. An empty value is worse still:
   config with no font dirs, text fails to lay out at all (probe measured 0 dark pixels).
 - **A latent proof gap found while fixing**: a rejected fragment does not fail `fc-match` — fontconfig
   logs on stderr, loads the fallback config and still answers with plausible values; the setup check
@@ -5760,12 +5850,12 @@ no commit/push.
     `ignore_missing="yes"` (a strict-include failure would discard the whole fragment), and plain
     `<dir>` entries for `/usr/share/fonts` and `/usr/local/share/fonts` keep the pinned faces
     resolving even where no system config exists; the five AA assignments remain last.
-  - `scripts/ci/install-capture-fonts.sh` — the fc proof now fails on *any* fontconfig stderr output,
+  - `scripts/ci/install-capture-fonts.sh` — the fc proof now fails on _any_ fontconfig stderr output,
     and each Playwright browser binary actually present (`chrome`, `headless_shell` — they link
     different fontconfig versions) is launched once with the same `FONTCONFIG_FILE` the config sets
     and must produce a DOM with no Fontconfig complaint. Skips with a note when browsers are absent.
 - **Before/after on the focused case** (`pnpm exec playwright test --project=desktop
-  screens.visual.spec.ts -g "gates 768x1024 en dark" --reporter=list --workers=1`): before the fix
+screens.visual.spec.ts -g "gates 768x1024 en dark" --reporter=list --workers=1`): before the fix
   exit 1 at 4 pixels (topbar jitter, known to flap 0↔4↔14 px across repeats); after the fix exit 0 —
   byte-exact pass, zero fontconfig output. Same-class results in the 5-case focused set before
   (exit 1, 4 failures at 1–268 px) and after (exit 1, 3 failures at 1–238 px, max magnitude 1) —
@@ -5790,7 +5880,7 @@ output under `/tmp/b4-final`), classify determinism, change nothing. No `--updat
 in any run; no baseline, threshold, assertion, product file, or commit/push.
 
 - **The 2 flow keyboard cases** (`flows.spec.ts:81 › the mode group moves focus with the arrows and
-  presses with Enter: 390x844 en` / `1440x900 ar`): the strict full rerun's failures were
+presses with Enter: 390x844 en` / `1440x900 ar`): the strict full rerun's failures were
   `Target page, context or browser has been closed` (browser/page closure during parallel startup,
   12:14–12:18 UTC, while lanes ran concurrent chromium). Serially they do not reproduce: **three
   separate serial invocations** (12:47–12:55 and 13:27 UTC, workers=1, ports 5173/5174 confirmed
@@ -5827,7 +5917,7 @@ in any run; no baseline, threshold, assertion, product file, or commit/push.
 ## Orchestrator resume on the Linux host (2026-11-03, post-move)
 
 - Re-verified after the move to `/home/dev/projects/warsha-dev`: `node scripts/check-arch.mjs` → `arch:
-  5 rules, 0 violations`; `pnpm --filter warsha-desktop test` and `pnpm --filter warsha-remote test`
+5 rules, 0 violations`; `pnpm --filter warsha-desktop test` and `pnpm --filter warsha-remote test`
   both exit 0 (remote: 147 tests / 13 files). `bash scripts/ci/install-capture-fonts.sh` → all 9 pinned
   faces present, and this host now also installs the capture AA pin (antialias=true, hintslight,
   rgba=rgb, lcdfilter=default) which `chrome` and `headless_shell` both load without a Fontconfig
@@ -5851,9 +5941,8 @@ in any run; no baseline, threshold, assertion, product file, or commit/push.
   `bridge-io/audit/seam-rpc-gap.md`.
 - **New measured finding — installer lane (#10)**: this host is Linux aarch64 and cannot produce x86
   MSI/NSIS, so the installer gate has to run through CI. Static defects blocking that: `.github/workflows/
-  release.yml` hardcodes `https://github.com/Warsha/Warsha` in 6 places (lines 352, 366, 367, 392, 396,
-  405) instead of deriving owner/repo from `github.repository`, and `apps/desktop/src-tauri/
-  tauri.conf.json:74` points the updater at `athar-studios/warsha` while this checkout pushes to
+release.yml` hardcodes `https://github.com/Warsha/Warsha` in 6 places (lines 352, 366, 367, 392, 396, 405) instead of deriving owner/repo from `github.repository`, and `apps/desktop/src-tauri/
+tauri.conf.json:74` points the updater at `athar-studios/warsha` while this checkout pushes to
   `athar-studios/warsha-dev`. Which repo is the release target must be recorded in `DECISIONS.md`.
 - **Escalation of that finding — the desktop live path is broken, not just the gates queue**:
   `apps/desktop/src/App.tsx:346` builds its runtime data path with the real HTTP JSON-RPC client
@@ -5863,7 +5952,7 @@ in any run; no baseline, threshold, assertion, product file, or commit/push.
   (`{ projectId }` at `:451`, `{ id }` at `:459`/`:463`) while the daemon binds named params by the Rust
   argument name (`list_runs(&self, project_id)`, `get_run(&self, run_id)` at
   `crates/warshad/src/lib.rs:682-685`). jsonrpsee matches those names exactly, so even correctly
-  *named* calls fail on the wire. Nothing detects it: Rust integration tests use positional arrays
+  _named_ calls fail on the wire. Nothing detects it: Rust integration tests use positional arrays
   (`crates/warshad/tests/security_identity.rs:171`), the e2e harness reads camelCase
   (`apps/desktop/e2e/harness.ts:844`), and `grep -rln WarshaClient crates apps packages` returns only
   `packages/client` itself — there is zero client↔daemon round-trip coverage. Consequence for the board:
@@ -5892,7 +5981,7 @@ Values marked `TBD` are filled only when the gate that produces them has actuall
 before the work finishes so an interruption cannot lose the shape of the deliverable.
 
 - **Last commit on `dev`**: TBD (hash + subject). Before any commit: `gitleaks detect --source .
-  --no-banner --redact` in history mode with `~/.local/bin/gitleaks` 8.30.1 (installed this session,
+--no-banner --redact` in history mode with `~/.local/bin/gitleaks` 8.30.1 (installed this session,
   checksum-verified), plus `git status --short` reviewed for `.env`/key/token/credential paths.
   `bridge-io/` stays ignored (`.gitignore:73`).
 - **Visual acceptance**: baseline refresh TBD/836, then strict rerun on the refreshed baselines TBD/836
@@ -5955,7 +6044,7 @@ before the work finishes so an interruption cannot lose the shape of the deliver
 ## PARKED FOR TURN BUDGET — resume exactly here (2026-11-03 ~18:42 host time)
 
 Nothing was left in a half-applied state on purpose, and **nothing was committed**, because the rule is
-commit-after-*accepted*, and at parking time no lane's output has been verified by a gate yet: the Rust
+commit-after-_accepted_, and at parking time no lane's output has been verified by a gate yet: the Rust
 seam lane has never been compiled, the strict visual confirmation has never run against the refreshed
 baselines, and the docs pass is mid-rewrite. Committing that would publish unverified work.
 
@@ -5986,7 +6075,7 @@ baselines, and the docs pass is mid-rewrite. Committing that would publish unver
 2. Verify the Rust seam lane — it has **never been compiled**:
    `cargo fmt --all --check && cargo clippy -D warnings -p warshad --all-targets && cargo test -p warshad --lib && cargo test -p warshad --test security_identity`.
 3. Run the wire gate if the lane delivered it: `node scripts/check-wire-contract.mjs --self-test && node
-   scripts/check-wire-contract.mjs`, then `actionlint` (`~/.local/bin/actionlint`, installed this session).
+scripts/check-wire-contract.mjs`, then `actionlint` (`~/.local/bin/actionlint`, installed this session).
    Delete the param-key check if it was written despite the retraction — it fails on working code.
 4. Re-run the client/remote suites after any harness change:
    `pnpm --filter warsha-desktop test && pnpm --filter warsha-remote test`.
@@ -6024,11 +6113,11 @@ The config fix is delivered and self-proven, but the important part is what it u
 
 - **Rule-id shadowing.** With `[extend] useDefault = true`, a custom rule whose `id` matches a default
   rule's id is **silently dropped**. This repo used the default ids `openai-api-key` and
-  `anthropic-api-key`, so its own rules were being discarded — and 8.30.1's surviving *default* OpenAI
+  `anthropic-api-key`, so its own rules were being discarded — and 8.30.1's surviving _default_ OpenAI
   rule only matches `sk-proj-…` shapes, meaning a classic `sk-`+48 key would have gone undetected **even
   after the panic was fixed**. Fix was renaming the colliding ids to `warsha-*`; the regexes are
   unchanged, so nothing was weakened.
-- **Allowlist `regexes` are matched against the finding's *Secret*** (auto-extracted from the first
+- **Allowlist `regexes` are matched against the finding's _Secret_** (auto-extracted from the first
   capture group), not the Match — so exemptions silently matched nothing until `generic-secret` gained a
   value capture group with `secretGroup = 2` and every exemption was anchored `^…$`.
 - `generic-secret` was 47-of-48 prose/identifier noise; tightened to require `[:=]` plus a quoted value
@@ -6050,7 +6139,7 @@ both-direction tests, `scripts/check-wire-contract.mjs` (W1-W7 with `--self-test
 `rpc<T>` generics, multi-line attributes, depth-aware param splitting), R7 in `docs/ARCH_RULES.md`, and the
 `ci.yml` trigger fix + `Wire contract` step. Two things to carry into review, both better than the brief:
 
-- It read the mid-flight **camelCase retraction** and implemented W7 as *required-entry presence*, adding a
+- It read the mid-flight **camelCase retraction** and implemented W7 as _required-entry presence_, adding a
   self-test mutant that **proves a camelCase key is not an offence** — a regression guard on my own error.
 - Honest deferral instead of a fake-green gate: `KNOWN_UNREGISTERED_METHODS` (the 8 names #25 renames or
   deletes) and `KNOWN_PARAM_DRIFT_METHODS` (`projects.create`) are whitelisted because `packages/client`
@@ -6061,7 +6150,7 @@ both-direction tests, `scripts/check-wire-contract.mjs` (W1-W7 with `--self-test
 - **Zero compiler contact.** Nothing here has been built, clippy'd or tested. That is the next 40-minute
   window's first work: `cargo clippy -p warshad --all-targets -D warnings`, `cargo test -p warshad --lib`,
   `cargo test -p warshad --test gates_list --test security_identity`, then `actionlint .github/workflows/
-  ci.yml` (`~/.local/bin/actionlint`). Do not accept the lane's Rust on inspection.
+ci.yml` (`~/.local/bin/actionlint`). Do not accept the lane's Rust on inspection.
 - It flagged a `ci.yml` comment hunk near "Visual regression" as another lane's — confirm ownership before
   committing, so the accepted-stage commit doesn't silently adopt an unreviewed edit.
 
@@ -6102,7 +6191,7 @@ narrative is not the evidence, `git diff --stat` is.
   status "not built, no release tag, no published release", and keeps the historical `0.1.0` name and byte
   sizes in a clearly-labelled column instead of presenting them as a promise.
 - **The lane corrected ME on `--data-dir`.** My brief asserted the flag does not exist, from
-  `warshad --help`. It does exist — on the *desktop* binary: `warsha-desktop --self-check --data-dir <path>`
+  `warshad --help`. It does exist — on the _desktop_ binary: `warsha-desktop --self-check --data-dir <path>`
   (`apps/desktop/src-tauri/src/lib.rs:379-394`, parsed at `src-tauri/src/main.rs:20`). The doc now states
   the desktop form, cites it, and adds an explicit "do not carry this over to the standalone daemon"
   warning. I verified both anchors by grep before accepting it. A brief is not a fact.
@@ -6113,28 +6202,28 @@ narrative is not the evidence, `git diff --stat` is.
 
 ### Verification bank (2026-11-03 19:41) — what has actually been RUN on this host
 
-| Gate | Result | Evidence |
-| --- | --- | --- |
-| `node scripts/check-arch.mjs` | `arch: 5 rules, 0 violations` | this session |
-| `pnpm --filter warsha-desktop test` | exit 0 | 19:12 |
-| `pnpm --filter warsha-remote test` | 147 passed / 13 files | 19:12 |
-| `bash scripts/ci/install-capture-fonts.sh` | 9 pinned faces + AA pin, loads in `chrome` and `headless_shell` | this session |
-| `cargo fmt --all --check` | `FMT_OK` | `/tmp/b5-rust-verify2.log` |
-| `cargo clippy -p warshad --all-targets -- -D warnings` | `CLIPPY_OK` | same (first attempt used `-D` without `--` and errored — my invocation bug, not the lane's code) |
-| `cargo test -p warshad --lib` | **66 passed / 0 failed / 2 ignored**, 1.53s | same |
-| `cargo clippy --workspace --all-targets -- -D warnings` | **`WS_CLIPPY_OK`** | `/tmp/b5-rust-workspace.log` — workspace-wide, so cross-crate feature unification is covered, not just the touched crate |
-| `cargo test --workspace --all-targets` | **`WS_TEST_OK`, `WS_EXIT=0`, 24 `test result: ok` blocks, zero failures** | same. Note the log also contains `error: no such command: nonexistent-subcommand` — that is an expected negative-path assertion inside a passing CLI test, not a failure; read the suite result, not the string |
-| `cargo test -p warshad --test gates_list --test security_identity` | **`gates_list` 3 passed / 0 failed**, **`security_identity` 5 passed / 0 failed**, `WIRETESTS_OK`, `RUST_VERIFY2_EXIT=0` | same — `gates_list.rs` boots the real daemon and reads `gates.list` over HTTP, so the gates read is now proven by a live round trip, not by a stub |
-| `check-wire-contract.mjs --self-test` | `7 checks fire, clean fixture is clean in both modes` | `/tmp/wc-selftest.log` |
-| `check-wire-contract.mjs` | `wire: 7 checks, 0 violations`, 17 items deferred in `KNOWN_*` | this session |
-| `actionlint .github/workflows/ci.yml` | exit 0, no findings | `~/.local/bin/actionlint` 1.7.12 |
-| gitleaks history | 30 commits, 5.89 MB, **no leaks**, exit 0 | after the config repair |
-| gitleaks positive control | planted `sk-` caught, exit 1 | same session |
-| gitleaks on `bridge-io` (config excludes it) | scanned with default rules, **no leaks**, 14.76 MB | same |
-| Visual baseline refresh | 835 / 1 (the 1 is the startup-flake class), 43.8m | `/tmp/b4-refresh.log` |
-| Visual STRICT rerun | **827 / 9, exit 1**, total diffs 4-20 px | `/tmp/b4-strict-rerun.log` → task #45 |
-| Pre-commit hygiene | `dist/`, `playwright-report/`, `bridge-io/`, `.env*`, `*.db`, `*.log` ignored; no key-ish paths in `git status` | `git check-ignore -v` with real file paths |
-| CI triggers | `push: branches: [main, dev]` (`ci.yml:5`) and `workflow_dispatch` (`ci.yml:8`) both confirmed | read this session |
+| Gate                                                               | Result                                                                                                                   | Evidence                                                                                                                                                                                                        |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `node scripts/check-arch.mjs`                                      | `arch: 5 rules, 0 violations`                                                                                            | this session                                                                                                                                                                                                    |
+| `pnpm --filter warsha-desktop test`                                | exit 0                                                                                                                   | 19:12                                                                                                                                                                                                           |
+| `pnpm --filter warsha-remote test`                                 | 147 passed / 13 files                                                                                                    | 19:12                                                                                                                                                                                                           |
+| `bash scripts/ci/install-capture-fonts.sh`                         | 9 pinned faces + AA pin, loads in `chrome` and `headless_shell`                                                          | this session                                                                                                                                                                                                    |
+| `cargo fmt --all --check`                                          | `FMT_OK`                                                                                                                 | `/tmp/b5-rust-verify2.log`                                                                                                                                                                                      |
+| `cargo clippy -p warshad --all-targets -- -D warnings`             | `CLIPPY_OK`                                                                                                              | same (first attempt used `-D` without `--` and errored — my invocation bug, not the lane's code)                                                                                                                |
+| `cargo test -p warshad --lib`                                      | **66 passed / 0 failed / 2 ignored**, 1.53s                                                                              | same                                                                                                                                                                                                            |
+| `cargo clippy --workspace --all-targets -- -D warnings`            | **`WS_CLIPPY_OK`**                                                                                                       | `/tmp/b5-rust-workspace.log` — workspace-wide, so cross-crate feature unification is covered, not just the touched crate                                                                                        |
+| `cargo test --workspace --all-targets`                             | **`WS_TEST_OK`, `WS_EXIT=0`, 24 `test result: ok` blocks, zero failures**                                                | same. Note the log also contains `error: no such command: nonexistent-subcommand` — that is an expected negative-path assertion inside a passing CLI test, not a failure; read the suite result, not the string |
+| `cargo test -p warshad --test gates_list --test security_identity` | **`gates_list` 3 passed / 0 failed**, **`security_identity` 5 passed / 0 failed**, `WIRETESTS_OK`, `RUST_VERIFY2_EXIT=0` | same — `gates_list.rs` boots the real daemon and reads `gates.list` over HTTP, so the gates read is now proven by a live round trip, not by a stub                                                              |
+| `check-wire-contract.mjs --self-test`                              | `7 checks fire, clean fixture is clean in both modes`                                                                    | `/tmp/wc-selftest.log`                                                                                                                                                                                          |
+| `check-wire-contract.mjs`                                          | `wire: 7 checks, 0 violations`, 17 items deferred in `KNOWN_*`                                                           | this session                                                                                                                                                                                                    |
+| `actionlint .github/workflows/ci.yml`                              | exit 0, no findings                                                                                                      | `~/.local/bin/actionlint` 1.7.12                                                                                                                                                                                |
+| gitleaks history                                                   | 30 commits, 5.89 MB, **no leaks**, exit 0                                                                                | after the config repair                                                                                                                                                                                         |
+| gitleaks positive control                                          | planted `sk-` caught, exit 1                                                                                             | same session                                                                                                                                                                                                    |
+| gitleaks on `bridge-io` (config excludes it)                       | scanned with default rules, **no leaks**, 14.76 MB                                                                       | same                                                                                                                                                                                                            |
+| Visual baseline refresh                                            | 835 / 1 (the 1 is the startup-flake class), 43.8m                                                                        | `/tmp/b4-refresh.log`                                                                                                                                                                                           |
+| Visual STRICT rerun                                                | **827 / 9, exit 1**, total diffs 4-20 px                                                                                 | `/tmp/b4-strict-rerun.log` → task #45                                                                                                                                                                           |
+| Pre-commit hygiene                                                 | `dist/`, `playwright-report/`, `bridge-io/`, `.env*`, `*.db`, `*.log` ignored; no key-ish paths in `git status`          | `git check-ignore -v` with real file paths                                                                                                                                                                      |
+| CI triggers                                                        | `push: branches: [main, dev]` (`ci.yml:5`) and `workflow_dispatch` (`ci.yml:8`) both confirmed                           | read this session                                                                                                                                                                                               |
 
 **Response-shape cross-check the wire gate cannot make**: `check-wire-contract.mjs` compares method names
 and param counts, not the JSON body, so a stub could answer the right method with the wrong shape. Compared
@@ -6201,9 +6290,9 @@ names, sizes and SHA-256. Until that run exists, #10 stays open.
 in question — a plain shell lacks `INCLUDE`, `LIB`, `PATH` and `WindowsSdkDir`, so a C compile that needs
 them dies on `fatal error C1083: Cannot open include file: 'stddef.h'`. Neither `release.yml`'s desktop
 build nor the new `desktop-bundle.yml` dot-sources it (`grep -rn windows-msvc-env .github/workflows/` → no
-hits). Two facts keep this a *candidate* rather than a verdict, and they are in the script's own text:
+hits). Two facts keep this a _candidate_ rather than a verdict, and they are in the script's own text:
 `cc-rs` discovers the VC toolchain itself, so `cargo build` normally works from a plain shell, and the
-failures the helper was written for were *hand-started* compiles. So the Windows leg may build fine. The
+failures the helper was written for were _hand-started_ compiles. So the Windows leg may build fine. The
 actionable part is cheaper than being right first: add an early diagnostic step on the Windows leg printing
 `where cl`, `where link`, `WindowsSdkDir`, and whether a VS install is present, so if the leg does fail it
 names the cause in the first minute instead of consuming the 60-minute timeout and leaving a 300-line
@@ -6267,14 +6356,14 @@ named-object forms alongside positional so the guard can't drift from the client
 `git status --short | grep '^??'` lists nine files, and **every one is referenced by at least one tracked
 file** — so leaving any out of the accepted-stage commit breaks something specific, not nothing:
 
-| Untracked file | Refs in tracked files | Consequence if omitted |
-| --- | --- | --- |
-| `scripts/ci/capture-fontconfig.conf` | 4 | `playwright.config.ts:56` resolves it and `assertReadableFontconfig` refuses to run → CI visual job dies before the first screenshot |
-| `scripts/check-wire-contract.mjs` | 4 | `ci.yml:125-128` "Wire contract" step fails on a missing script |
-| `scripts/check-engineering-policy.mjs` | 4 | `package.json` `policy` script and the AGENTS.md rule fail |
-| `ENGINEERING_POLICY.md` | 3 | AGENTS.md tells every agent to read a file that isn't there |
-| `crates/warshad/tests/gates_list.rs` | 1 | `cargo test -p warshad --test gates_list` — the live round-trip guard — doesn't exist |
-| `.github/workflows/desktop-bundle.yml` | 1 | the unsigned installer build (#10) has no workflow to dispatch |
+| Untracked file                                                      | Refs in tracked files         | Consequence if omitted                                                                                                                                                                                                |
+| ------------------------------------------------------------------- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scripts/ci/capture-fontconfig.conf`                                | 4                             | `playwright.config.ts:56` resolves it and `assertReadableFontconfig` refuses to run → CI visual job dies before the first screenshot                                                                                  |
+| `scripts/check-wire-contract.mjs`                                   | 4                             | `ci.yml:125-128` "Wire contract" step fails on a missing script                                                                                                                                                       |
+| `scripts/check-engineering-policy.mjs`                              | 4                             | `package.json` `policy` script and the AGENTS.md rule fail                                                                                                                                                            |
+| `ENGINEERING_POLICY.md`                                             | 3                             | AGENTS.md tells every agent to read a file that isn't there                                                                                                                                                           |
+| `crates/warshad/tests/gates_list.rs`                                | 1                             | `cargo test -p warshad --test gates_list` — the live round-trip guard — doesn't exist                                                                                                                                 |
+| `.github/workflows/desktop-bundle.yml`                              | 1                             | the unsigned installer build (#10) has no workflow to dispatch                                                                                                                                                        |
 | `docs/src/first-run.md`, `known-limitations.md`, `user-guide.ar.md` | via `docs/src/SUMMARY.md:6-8` | **fails silently**: mdBook exits 0 with a missing target either way (measured in the `/tmp/bookctl` control), so the book quietly loses its first-run guide, limitations page and Arabic guide with no error anywhere |
 
 The last row is the one that would have bitten hardest, and it's the same lesson as the dead gitleaks config
@@ -6288,7 +6377,7 @@ Verified in the tree, not from a lane's report:
 
 - `REQUIRE_NO_KNOWN_DRIFT = true` (`scripts/check-wire-contract.mjs:88`) and **both deferral lists empty**
   (`KNOWN_UNREGISTERED_METHODS = new Set([])`, `KNOWN_PARAM_DRIFT_METHODS = new Set([])`), with a comment
-  recording *why* they can be empty: `projects.create` sent `{ name }` where the daemon requires
+  recording _why_ they can be empty: `projects.create` sent `{ name }` where the daemon requires
   name + description + language, measured live as `-32602`, which is what blocked first-run project
   creation for #11.
 - `node scripts/check-wire-contract.mjs --self-test` → "7 checks fire, clean fixture is clean in both
@@ -6357,7 +6446,7 @@ owner's 2026-11-02 ruling:
    Never "fix" it by deleting the Windows leg or adding `continue-on-error`, which would hide every
    later Windows-specific regression including the MSVC build the installers need.
 2. **Windows-native gates that ARE required** and must be reported individually: `pnpm build/test/
-   typecheck/lint`, Playwright, mdBook, `cargo clippy` through the MSVC helper, and the Tauri installer
+typecheck/lint`, Playwright, mdBook, `cargo clippy` through the MSVC helper, and the Tauri installer
    bundle. A failure in these is real until shown otherwise.
 3. **The `typescript` job's `pnpm visual` step runs on x86_64 while the baselines were captured on this
    aarch64 host.** If it fails with small pixel diffs, that is the architecture question from
@@ -6396,13 +6485,13 @@ Arabic string, no product file was touched. Evidence in DECISIONS.md.
 
 **Everything that changes rendered pixels is now on disk, so the baseline refresh has a final tree.**
 Order of business was: land the fixes → re-derive → strict rerun → commit. Sequencing the refresh
-*before* these would have baked stale text into the baselines.
+_before_ these would have baked stale text into the baselines.
 
 - **Landed and verified by me, not by the lanes' word**: `pnpm typecheck` exit 0 · i18n `47 passed` ·
   remote `154 passed` · desktop `350 passed` · client `46 passed` · `wire: 7 checks, 0 violations` ·
   `policy: 8 checks, 0 failures` · `cargo test --workspace --all-targets` all green (`0 failed` across
   every binary) · `cargo fmt --all --check` exit 0.
-- **#54 closed the wire question with a mechanism**: jsonrpsee 0.26.1 aliases the snake_case *and*
+- **#54 closed the wire question with a mechanism**: jsonrpsee 0.26.1 aliases the snake_case _and_
   lowerCamelCase spelling of every Rust argument (`render_server.rs:398-416`), so recasing was never
   the break; **renaming** is. `getRun`'s `{ id }` and `pairDevice`'s `{ qrData }` were real `-32602`s.
   #58 is the follow-on the same measurement exposed: `pairing_data` must be the struct, not a string.
@@ -6410,7 +6499,7 @@ Order of business was: land the fixes → re-derive → strict rerun → commit.
   disk while its summary said it had only been reading. Lesson recorded: a lane's report is not the
   tree's state; `find -newermt` is. I verified the suites myself before believing any of it.
 - **#59 (CI) is only half done.** The clippy step at `ci.yml:58` was `cargo clippy -D warnings
-  --workspace --all-targets`, which cargo rejects outright — reproduced, exit 1, zero crates linted —
+--workspace --all-targets`, which cargo rejects outright — reproduced, exit 1, zero crates linted —
   and is now `cargo clippy --workspace --all-targets -- -D warnings`, exit 0. The gitleaks action, the
   actionlint action, the release `--target` and the permanently-green SBOM job are fixed too. The
   lane's own report leaves four more ways for CI to be green while proving nothing: two uploads in
@@ -6418,8 +6507,7 @@ Order of business was: land the fixes → re-derive → strict rerun → commit.
   `mv release/warsha*` swallows the daemon into `cli/` so `release/daemon/` is always empty behind a
   `|| true`; `:490` `pnpm install || true`; `desktop-bundle.yml:173` `|| true`. `deny.toml` does not
   exist anywhere, so both cargo-deny steps run on built-in defaults.
-- **Guard before re-deriving**: all 596 baselines copied aside (`/tmp/b4-guard/before-*`, 308 + 204 +
-  84) and the authoritative JSON report is byte-intact (`authoritative.json` and
+- **Guard before re-deriving**: all 596 baselines copied aside (`/tmp/b4-guard/before-*`, 308 + 204 + 84) and the authoritative JSON report is byte-intact (`authoritative.json` and
   `/tmp/strict-rerun/visual-playwright-fullrun.json`, both 1101750 bytes) — after a lane reported
   cleaning `/tmp` with `rm /tmp/*.json`, which is why the guard lives in subdirectories.
 - **Known open item created by the refresh itself**: `flows.spec.ts:81` (mode-group arrow/Enter focus
@@ -6432,7 +6520,7 @@ Order of business was: land the fixes → re-derive → strict rerun → commit.
 - **Re-derivation ran on the settled tree**: 836 cases, `--update-snapshots`, `--workers=1`,
   `--reporter=list` → `834 passed / 2 failed (41.3m)`, and **284 of 596 baselines changed**. The two
   failures were `flows.spec.ts:81` in ar at both viewports with `Error: Target page, context or
-  browser has been closed` — not an assertion. Run alone on an idle machine it passes in 10.9s, so the
+browser has been closed` — not an assertion. Run alone on an idle machine it passes in 10.9s, so the
   mechanism is browser death under the load I created by running three lanes beside the capture. That
   also **refutes my own hypothesis** that #57's Arabic relabelling broke the test's locator; the
   wrapping in `moveGroupFocus` (`packages/ui/src/compounds/internal.ts:213-234`) makes the test's
@@ -6497,7 +6585,7 @@ what a random per-capture difference looks like, and what a stale baseline or a 
   3. leave the strict contract and accept that the visual job is flaky on this host class, which is
      what CI will show on its first real run.
 - **The stage's other gates at commit time, all run by me on the settled tree**: `cargo fmt --all
-  --check` 0 · `cargo test --workspace --all-targets` 0 failed · clippy clean after the `ci.yml:58`
+--check` 0 · `cargo test --workspace --all-targets` 0 failed · clippy clean after the `ci.yml:58`
   argument-order fix · `pnpm typecheck` 0 · client 46 · i18n 47 · remote 154 · desktop 350 ·
   `wire: 8 checks, 0 violations` (+ `--self-test` green) · `policy: 8 checks, 0 failures` ·
   `mdbook build` 0 warnings · `mdbook test` 0 · `gitleaks detect` 30 commits, no leaks.
@@ -6510,7 +6598,7 @@ what a random per-capture difference looks like, and what a stale baseline or a 
 
 - **Committed and pushed**: `191d7c5` on `dev`, 355 files, +8,517/−901, pushed
   `68dc78d..191d7c5 dev -> dev`. Pre-flight as the owner's rule requires: `gitleaks detect --source .
-  --no-banner --redact` → `30 commits scanned`, **no leaks**; staged-file review for
+--no-banner --redact` → `30 commits scanned`, **no leaks**; staged-file review for
   `.env`/secret/key/token/credential paths → none; `node_modules`/`dist`/`target`/`bridge-io` staged →
   zero. The 10 previously untracked required files (both gate scripts, the fontconfig pin, the bundle
   workflow, `ENGINEERING_POLICY.md`, `tsconfig.e2e.json`, `gates_list.rs`, the three new doc pages) are
@@ -6525,11 +6613,11 @@ what a random per-capture difference looks like, and what a stale baseline or a 
   platform, not only on this host. Four jobs failed at their first meaningful step: **Actionlint →
   "Run actionlint"**, **TypeScript → "Setup pnpm"**, **Rust (macos-latest) → "Run cargo-deny"**,
   **CodeQL (javascript-typescript) → "Build (TypeScript)"**. Rust windows/ubuntu legs were still
-  running when I took this, and GitHub refuses log downloads until a run completes, so the *reasons* are
+  running when I took this, and GitHub refuses log downloads until a run completes, so the _reasons_ are
   pending, not unknown-forever. Triage rules already decided before this event: a Windows `cargo test`
   failure is environmental and is never silenced by deleting the leg or adding `continue-on-error`;
   x86_64-vs-aarch64 pixel differences are the architecture question #41 was about; a job that fails at
-  *setup* (like `Setup pnpm`) is an infrastructure defect, not a product signal; and a missing commit
+  _setup_ (like `Setup pnpm`) is an infrastructure defect, not a product signal; and a missing commit
   would have been my defect.
 - **#10 installers are blocked by a platform rule, not by a code defect, and I am not going to route
   around it by pushing to `main`.** `.github/workflows/desktop-bundle.yml` is committed and clean under
@@ -6559,7 +6647,7 @@ hypotheses left in this triage.
   never run in CI. Highest-impact item, and the kind of failure that looks like "CI is red" while the
   real statement is "CI is dark".
 - **`cargo-deny` fails for a reason that is not about our dependencies at all**: macOS says `Container
-  action is only supported on Linux`, and ubuntu's container image is too old to parse our `Cargo.lock`
+action is only supported on Linux`, and ubuntu's container image is too old to parse our `Cargo.lock`
   (`failed to parse lock file at: /github/workspace/Cargo.lock`). Both are properties of using a
   container action, so the fix is to install cargo-deny per OS and run it as a shell step. Separately,
   **`deny.toml` does not exist**, so even a working cargo-deny checks against built-in defaults (#63).
@@ -6641,7 +6729,7 @@ hypotheses left in this triage.
   `بوّابة واحدة بانتظارك` **twice** — the queue-panel header and the glance ledger row emitted the same
   key with the same count. The header copy was removed; the ledger row was kept because two other tests
   broke when it was removed first, proving it is also the only source of the count-0 wording. That is
-  the right call: a duplicated claim is a bug, a duplicated *string* is not.
+  the right call: a duplicated claim is a bug, a duplicated _string_ is not.
 - **#73 changed the architecture, not just a line.** Rather than wiring a publisher to the existing
   bus, the lane moved the bus into the store: `Store::append_event` publishes after the INSERT commits,
   `DaemonState.event_tx` was deleted, and `/events` now subscribes through `store.subscribe_events()`.
@@ -6708,7 +6796,7 @@ hypotheses left in this triage.
   device, so they carry the measured state rather than this session's context.
 - **Three references were corrected against the tree before committing**, all from
   sub-agent reports I should not have passed through: `devices.pair` is an
-  **Owner policy** with `Pairing` as its *rate* tier (`crates/warshad/src/auth.rs:360`),
+  **Owner policy** with `Pairing` as its _rate_ tier (`crates/warshad/src/auth.rs:360`),
   not "Owner-tier" — conflating the two axes is exactly what #74 was closed for;
   the null signing knobs are `tauri.conf.json:61` and `:65`, not `:61,64`; and the
   wire gap is 62 `#[method]` declarations against 30 stubbed in
@@ -6795,6 +6883,7 @@ hypotheses left in this triage.
   hardware pairing, GitHub branch protection, and `dev` → `main` merge.
 
 ## Documentation run — 2026-11-05 — GAP 4 (doc correctness) + GAP 5 (deferred device verification) — docs only, nothing committed
+
 - **GAP 4 — corrected docs to the shipped truth** (files changed:
   `docs/src/known-limitations.md`, `docs/src/security.md`, `docs/src/quickstart.md`,
   `docs/launch/provider-auto-update.md`, `docs/src/changelog.md` (new "Removed" entry superseding the
@@ -6840,9 +6929,10 @@ hypotheses left in this triage.
   `DECISIONS.md` entry. Final `mdbook build` + `mdbook test`: exit 0.
 
 ## 2026-11-08 — P0: Desktop black screen + client wire contract decoding (Coder subagent 1)
+
 - **Root cause pinned**: `@warsha/client` returned `warshad`'s snake_case JSON raw, so screens read
   `undefined` for `createdAt`/`stage`/`lastSeen`; `new Date(undefined)` threw `RangeError: Invalid time
-  value` and `stage.startsWith` threw on a non-string during render — uncaught, the window went black.
+value` and `stage.startsWith` threw on a non-string during render — uncaught, the window went black.
 - **Client**: added exported `decodeProjectSummary`/`decodeRunSummary`/`decodeDeviceSummary` (accepts the
   daemon's snake_case and the e2e harness's camelCase; never emits `undefined` fields; `last_seen` falls
   back to `pairedAt` then now) and wired them into `listProjects`/`createProject`/`getProject`,
@@ -6861,6 +6951,7 @@ hypotheses left in this triage.
   changed files. Nothing committed or pushed.
 
 ## 2026-11-13 — dev repair after f474776: lib.rs restored from f0920e9, CSP delta re-applied
+
 - **Why**: `f474776` on `warsha-dev/dev` is tree-identical to `467594a` (tree `3244827`), whose
   `crates/warshad/src/lib.rs` is a main-based copy (8997 lines) that silently reverted 29 dev commits
   to that file (12197 lines at `f0920e9`). `cargo check -p warshad` on `f474776` exits 101 with 22
@@ -6894,92 +6985,112 @@ hypotheses left in this triage.
   not pushed.
 
 ## Run 2026-11-14 — R-BRIDGE-B1 DONE: run-scoped assistant (G1), PM-verified
+
 - **Delivered** (Coder, branch `zl-b1-assistant`, 5 commits `a87e19a`…`0cbf976`, merged as `2a21b02`): `agentTurn(runId, input)` → `agent.turn_run{run_id, input}` (runId required); `approveAgentMode`/`returnAgentToPlanMode`/`agentState` take optional runId, sent only when given; `bench.ts:23` binds `agent.turn_run`; bench handlers pass `effectiveRunId`; `useAgent(runId)` reloads on run change; harness `agent.turn_run` stub + real `agent.turn` refusal text; DAEMON.md rows for the five methods from the trait signatures.
 - **Discrimination** (evidence `target/discrimination/` in the B1 worktree): new client/bench/useAgent tests FAIL on base `728b4b0` (`agent.turn` vs `agent.turn_run`; spy called with empty args), PASS on new code.
 - **PM gate runs**: client 149/0; desktop bench+useAgent+actions 47/0 (my runs in the worktree); warshad e2_wiring 7/7 (daemon isolation re-run); wire 11/0; arch 5/0; lint + typecheck clean. `grep 'agent.turn'` clean outside refusal tests. T1–T8 quoted not re-run (no Rust/wire).
 - **Merge note**: the shared checkout held 7 byte-identical leaked copies of B1 desktop files; verified `MATCHES-BRANCH` per file, discarded with `git checkout --`, then `--no-ff` merged (B2 spec commit sat between base and merge). Tree clean after.
 
 ## Run 2026-11-14 — R-BRIDGE-B2 DONE: Gate C evidence card (G2), PM-verified
+
 - **Delivered** (Coder, 4 commits `c35ca0c`…`d56f17a` direct on the branch): client `gateEvidence(runId, program, args)` with explicit `GateEvidence` decoder (every field, mistyped/missing = error); `EvidenceCard.tsx` (457) + test (532, 27 tests incl. all six states + zero-implicit-calls + run-switch reset); wired into ChangesTab + bench page with the desktop-only approve guard labelled OD-B3; registry `bench.evidence.collect` + `bench.evidence.file.open`; ar+en strings; harness stub shaped like the real struct; e2e; DAEMON.md row with the Owner/Spend note.
 - **Process note**: first worker faulted (transport) after writing the implementation; completion worker verified/kept the partial work (EvidenceCard runId-scoping improvement recorded), ran gates, committed. Commits landed directly on `repair/dev-csp-f474776` rather than a `zl-b2-*` branch — accepted, lineage is correct.
 - **Discrimination**: evidence `target/b2-evidence/` (lint/typecheck/test/build logs); new tests fail on base `1a785c7`, pass on new code (worker claim, logs on disk).
 - **PM gate runs**: client 159/159; desktop 759/759 (incl. 27 EvidenceCard); full `pnpm -r test` 1592 total (159+22+58+373+221+759... recorded per-package above); lint + typecheck clean; build done (chunk-size warning only). T1–T8 quoted not re-run (no Rust/wire).
 
 ## Run 2026-11-14 — R-BRIDGE-B3a DONE + M1 fixed, B3b DONE: MCP approval end-to-end (G3), PM-verified
+
 - **B3a delivered** (Coder, `6c8d108`+`318ea44`+report `41f3d18`, merged `a69f1e9`): `McpApprovals` registry (run/server/tool/role + exact-args binding, 600s grant TTL, 32/run pending cap, in-memory only), `mcp.approvals.list` (Owner/Standard) + `mcp.approvals.allow_once` (Owner/Spend), allow-always/deny via existing `mcp.permissions.set`, `ToolError::{McpDenied,McpApprovalRequired}` byte-identical strings, daemon-built redacted bounded summary, CLI-free question text, audit event. T1–T11 + full command list green (pipeline 26, warshad 12, workspace 1038, wire 11/0, policy 8/0, arch 5/0). Discrimination: 3 patches (take-deleted→T2 fails, deny-below-grant→T1 fails, redaction-removed→T7 fails).
 - **Independent Reviewer verdict: NO OPEN HIGH — B3b unblocked.** 1 MEDIUM (M1: unresolved pendings lack TTL, `runs.advance` doesn't purge — residue unbounded per-process) + 3 LOWs (L1 exact-match secret keys, L2 T7 log-filter scope, L3 double-click double-event) + L4 process (two 1-line e2e literals outside allowed list — PM-ratified, compile-forced, test-only).
 - **M1 fixed** (correction, `5aa8c87`, merged `b09f4d0`): terminal `runs.advance` purges the run; `PENDING_TTL=24h` sweeps stale unresolved pendings on every registry path; T12 proves both (+2 discrimination artifacts). My runs: pipeline mcp_approval 26/26, warshad mcp_approval 12/12, wire 11/0, arch 5/0. L1/L2/L3 → B3b/B5 follow-ups.
 - **B3b delivered** (Coder, 5 commits `f5897b7`…`3fb2c37`, merged `840d04f`): 4 client methods + strict decoders (13 tests); Inbox `kind` union + MCP items with allow-once/always/deny + literal "redacted preview" label (ar «معاينة منقّحة») + list-failure banner; Settings `McpPermissionsSection` row-list + registration; registry entries; 11+11 ar/en keys; harness stubs; e2e (allow-once + revoke). My runs: client 172/172, inbox+actions 28/28, i18n 58/58, wire 11/0 with new rows, lint 0 errors, typecheck clean. Discrimination: 5 artifacts (client/inbox/settings fail on base, W9×4 without stubs→0 with). Deviations ratified: Settings.test + settings.spec nav counts 12→13 (section registered), revoke e2e in inbox.spec, no capability flag, settings.css untouched, `inbox.mcp.list_failed` banner. Known limits: no polling (mount/reload freshness), @visual needs baselines, 1 pre-existing inbox e2e failure also fails on base.
 
 ## Run 2026-11-14 — R-BRIDGE-B4a DONE: v3 is the default (G4), PM-verified
+
 - **B4a delivered** (Coder, `21bfc78`+`a66fdef`+report+prettier, merged `354dd8e`): clean start → v3, `get_config` failure → v3, `?ui=v2` → v2, stored v2 → v2 (`?ui=v3` kept); 4 start-condition tests 4/4 pass, 4/4 fail on base (discrimination in /tmp/zl-b4a-base); before/after captures under `target/captures/b4a/` (two v2 images byte-identical); UI.md + UI_V3_PLAN.md cutover updated. My gate spot-checks: client 172, desktop unit green.
 - **Blocked-then-fixed**: flipped code without a harness pin took the v2 suite 233/560 → 0/793 (every case booted v3). PM-authorized one-file scope expansion: harness `openScreen` gains `ui?: 'v2'|'v3'` (`withUiSearch`, default `v2`; v3 helper opens `?ui=v3` itself, untouched) — commit `21734f4`. With the pin: v2 suite back to exact base parity **233 passed / 560 failed** (residual = host pixel/font drift, pre-existing), v3 `smoke.spec.ts` 14/14. T9 exit 0 (desktop 772); T10 exit 1 identical on base (3 action-gate + 1 i18n-gate violations, pre-existing); T1–T8 quoted from B3a report. U3/U6 surfaces already in base (branch tips are ancestors of `4986000`); non-baseline failures reproduce on base, filed as repair items, not redesigned.
 
 ## Run 2026-11-14 — R-BRIDGE-B5 DONE: per-run preview (G5), PM-verified
+
 - **B5 delivered** (Coder, `e022ed0`+`663cb0b`+docs+report `9daf51c`, merged `9e9a276`): `PreviewEntry.run_id`, `RunLiveness` injection (`StoreRunLiveness`), `start(project, command, Option<run>)`, `stop_run -> usize` (infallible by type), run-scoped `status`, lazy `sweep_dead`, `PreviewOwnedByRun` → -32000; both close hooks (terminal advance + cancel) beside the B3a-M1 lines, unrefactored; `gates.evidence` read-only pass-through; `live_run_id` = newest unfinished run (wire frozen, OD-B2). T1–T6 (T5 in two halves: pipeline poisoned + daemon already-down close) + 3 discrimination artifacts.
 - **My verification on merged tree**: full `cargo test --workspace --all-targets` 39 targets, 0 failures; pipeline process_spawn 51/51; preview 6/6; fmt clean; clippy clean; wire 11/0; arch 5/0; policy 8/0.
 - **PM self-review** (Reviewer lane dispatch refused — stale lane id): no HIGH. stop_run failure structurally impossible; two-live-runs residual bounded by lazy sweep (LOW); list() staleness Owner-only, no secrets (LOW); gates.evidence read-only confirmed; run ids in error message are ULIDs, Owner-only (not a leak); M1 lines intact.
 
 ## Run 2026-11-14 — P-H1 A5 salvaged+merged; A3 re-dispatched
+
 - **A5 (events-socket)**: worker settled with no report/commit but left move-shaped residue (lib.rs −339/+4, events.rs +350/−1). PM-verified salvage: fmt OK, clippy `-D warnings` clean, warshad 298/0 (unchanged count), api→events edge resolves via intact `pub use events::{... RunStreamSync ...}`. Committed as `d560c35`. lib.rs now 14,729 lines (was 16,072 at P1 start).
 - **A3 (auth-layer)**: first attempt produced nothing (no commit, no residue) → concluded needs-attention, re-dispatched from `d560c35` with must-commit rule (red commit + named failing gate beats missing work).
 
 ## Run 2026-11-14 — P-H1 A3 merged (auth-layer)
+
 - **A3** (worker `80d9cc5`, merged clean — no conflicts): auth-layer 225 lines → auth.rs:1522–1746 (14 pub(crate) seam insertions incl. 3 struct fields the map didn't count; rest byte-identical). Fast gates on merged tree: fmt OK, clippy `-D warnings` clean, warshad 298/0. lib.rs now 14,512 lines. Forward notes: auth.rs takes `use super::DaemonState` until A4 lands (then 1-line path fix); A5's orphan `/end event stream` banner left as debris for a later step.
 
 ## Run 2026-11-14 — P-H1 A6+A7 merged; wire checker fixed (PM tooling seam)
+
 - **A6 (http)**: worker `3d15b01` (lib.rs −647/+6, http.rs +663, 4 pub(crate), public surface 70→70), merged clean as `b7460ff`.
 - **A7 (runtime+F5)**: worker `30f3d67` (lib.rs +18/−422, runtime.rs +452, `backend_kit` moved as own `impl WarshaRpc`, F5 grep-proven: runtime names exactly one rpc-core item, the `WarshaRpc` type). Merge conflict with A6 (adjacent-region boundary) resolved by PM "keep neither" (item-verified: HEAD side 17 runtime fns → runtime.rs, A7 side 7 http fns → http.rs) + 1 orphan-`}` removal + fmt reflow.
 - **Fast gates on merged tree**: fmt OK, clippy `-D warnings` clean, warshad 298/0. lib.rs now 13,467 lines (was 14,512).
 - **Wire checker (PM tooling fix, inside merge commit `0c92d10`)**: `DAEMON_FILE` → source list (`api.rs` for the trait, `http.rs` for `REMOTE_CSP`, `lib.rs` fallback); self-test 11 fire + real 11/0. Follow-up empty marker commit `2966ab1` records the absorption (no tree change).
 
 ## Run 2026-11-14 — P-H1 A4 merged (state, incl. DaemonState)
+
 - **A4** (worker `fb6ab2b`, merged clean): `AppState`/`DaemonState`/`paired_device_is_active`/`McpPermissionRow`/`McpPermissionsReply` (275 lines) → state.rs (3 pub(crate) seams: fn + 2 methods — privacy-by-descent miss, same class expected in A8); auth.rs 1-line `DaemonState` path fix; api/events/http paths resolve via facade (all-targets check 0).
 - Fast gates on merged tree: fmt OK, clippy clean, warshad 298/0. lib.rs now 13,196 lines. A8 (rpc-core) unblocked — `state` was its last prerequisite.
 
 ## Run 2026-11-14 — P-H1 A8 merged (rpc-core hub)
+
 - **A8** (worker `32d749a`, merged clean): rpc-core 767 lines → rpc/mod.rs (byte-identical body, 738/738; 31 pub(crate) = 7 items + 21 methods + 3 fields — fields are the privacy-by-descent gap, map counted 0); runtime.rs +9 (A7-orphaned doc restored); `now_epoch_secs` reachable via facade.
 - Full gates on merged tree: fmt OK, clippy `-D warnings` clean, warshad 298/0, wire 11/0. lib.rs now 12,464 lines. Stage A hub done — remaining: A0 (helpers), A9 (startup), A10 (tests).
 
 ## Run 2026-11-14 — P-H1 A9 merged (startup, last code move); A0 closed as stay
+
 - **A9** (worker `e12277a`, merged clean): startup 878 lines/19 items → startup.rs (byte-identical + 3 pub(crate) seams; `start_daemon` was missing from map inventory); facade keeps `warshad::start_daemon/run_daemon/load_or_create_config` + all 7 out-edges resolving (all-targets check 0).
 - **Test seam (PM, A1 precedent)**: `the_startup_listener_lines_are_written_once` scans `include_str!("lib.rs")` for listener owners — now scans lib.rs+startup.rs; path-only, assertion unchanged. Full tree: fmt OK, clippy clean, warshad 298/0, wire 11/0. lib.rs now 11,606 lines.
 - **A0 closed**: `ph1-a0-helpers` (e6b1adc) REJECTED per frozen map ("stays as facade leaf consts"); A8's `StoreRunLiveness`-stays ruling + zero external const readers. Logged in DECISIONS.md. No code change.
 - Stage A remaining: A10 (tests, 8,182 lines).
 
 ## Run 2026-11-14 — P-H1 A10 merged: Stage A COMPLETE
+
 - **A10** (worker `b40f40a`, merged clean): tests region → 10 files in `src/tests/` (`mod.rs` body + 9 modules declared at crate root with `#[path]`, so `use super::*` still means crate root and names unchanged); `include_str!` seams `../lib.rs`/`../startup.rs`/`../api.rs` (A1 precedent, assertions unchanged); first `#[cfg(test)]` still after last production line.
 - Test-set proof: `--list` diff 303=303, one harness-path segment only; 298/0/5. Merged tree: fmt OK, clippy clean, warshad 298/0, wire 11/0. **lib.rs now 3,178 lines (was 16,072)**.
 - **P-H1 Stage A done**: all 9 code regions + tests extracted (A0 closed as stay). Remaining: P-H1 Stage B (rpc/ dir fill, needs F1 P-H1-RPC packet), then R-UI/R-EXT.
 
 ## Run 2026-11-15 — R-UI-1 merged (v3 floor repair)
+
 - **R-UI-1** (branch `zl-rui1-floor`, 9 commits, merged clean as `d0847ae`): all 7 packet items fixed with discrimination artifacts; gates on merged tree: actions 151/151/0, i18n 746/0, ds-v3 0, E1 283/0 (worker-measured; PM re-ran the three static gates, all 0).
 - Prettier note: base tree has pre-existing wrap drift — worker kept added lines clean without reformatting out-of-scope files.
 
 ## Run 2026-11-15 — R-UI-2 merged (run-ending controls reachable)
+
 - **R-UI-2** (branch `zl-rui2-run-controls`, 6 commits, merged clean): `HealthCapabilities.run_controls` additive (`#[serde(default)]`), honest probe (store run-version column + daemon), client decodes, UI single `canEndRuns`, both window back doors removed, e2e via health fixture + absent-controls cases. `lib.rs` untouched; wire surface additive-only.
 - Gates on merged tree (PM): fmt OK, clippy workspace clean, warshad 302/0 (new probe tests included), wire 11/0. Worker evidence: workspace 1055/0, pnpm lint/typecheck/test green, Playwright non-visual 286/0, actions/i18n 0, discrimination artifacts captured.
 
 ## Run 2026-11-15 — R-UI-3 merged (D3/D2/D1 polish)
+
 - **R-UI-3** (branch `zl-rui3-polish`, 10 commits, merged clean as `4550721`): rem+unitless type scale (body ≥1.6), prop-less `dir="auto"`, defined keyframes honoring reduce, 2 Web Audio cues OFF-by-default in localStorage, press/Sheet/Stepper motion. Gates on merged tree (PM): actions 152/152/0, i18n 748/0, ds-v3 0, contrast all-ok. Worker evidence: ui 383/desktop 802, e2e non-visual 291/0, discrimination artifacts.
 - Known gaps (packet-anticipated, reported not papered): G1 cues don't fire for idle-window arrivals (needs subscription or Rust `run_finished` kind — R-EXT daemon-side candidate); G2 not audibly verified.
 
 ## Run 2026-11-15 — R-UI-4 Part B merged (remote harness CSP repair); Part A stays STOPPED
+
 - **R-UI-4B** (branch `zl-rui4b-csp`, 3 commits, merged clean): B-1 harness → 8765 (flows 7/7, CSP enforced) + B-2 harness-only `bypassCSP` (axe inline injection is outside allowed files; product CSP unchanged, hash-identical). 84 visual fails are pixel/font only (host drift, allowed class) — 0 CSP messages.
 - **Part A STOPPED** (no capture host): logged 2026-11-15. Unblock = CI billing + capture workflow, WSL host, or canary-passing pinned host.
 
 ## Run 2026-11-15 — R-UI-5 merged (T3 RED on product finding)
+
 - **R-UI-5** (branch `zl-rui5-smoke`, 6 commits, merged clean): smoke script + VERIFY §3.4 + report. S1 boot FAILS on both AVDs (asset-base defect, machine evidence in target/, gitignored); S2–S5 not reached per STOP rule; logcat clean (no crash/token leak). No product files touched (diff vs base empty for apps/crates/packages). AVD safety kept (Athar never wiped); foreign warshad left untouched.
 - Follow-ups: (1) relative-base fix packet for apps/remote+mobile; (2) gradlew/Gradle-9 build-rot fix. T2 deferred.
 
 ## Run 2026-11-15 — R-EXT-1 merged (X4 Connections)
+
 - **R-EXT-1** (branch `zl-rext1-connections`, 7 commits, merged clean as `507f21c`): mcpList/mcpConnect/mcpDisconnect wrappers + decoders (string+{error} McpStatus), Connections Settings section (6 actions, 80 catalog keys), harness stubs, 7 e2e cases (298/0 non-visual), DAEMON rows. PM-verified on merged tree: wire 11/0, actions 158/158/0, i18n 786/0. No Rust changed. (@visual for the new section stays ungated — non-capture host.)
 
 ## Run 2026-11-15 — R-UI-6 + R-EXT-2 merged
+
 - **R-UI-6** (`zl-rui6-filebase`, 4 commits, merged as `213f541`): relative `./` classic IIFE shell + fragment-only routing under `file:` + verify-pwa file:// guards. S1 PASS both AVDs (plate renders, 0 CORS, 0 crash/leak). S2 fails both = predicted `Origin: null` 403 wall → R-UI-7's owner decision (allow null vs WebViewAssetLoader). Remote bench.visual 84/7 identical pre-existing on clean base (font drift, non-capture host).
 - **R-EXT-2** (`zl-rext2-agent-tool`, 9 commits, merged as `3a12d5a`; DECISIONS conflict resolved keeping both entries): `EventKind::RunFinished` (CAS-guarded, once per terminal transition, downgrade hazard logged) + pipeline observer trait + daemon recorder + bench Terminal/project UI + decoder/i18n/harness/e2e. Worker gates: cargo 1068/0, TS 1696, e2e v3 non-visual 301/0, wire 11/0, arch 5/0, policy 8/0, actions/i18n/contrast/ds-v3 0. PM-verified on merged tree: fmt 0, clippy 0, wire 11/0.
 
 ## Run 2026-11-15 — R-UI-7: the shell's real origin admitted (daemon green, S2 still RED on both AVDs)
+
 - **R-UI-7** (branch `zl-rui7-appassets`, 3 commits, report `docs/zadloop/packets/R-UI-7-report.md`): `APP_ORIGINS` + `https://appassets.androidplatform.net` (exact match; `null` still never admitted), new `cors_origins()` union applied to **both** CORS layers (`http.rs` 18765 and `startup.rs` 18766 — Step 2 measured that without it the preflight carries no `Access-Control-Allow-Origin`), framework `shouldInterceptRequest` in `MainActivity` serving `assets/public/` at that origin with `START_PAGE` + `setAllowFileAccess(false)` (no androidx), `ShellRouter` hash-routes the new origin. 8 files, all on the packet's allowed list.
 - Gates on the final tree: fmt 0, clippy `-D warnings` 0, `cargo test --workspace --all-targets` 0 (39 `ok` blocks, 0 failed; `origin_guard` 7/7 incl. T1–T4), remote 228/17 files, remote typecheck/lint 0, build 0 + `check:pwa` 19/19, wire 11/0 (CSP copies untouched), ds-v3 0, policy 8/0, `pnpm lint` 0 (1 pre-existing warning), `pnpm typecheck` 0. Remote e2e stays at the known `OD1` base result (84 visual diffs / 7 passed), stated not claimed.
 - **Device: S1 PASS on both AVDs** (page served from `https://appassets.androidplatform.net/index.html`, plate renders, **0** `blocked by CORS`, **0** mixed-content refusals → the packet's https→loopback open risk did **not** fire; no CSP edit needed), crashes 0, tokenLeaks 0. **S2 RED on both** (`state=unpaired` after 15 s against a correct deep link); S3–S5 not reached (the script stops at the pairing step by its own design).
@@ -6987,62 +7098,78 @@ hypotheses left in this triage.
 - Findings recorded, not repaired: service-worker script fetch bypasses the interceptor (registration fails; `offline.ts` treats it as an outcome), `data:` fonts still refused by `font-src 'self'` (pre-existing), emulator Keystore.
 
 ## Run 2026-11-15 — R-EXT-3 + R-UI-7 merged
+
 - **R-EXT-3** (`zl-rext3-registry`, 3 commits, merged as `f8c1cb7`): `RegistryHttp` seam + pure mapper in pipeline, reqwest impl in warshad (promoted from dev-deps, workspace pin, no lock change). D-EXT-1 resolved; licence Unknown; offline=CatalogUnavailable. Worker gates: workspace 1089/0, wire/arch/policy/deny 0. PM-verified: auth.rs untouched (0-line diff vs packet base).
 - **R-UI-7** (`zl-rui7-appassets`, 3 commits, merged as `e724f53`; DECISIONS conflict resolved keeping both entries): app-assets origin admitted by exact string in APP_ORIGINS + CORS union on both listeners; framework-only interceptor, no androidx; ShellRouter hash for the origin; CSP untouched. S1 green both AVDs (0 CORS, 0 mixed-content). S2 STILL RED (bridge/JavascriptInterface boundary, not the origin decision) → R-UI-7b candidate logged. PM-verified on merged tree: fmt 0, wire 11/0.
 
 ## Run 2026-11-15 — R-EXT-4 merged (X3 Streamable HTTP)
+
 - **R-EXT-4** (`zl-rext4-http`, 6 commits, merged clean as `94c68ad`): `McpHttpClient` trait + pure SSE decoder in pipeline; `ReqwestMcpHttp` (policy-bounded redirects, session headers, 404-expiry, best-effort DELETE) injected at startup; Connections form gains HTTP option. Wire unchanged (11/0). No new crate/lock, no credential, no OAuth, WebSocket stays recorded. Report deviation: one out-of-allowance test move (`security_identity.rs` recorded-http assertion → transport-nothing-dials) + named pre-existing flake (`k5_repair` tracing test, red at base too). Lane faulted at settle on a model outage with a CLEAN tree — PM merged and verified: fmt 0, wire 11/0, pipeline+warshad 25 suites ok / 0 failed.
 - **R-UI-6b HELD RED (unmerged branch `zl-rui6b-gradlew`)**: mode bit + providers.exec land, but clean-state `./gradlew assembleDebug` exits 0 with an EMPTY web-asset APK (Sync NO-SOURCE skips doFirst) — packet-shape gap, needs follow-up packet (separate build task + dependsOn). NOT merged per green-tree rule.
 
 ## Run 2026-11-15 — packets frozen: R-UI-6c, R-EXT-5; R-EXT-4 red gates fixed
+
 - **R-UI-6c packet** (`a92c63c`): closes the R-UI-6b NO-SOURCE gap — separate `buildRemoteWebAssets` task + `dependsOn` from the `Sync`; implementer branches `zl-rui6c-sync` from `zl-rui6b-gradlew` (`b176558`) and merges repair tip in (conflict-free per packet).
 - **R-EXT-5 packet** (`c1822f6`): X9 narrowed to X9a — four read-only navigation tools behind an off-by-default device switch (desktop v3 only); start-run/follow-up, read-status, remote PWA folded into design-first X9b. Packet notes two red gates on its base (below) as report-don't-fix for the implementer.
 - **Red-gate fix** (`4a69888`, PM-owned): R-EXT-4 left actions-gate A1 (`ConnectionsSection.tsx:542` transport-picker `<button>` with no `data-action`) and i18n-gate I4 (2 Latin tokens in Arabic Connections keys) red. Fixed by registering `settings.connections.transport.pick` (effect `state`, picker is a form field not an RPC) + e2e `act()` coverage in the stdio add case, and rewording the two Arabic strings without Latin tokens (`مشفّر/غير مشفّر` for https/http). Verified: actions 159/159/0, i18n 797/0, ConnectionsSection 17/17, i18n 58/58, lint 0 errors (1 pre-existing warning), typecheck clean.
 
 ## Run 2026-11-15 — R-UI-6b + R-UI-6c merged (Android build proven)
+
 - **R-UI-6b + R-UI-6c** (lanes `zl-rui6b-gradlew` + `zl-rui6c-sync`, merged as `6207b0b` + `5809368`): gradlew mode bit, providers.exec rewrite, separate `buildRemoteWebAssets` task + `dependsOn`. PM-verified on the lane tree from clean state: `./gradlew assembleDebug --no-daemon` exit 0, task order build→sync bare, APK 1,845,230 B with 54 `assets/public/` entries and 0 `.map`. Report claims (sha256 `94305a4d…`, byte-identical `diff -r` vs dist, G4 negatives, G5 warm, S1 both AVDs) taken from the lane report; PM re-ran G2/G3 only. S2 still R-UI-7's; VERIFY.md:172 + mobile README:53 wording now stale (follow-up).
 
 ## Run 2026-11-15 — R-EXT-5 merged (X9a WebMCP) + E2 order-flake fixed
+
 - **R-EXT-5** (lane `zl-rext5-webmcp`, merged as `327a6e6`): four read-only navigation tools behind off-by-default device switch, Settings › General row, registry entry, 3 ar+en keys, SECURITY paragraph, D-EXT5. PM-verified pre-merge on lane tree: actions 160/160/0, i18n 800/0, wire 11/0, ds-v3 0, desktop 854/0, webmcp solo 4/4. PM correction on merge: E2's second-call delta asserted total RPC count — order-sensitive (26 vs 28 after connections.spec; settled Inbox ambient reads). Narrowed to forbidden-method set; proven by paired run 11/11. Full non-visual suite re-run pending (was 304/1 with the old assertion).
 
 ## Run 2026-11-15 — v3 non-visual 305/305 on merged tree
+
 - Full `apps/desktop/e2e/v3 --grep-invert @visual`: **305 passed / 0 failed** (4.4m) on `34956ce` + E2 fix — confirms the forbidden-method narrowing holds across the suite, not just the paired order.
 - R-EXT-6 packet dispatch faulted twice on planner-lane rate limit (503/429, no worker started, nothing committed). Retry pending.
 
 ## Run 2026-11-15 — R-EXT-6 merged (RC1: dead channel + snow deleted)
+
 - **R-EXT-6** (lane `zl-rext6-remote`, merged as `063b13b`): deleted `EncryptedChannel` + test (lib.rs −138), dropped `snow` from workspace + crate manifests, `Cargo.lock` pruned (snow + orphaned subtree). PM-verified on merged tree: `EncryptedChannel` grep 0, `snow` grep 0, fmt 0, clippy 0, remote+relay 59/0, deny clean, policy 8/0, wire 11/0.
 - **PM-owned scope exception** (named per delegate rules): the packet's allowed-files omitted `crates/warsha-remote/README.md`, which still named the deleted type (2 hits, already stale vs the file's own l.48). The lane correctly stopped instead of editing. PM applied the lane report's two proposed doc hunks verbatim, then reworded the historical mention so the acceptance grep prints nothing. No code touched.
 - Pre-existing context (not in gate scope, PM's at merge): `docs/src/architecture.md:51`, old PROGRESS/DECISIONS lines, `packages/crypto` TS `EncryptedChannel` (unrelated), `apps/desktop/src-tauri/Cargo.lock` transitive snow (own workspace).
 
 ## Run 2026-11-15 — R-SEC tail closed (gitleaks fixture allow-list)
+
 - **R-SEC tail** (PM-owned, one line, per run-plan R1): git-mode `gitleaks detect` showed 7 hits, all the fictional `"password":"SECRET-3"` B3b canary (`tests/mod.rs` ×2 live + `lib.rs` history + 2 frozen packets ×2). Added `^SECRET-3$` to the `generic-secret` rule's allowlist (same anchored-literal convention as the other canaries). Post: **no leaks found** (git mode). Full `--no-git` workspace scan still reports pre-existing noise (nested worktree copies, `.env`, docs build output, `&lt;redacted&gt;` HTML-escaped doc quote, one `sk-...` filler and `API_KEY` identifier in untracked lanes) — outside CI scope, not touched.
 
 ## Run 2026-11-15 — R-FIN audit frozen (PM-measured, planner lane 429×4)
+
 - **R-FIN-audit** (`docs/zadloop/packets/R-FIN-audit.md`): FIN1 done (clippy 0, mocks test-scoped); FIN2 stale-line list; FIN3 inventory (~113 branches/~77 worktrees, merged-lane delete list); FIN4 green rows + blocked rows (visual/T3/T2/installers); FIN5 owner-gated + version gap still open. Gaps closed by measurement: SH4 (create_pr has no draft field → new design item R-FIN-SH4d), S1c/E7 (single sqlx-sqlite stack), E4 parked. Ordered unblock list: version ask → capture host/CI → R-UI-7b → R-FIN-SH4d → FIN3→FIN4→FIN5.
 
 ## Terminal state (round 256) — implementation queue done; owner/host-gated items remain
+
 - **Shipped this session:** R-EXT-4 (Streamable HTTP dialling), R-EXT-5 (X9a WebMCP), R-EXT-6 (RC1: dead channel + snow deleted), R-UI-6b/6c (Android build proven: clean-state APK with 54 web assets), R-SEC tail (gitleaks git-mode clean), R-FIN audit (FIN1–5 + R0 placement).
 - **Verified green on the closing tree:** diff-check, wire 11/0, policy 8/0 (plus per-merge evidence: fmt/clippy 0, suites 0-fail, desktop 854/0, non-visual 305/305, deny clean).
 - **Not finishable in-session (owner/host-gated, see R-FIN-audit unblock list):** version decision (R0) + 0.3.0 bump/install; capture host for R-UI-4 Part A baselines (+ CI billing); R-UI-7b pairing boundary (S2–S5); R-FIN-SH4d draft-PR design; FIN3 cleanup; FIN4 full §5; FIN5 install + FINAL_REPORT. Branch `repair/dev-csp-f474776` pushed to `warsha-dev` at `ad1c943`, clean.
 
 ## Run 2026-11-15 — R-FIN-SH4d packet frozen (`create_pr` draft support)
+
 - **R-FIN-SH4d** (`docs/zadloop/packets/R-FIN-SH4d.md`, planner lane, base `988a6c4`, spec only, no product code): SH4's optional draft PR cannot be expressed today — `create_pr` (`crates/warsha-git/src/lib.rs:474-492`) sends `CreatePrBody { title, body, head, base }` with no `draft` (`grep draft crates/warsha-git/` → 0) and `PullRequest` (`:303-323`, all fields `#[serde(default)]`) drops the field GitHub returns.
 - Frozen design: `PrDraft { Ready (default), Draft }` typed parameter (crate models `MergeMethod` as an enum, has no bool parameter; **zero `create_pr` callers** — `warshad` stores `DaemonState.github` (`state.rs:402`) and never reads `.github`, `warsha-pipeline` does not depend on the crate, so the choice costs no call sites); `CreatePrBody.draft: bool` always serialized; `PullRequest.draft: bool` + `#[serde(default)]`; error mapping unchanged (`execute` `:580-604`, no new `GitError` variant — it is re-used by `DaemonError::Git`, `warshad/src/auth.rs:1482-1483`).
 - Test: new `crates/warsha-git/tests/create_pr_draft.rs` (crate has no `tests/` dir) — hand-rolled `tokio::net::TcpListener` stub on `127.0.0.1:0` via `with_api_base`, **no new dependency** (no `wiremock`/`mockito`/`httpmock` anywhere; `Cargo.lock` 0). T1 draft sent+parsed, T2 ready sends `false` + missing-field default, T3 422 refusal keeps `GitError::GitHub` shape, T4 discrimination.
 - Baseline measured by this lane: `cargo test -p warsha-git --all-targets` → 13 passed / 0 failed. Gate expectation after → 16/0. External fact verified: GitHub Docs "Create a pull request" documents `draft` (boolean) and lists 201/403/422; drafts are unavailable in private repos on GitHub Free — hence T3.
 - Follow-up: packet is spec-only and uncommitted by the lane; SH4's own wiring (Gate C approval → draft PR call site) is a separate packet. Doc staleness found, not fixed: `crates/warsha-git/README.md:8-12` cites pre-split `crates/warshad/src/lib.rs` line numbers.
+
 ## Run 2026-11-15 — R-UI-7b design frozen (pairing boundary: artifact vs defect; sign-off gate)
+
 - **R-UI-7b design** (`docs/zadloop/packets/R-UI-7b-design.md`, branch `r-ui-7b-design` from `988a6c4`, commit `b1cff85`): planner-lane research + doc only, no product edit, no experiment run. Measures at the base: the exact Keystore chain (`WarshaNative.java:88-118`, sites `:244` generator.init / `:98` cipher.init), that `logBridgeError` logs the class name only so **no message and no stack exist** in any artifact (`MainActivity.java:442-446`, `R-UI-7-report.md:186-189`), that `pair()` sets the session before storing it (`App.tsx:86-87`, `session.ts:393-401`), and that the cold handoff is undeliverable by construction (`onResume` → `evaluateJavascript` before any document, `deliveredPairingUris.add` unverified, `:317-327`; plain field across the bridge thread, `:71`/`:313`/`:330-332`).
-- **Correction to the owner's proposed experiment:** `Athar_GPlay` and `Pixel_7_API_35` are the **same** system image (`android-35/google_apis_playstore/x86_64`, measured in both `config.ini`; only one image installed on this host), so an AVD-vs-AVD attestation comparison cannot discriminate Keystore behaviour. The design replaces it with a device-side software-Keystore control (localStorage-backed bridge stub injected at document-start, E4) and keeps a physical-device leg marked *not run — no hardware on this host*.
+- **Correction to the owner's proposed experiment:** `Athar_GPlay` and `Pixel_7_API_35` are the **same** system image (`android-35/google_apis_playstore/x86_64`, measured in both `config.ini`; only one image installed on this host), so an AVD-vs-AVD attestation comparison cannot discriminate Keystore behaviour. The design replaces it with a device-side software-Keystore control (localStorage-backed bridge stub injected at document-start, E4) and keeps a physical-device leg marked _not run — no hardware on this host_.
 - **Status: awaiting owner sign-off.** Gate A authorizes read-only experiments E0–E4 (document-start probe, replay, stub store, environment attestation); Gate B authorizes any fix packet. Implementation of any fix — including the diagnostic build E5 that would pin the exception site — is out of scope until signed.
 
 ## Run 2026-11-15 — R-FIN-SH4d merged (create_pr draft support)
+
 - **R-FIN-SH4d** (coder lane, base `2b5c8b7`): `PrDraft { Ready, Draft }` enum (mirror of `MergeMethod`), `CreatePrBody.draft` always serialized, `PullRequest.draft` + `#[serde(default)]`, `create_pr` 7th param, error mapping untouched. New `tests/create_pr_draft.rs` loopback stub (T1–T3 + T4 mutants all red, incl. `is_draft→false` and `rename=is_draft` cases). PM re-ran: 16/16, fmt/clippy clean, arch 5/0, wire 11/0, policy 8/0, no manifest changes. Deviation accepted: `#[allow(clippy::too_many_arguments)]` on `create_pr` (frozen signature, precedent in pipeline/runtime). Unblock item 4 closed; SH4 wiring is a separate packet.
 
 ## Run 2026-11-15 — 0.3.0 bump merged (owner decision 1)
+
 - **Version** (coder lane, `c1c4b78`): `check-versions --set 0.3.0` → 14 files, 32+/32- version strings only; `--expect 0.3.0` aligned (versionCode 300 per the checker's major*10000+minor*100+patch contract — the brief's "301" was my error, 300 stands). PM re-ran gates in lane worktree + post-merge. Owner: 1.0.0-rc.1 only after a clean pilot — recorded, not started.
 
 ## Run 2026-11-15 — R-NEXT run budget (Amendment A1)
+
 - **Run budget, per-packet estimated caps** (unit: estimated US dollars at list price for the
   fleet's delegated tokens; every figure in this section is **estimated**): Phase 0 — F0 2, F1 8,
   F2 6, F3 8, FIN3 2, FIN4 12, FIN5 4. Phase 1 — N0 12, N1 16, A1 8, B1 10, A2 20, B2 20, A3 14,
@@ -7056,6 +7183,7 @@ hypotheses left in this triage.
 - **Cumulative estimated spend so far: 3** (plan adoption + F0 setup), 0.8% of 400.
 
 ## Run 2026-11-15 — F0 run setup (plan adopted, integration branch cut)
+
 - **Plan v3 adopted** on `repair/dev-csp-f474776` @ `5b2bf5f`: `docs/zadloop/R-NEXT-MASTER-PLAN.md`
   superseded with the v3 execution copy (amendments A1–A4), and the seven owner-approved design
   screens + `ASSET-NOTES.md` adopted under `docs/zadloop/r-next-designs/` (A3 acceptance
@@ -7072,15 +7200,19 @@ hypotheses left in this triage.
   80% alert item; Z1 finalises it.
 - **Owner's uncommitted change** `apps/remote/e2e/harness.ts` left untouched in the owner's
   checkout, per plan F0.
+
 ## Run 2026-11-15 — Amendment 1 adopted (A5 final code-health audit before Z1; A6 parallel execution, PM-only merges)
+
 - **Amendment 1** (`~/Desktop/warsha-rnext-amendment-1.md`, owner-approved 2026-11-15) appended to the plan's Amendments section as **A5** (one audit packet on the final tree before Z1: full §3.1 gate matrix re-run, dead-code/TODO sweep, largest-files + duplication + docs-freshness report, mechanical fixes only, HIGH/MEDIUM/LOW table) and **A6** (up to 4 concurrent packet lanes in their own worktrees, per-packet caps and the A1 ceiling shared, merges into `r-next/integration` serialized through the PM role only, lanes never merge, unmergeable packet → blocked and listed). A5 binds before Z1; A6 in effect immediately. Committed on `repair/dev-csp-f474776`, merged into `r-next/integration`; not pushed. Fleet note: this session's delegation fleet caps live attempts at 3, which is within A6's 4-lane allowance.
 
 ## Run 2026-11-15 — F3 merged (R-UI-7b pairing boundary: V2 adoption defect fixed)
+
 - **Verdict V2 (adoption defect, H3); Keystore = environment artifact.** Experiments E0–E4 run per `docs/zadloop/packets/R-UI-7b-design.md` with Gate A/B authority from plan §4 F3. Root cause (measured on-device, WebView 124.0.6367.219): `warsha:` parses as a non-special scheme (`hostname:""`, `pathname:"//pair"`), so `parsePairingLink`'s `isPair` gate refused the valid cold link as `url` and `App.tsx` discarded the reason. E4's reload leg infeasible via CDP (recorded per design); verdict stands on E2+E3 plus the single-document stub leg. Evidence: `bridge-io/policy/2026-11-15-r-next/f3/` (verdict.md + 17 redacted files, smoke-pixel7.json, token-leak scan 0 hits).
 - **Fix (design-named files only):** `apps/remote/src/session.ts` accepts the `//pair` pathname; `apps/remote/src/App.tsx` surfaces the `pair()` refusal reason (`console.warn`, reason only, never the link); vitest cases added. Post-fix: manual cold pair `paired` twice; official smoke S2 pass, S3 pass; S4 script rows fail on a pre-existing harness hash-link matcher (`#/` vs `/`) and S5's script row ERR'd after a device-side UiAutomation crash — product behaviour verified manually both legs, recorded in `docs/zadloop/packets/F3-report.md`; smoke script byte-identical to base.
 - **PM verification:** apps/remote 229/229 tests, `tsc --noEmit`, eslint — all green (run in the worktree at cdb36c0). Physical-device leg: not run — no hardware (owner checklist). Two corrections were needed: the worker stopped mid-E2 twice before completing.
 
 ## Run 2026-11-15 — F1 merged (pinned-font Docker capture host; canary accepted on the repo's AA-tolerance contract)
+
 - **Delivered** (`r-next/f1-capture-host`, merged at `debc525`+): `docker/capture/Dockerfile` (node:22-bookworm-slim pinned by digest `sha256:e9f565d3…`, pnpm 9.0.0, Playwright 1.49.1 + chromium, nine IBM Plex faces via the repo's pinned installer `6c1dbe27` with per-face SHA-256, `FONTCONFIG_FILE` pinned to `scripts/ci/capture-fontconfig.conf`); `docker/capture/capture.sh` (host-user container, pinned `--cpus=2 --memory=4g --shm-size=1g`, output to host dir); `docker/capture/canary.sh` (two captures, decoded-pixel compare); `scripts/ci/baseline-manifest.json` (9 surface rows pending + f1 canary record, digest `sha256:581c7fc1…`); `docker/capture/README.md`; `docs/zadloop/packets/F1-report.md`.
 - **D-RN-F1-1 (decision rule §0.4: follow the repo):** the canary compares decoded pixels — per-channel delta ≤ 13, ≤ 64 differing px per image — not plan-literal byte identity. Evidence: Chromium's software rasterizer is not bit-deterministic on curved edges (`playwright.config.ts:56-64`, measured upstream 10–60 px at 1–2 levels; on this image 3 px at ≤ 8 levels on the SVG brand-mark edge, byte compare failing ~1 run in 2, including 3 consecutive runs with CPU pinning). Fail-closed preserved: tamper test (60-level block edit) is rejected; missing/extra images and geometry/format mismatches fail.
 - **PM verification:** canary pass (84/84 within tolerance) on the final tree; tamper test 1 failure as expected; `node scripts/check-engineering-policy.mjs` 8/0; `node scripts/check-arch.mjs` 5/0. Committed baselines were NOT re-captured (host provenance change) — F2 captures them fresh on this host per R-UI-4 Part A.
@@ -7088,34 +7220,40 @@ hypotheses left in this triage.
 - 2026-11-15 — Amendment 2 adopted (owner-approved 2026-11-15): A7-A9 appended to the plan's Amendments section (repo copy + Desktop master copy), committed 0a04d19 on repair/dev-csp-f474776, merged into r-next/integration as 5c5d768. A7: RF2 repair packet starts now — F2 unblocks via CI capture route (manual-dispatch GitHub Actions workflow in warsha-dev, F1 pinned-font Docker image, canary ×3 proof, branch r-next/rf2-ci-capture push exception only); local capture host is NOT repaired. A8: CI gate-referee workflow for r-next/integration (push exception covers r-next/integration only; CI is referee, local gates still run first). A9: recorded only — release installers will be built in CI from the tagged tree when the owner orders release after Z1.
 
 ## 2026-11-15 — N0 (CLI usage recovery) MERGED into r-next/integration
+
 - Migration 007 (additive: cache_read/write_tokens, source, estimated, cost_known, duration_ms, session_id); CostRecord + estimated_tps(); TokenUsage.cost_cents across providers; claude JSON + codex JSONL parsers; pipeline maps CLI cost into run.spent_cents, BudgetExceeded on crossing; AgentStep payload carries cost_source/cost_estimated/cost_known.
 - Correction 2 delivered parsing+metadata; PM completed the skipped budget test (a_cli_reported_cost_counts_toward_the_run_budget), fixed clippy/fmt, removed dead_code allow, rewrote report truthfully. Commits 422e815, 5701c86, 0309bc2, ab62937; merge b4e1653.
 - Gates: fmt clean, clippy -D warnings clean, workspace 1134+ tests 0 failed (backends 15/15, pipeline lib 508, store 23), arch 5/0, policy 8/0, wire 11/0. Findings: desktop reads event.costCents only (tokens/TPS → A3); codex not installed (fixture-tested; owner-checklist probe).
 
 ## 2026-11-16 — RF2 + F2 (CI capture route, Amendment A7)
+
 - RF2 (packet per A7): CI capture workflow .github/workflows/capture-baselines.yml on r-next/rf2-ci-capture (push-trigger, D-RN-RF2-1); gate tools scripts/ci/pw-{gate,genesis}.mjs; 6 CI runs; capture leg green (genesis 416 defective=0; artifact 500 PNGs); desktop verify 416/0 achieved once in one-container session (run 43773883755, D-RN-RF2-2) but NOT reproducible — LCD subpixel fringe flips per page load (200+ measured passes; blocked-gate finding recorded, owner decision pending). Two committed-gate repairs: fonts.ts isolated-page probe (D-RN-RF2-3), light --w-text-faint #7A756B→#6B665C (D-RN-RF2-4, axe wcag2aa 3.92→4.88 on danger-soft). Report: docs/zadloop/packets/RF2-report.md @ f1cdf48.
 - F2 (Part A): 416 CI-captured v3 baselines committed (88b41ba, run 43773883755 vintage) + 84 remote; F2-report.md truthful (d1fefd0); merged r-next/f2-part-a-baselines @ b513ff9 (incl. cherry-picked a5830f7 token+fonts fix) into r-next/integration as d71f66d. Gates: policy 8/0, arch 5/0, ui 383/383, desktop tsc clean.
 - Spend note: RF2 CI minutes free (public repo); worker attempt 1 (Coder lane).
 
 ## 2026-11-16 — Amendment 3 / A10: RF2 blocked gate closed
+
 - Owner decision (m03702): @visual comparison adopts the F1 canary's decoded-pixel budget — maxDiffPixels: 64, threshold 0.05 unchanged, maxDiffPixelRatio unset (comparator min() trap documented). D-RN-RF2-5.
 - Proof: 100-pass inbox experiment 100/100 green; full 416 desktop cases 416/416 ×3 fresh-container passes; 3 consecutive green CI runs both legs (43833136416, 43837753064, 43842194783 — run 3 reports: desktop 416/0, remote 84/0, flaky 0).
 - Discovery: the remote snapshots on the integration line were still the stale 1019506 vintage (structural drift, 164195 px on gates-320x568-ar-light); F2's 88b41ba committed desktop-only despite its message. Replaced with the fresh CI-captured 84 (9a225ac) — the vintage all three green runs verified against.
 - A10 merged into r-next/integration as 1ef5020; owner checklist item 13 records the closure; RF2-report.md addendum appended (808ce3d). FIN4 @visual rows: verified green by the 3 CI runs.
 
 ## 2026-11-16 — FIN5 complete: FINAL_REPORT.md draft + checkpoint tag
+
 - docs/zadloop/packets/FINAL_REPORT.md written from FIN4 gate logs (every claim cites evidence paths; uncovered rows listed: main push, installers, owner-PC install, T3 S2-S5, T2 Windows, codex probe).
 - Mock-provider greenfield e2e: fake_e2e 6/6. Self-check: 12/12 PASS ×3 after the walk-order fix (0e610fb, D-RN-FIN5-1) — owner checklist item 2 (OD-B6) unblocked.
 - Tag r-next/cp-phase0 created locally @ fc9565d (not pushed — no release/publish).
 - PHASE 0 COMPLETE (F0-FIN5 + RF2 + N0). Next per §11: Phase 1 (N1, A1, B1, A2, B2, A3, A4, B3), Phases 2-5, A5, Z1.
 
 ## 2026-11-16 — Phase 1: N1 + A1 (parallel lanes)
+
 - N1 (sessions + live CLI events): sessions table (008) + CRUD + core Session types + EventKind SessionStarted/StatusChanged/ToolStarted/ToolFinished/FileTouched/SessionEnded; streaming CLI adapter (claude stream-json, codex --json) replacing run-to-completion reads; 256-line redacted tail ring buffer; process-group stop (SIGTERM→SIGKILL, taskkill /T on Windows); sessions.list/tail/stop RPC. Acceptance tests: fixture sequences, killed-CLI terminal state, content-rule canary (5 CANARY_* secrets absent), no-stream label, stalled-stream. Branch r-next/n1-sessions @ 2889ae3, merged 602f360. Gates: workspace 1146/0 (post-A1), arch 5/0, policy 8/0, wire 11/0.
 - A1 (model catalog): data/catalog/api.json vendored (models.dev, 2026-11-16, SHA-256 a5cd1e38…) + provenance; crates/warsha-catalog (parse, digest, diff added/removed/price_changed, apply with custom-override survival, 8MB cap, malformed rejection); settings UI check-catalog-update → diff preview → confirm-apply; prices_estimated labels en+ar. Branch r-next/a1-model-catalog @ 6ada34d, merged 797721c. Daemon-side catalog.refresh/apply handlers = documented TODO (wired in a later packet; client fails gracefully meanwhile).
 - Arch: warsha-catalog placed tier 1 (012808b, ARCH_RULES sketch updated).
 - 2026-11-16 — Plan v5 written (final execution copy): `docs/zadloop/R-NEXT-MASTER-PLAN.md` now carries Amendments 1–3 (A5–A10, restored from the `r-next/integration` copy — v4 had dropped A7–A10), Amendment 4 (A11–A15) and A16, the twelve owner-accepted outcomes of the final plan review. Changes against v4: new packet N3 (CLI run isolation, cap 10); D5 no longer depends on E3/E4/N2 and gains declared files, a guard test at 20, budget reservation and a rate-limit stop; N2 in three labelled tiers with permission mapping and fail-closed unknown names; D4 spec-file entry; bootstrap criterion and subscription boundary rewritten in §13; budget 368 + 12 = 380 of 400 (A5 capped at 8); §11 rewritten. Committed on `repair/dev-csp-f474776`, not pushed. **Adopted into `r-next/integration` 2026-11-16** as merge 8b336a0 (b403437 + 51b0581; conflicts in R-NEXT-MASTER-PLAN.md Amendment-4 block and the PROGRESS run log resolved — Amendment 4 text restored verbatim, run-log entries kept, adoption note kept, no duplication). Post-merge gates: policy 8/0, arch 5/0. This is now the single execution plan; v3/v4 superseded. Last amendment round: execution only from here.
 
 ## 2026-11-16 — Plan v5 adopted into r-next/integration + thread-start lane health
+
 - **Adoption (§1):** merge `8b336a0` brought `b403437` (plan v5 — Amendment 4 + final-review clauses A16, A7–A10 restored) and `51b0581` (adoption note) into `r-next/integration`. Two conflicts resolved: the plan's Amendment-4 block (HEAD side was empty — v5 text restored verbatim) and the PROGRESS run log (both sides kept, adoption note appended after the N1+A1 entry — no duplicate adoption entry created since 51b0581's note merged in). Post-merge: policy 8/0, arch 5/0. Plan v5 is the single execution plan; v3/v4 superseded. `c5acfba` records the adoption.
 - **Lane health at thread start (§4):** integration worktree clean @ 0e457cc → merged to 8b336a0; no stale git locks in any worktree; main checkout dirty only with the owner's `apps/remote/e2e/harness.ts` (untouched). B1 lane `.agents/worktrees/rn-b1` (r-next/b1-permissions @ cc889ed) was current with integration (0e457cc is an ancestor) and compiles/tests green with its uncommitted work in place.
 - **B1 lane repair D-RN-B1-4 (§0.6, iteration 1 of 3):** commit `cc889ed` had destroyed `DECISIONS.md` (1,943 lines of decision history → 5-line stub). Repaired on `r-next/b1-permissions` @ `98eb1bb`: restored the 0e457cc file verbatim and re-appended D-RN-B1-1..3 (from B1-report.md) plus the repair record. Evidence: `git show cc889ed --stat` (DECISIONS.md −1,941), `git show 31fd758:DECISIONS.md` tail matches the 0e457cc tail (31fd758 held the intact file). Tests and gates untouched by the repair.
@@ -7123,6 +7261,7 @@ hypotheses left in this triage.
 - **Budget (A15):** cumulative estimated spend so far ≈ 31 of 400 (7.8%) — F0 3, F1 ≈ 9, N0 ≈ 8, RF2/F2 ≈ 4, N1+A1 ≈ 7 (estimates; N1/A1 entry lacked a spend line — folded in here). B1 cap 10.
 
 ## 2026-11-17 — B1 complete (two-axis permission setting)
+
 - **Delivered (branch r-next/b1-permissions cc889ed → 7f556bb, merged as dbc56f7):** permissions schema + storage (migration 009; nullable confinement/approval_mode on projects = inherit; global default `permissions_default` in run_modes), legacy 3-stage parse bridge (settings.rs), `Project::effective_permissions`, 4 permission RPC methods (Session/Standard gets, Owner/Standard sets), client decode with default fallback (893f630), desktop PermissionsSection (settings section 15, advanced-only) + project-header permissions Sheet, honest-copy banners ar/en, e2e harness mocks + `permissions.spec.ts`, migration fixtures for legacy values, restart-persistence wiring.
 - **§0.6 repairs on this lane (evidence in DECISIONS.md):** D-RN-B1-4 DECISIONS.md restore (98eb1bb, iteration 1 of 3); i18n I4 reword of two ar strings carrying Latin "models.dev" (99379b1 — pre-existing A1 debt, gate now 812→835 keys 0 violations).
 - **In-flight salvage:** worker attempt left two new files untracked (f986229); correction attempt committed them (7f556bb) and re-ran gates. `delegation_conclude` records reviewed-completion with 7 checks, 0 failed.
@@ -7131,6 +7270,7 @@ hypotheses left in this triage.
 - **Budget (A15):** B1 spend ≈ 9 of cap 10 (repairs included). Cumulative ≈ 40 of 400 (10.0%). Next alert threshold 320.
 
 ## 2026-11-17 — A2 complete (OAuth engine + provider auth RPC + desktop status)
+
 - **Delivered (branch r-next/a2-oauth-providers → 8e0bf56, merged as 2b6b6f6):** generic OAuth engine in warsha-providers/src/oauth/ (PKCE loopback + device flow + refresh/revocation/expiry, oauth2 + url crates after §3.3 audit), ChunkedSecretStore keychain chunking (256-byte chunks + oversized-token test), warshad RPC providers.auth_status/auth_start/auth_complete/disconnect (Session/Standard gets, Owner/Standard sets), ModelsSection auth-status UI, i18n ar/en, THIRD_PARTY_NOTICES updated, A2-report.md.
 - **Lane health (§0.6):** worker attempt settled at ~35% claiming env-blocked commits; PM completed the packet directly (restored DeviceId export + list_providers impl the worker had clobbered, added the 4 auth policy rows, clippy fixes). Recorded as PM-completion, not a gate repair.
 - **Merge gates (PM on integration):** clippy workspace 0 warnings; warshad 252/0, providers 59/0, store 26/0, core 19/0, backends 21/0; client 193/193, i18n 58/58, desktop 854/854; arch 5/0; policy 8/0; i18n-gate 835/0; cargo-deny ok; gitleaks clean.
@@ -7138,16 +7278,19 @@ hypotheses left in this triage.
 - **Budget (A15):** A2 spend ≈ 7 of cap 20. Cumulative ≈ 47 of 400 (11.8%). Next alert threshold 320.
 
 ## 2026-11-17 — N3 complete (CLI Code stage runs in the run worktree)
+
 - **Delivered (branch r-next/n3-cli-isolation → 1ac2211 + fc03807, merged as 8ad0bad):** CLI Code stage sandbox = run.worktree_path (named failure "run `<id>` has no assigned worktree"; never the project checkout); successful stage committed on `warsha/run-<id>` with a Conventional Commit naming the run (worktree now cut on that branch instead of detached HEAD); no-change stage makes no commit; RunReceipt + worktree/branch/timeout lines in the stage report; per-project CLI timeout `coding_cli_timeout_seconds` (default 30 min, bounded 4 h, recorded in the receipt A16.8); migration 010 (nullable worktree_path/worktree_branch on runs) + store round-trip restart survival.
 - **§0.6 repairs on this lane:** first dispatch settled with an uncompilable test stub (worker never ran it); PM rewrote the acceptance tests against the real APIs (IsolationProbe backend, gate-walking fixture) and fixed the detached-HEAD commit gap (D-RN-N3-1..2 in DECISIONS.md). Tests and gates never weakened.
 - **Merge gates (PM on integration @ 8ad0bad):** fmt clean; clippy workspace 0 warnings; pipeline 508+6+4+14+3+1+1+13 / 0; warshad 252/0; store 26+19+5 / 0; backends 21/0; core 19/0; client 193/193; i18n 58/58; desktop 854/854; arch 5/0; policy 8/0; i18n-gate 835/0; cargo-deny ok; gitleaks clean. Wire contract still carries the 4 pre-existing catalog.refresh/apply violations (A1 debt, unchanged).
 - **Budget (A15):** N3 spend ≈ 8 of cap 10. Cumulative ≈ 55 of 400 (13.8%). Next alert threshold 320.
 
 ## 2026-11-17 — A2 merged (correction of the earlier entry's merge state)
+
 - The 2026-11-17 A2 entry recorded the branch commit (8e0bf56) before the PM merge. A2 merged into `r-next/integration` as `9fdb797` (conflicts: DECISIONS.md — kept B1 history, appended D-RN-A2-1; ar/settings.ts — kept B1 permissions keys + A2 provider-auth keys). Post-merge gates re-run on the merged tree: clippy workspace 0 warnings; warshad 252/0, providers 59/0; arch 5/0; policy 8/0; i18n-gate 840 keys/0 violations; client 193/193; i18n 58/58; desktop 854/854; client typecheck clean.
 - **Budget (A15):** unchanged — cumulative ≈ 55 of 400 (13.8%) including A2's ≈ 7 (already counted in the prior entry's arithmetic).
 
 ## 2026-11-17 — A3 in progress (PM lane takeover, §0.6 repair iteration 1)
+
 - Worker attempts (initial + 2 corrections) delivered: SQL cost aggregates (aggregate_costs_by/aggregate_costs_by_day in crates/warsha-store/src/lib.rs), ProviderQuota enum (Reported/Estimated/Unknown) in warsha-core + get_quota on the ChatProvider trait with impls in all providers + test fixtures, Gauge.tsx/Gauge.css scaffold in packages/ui. Committed by PM as 4ea6541.
 - **Lane repair (§0.6 iteration 1 of 3):** the worker attempt CLOBBERED DECISIONS.md (1,958 → 7 lines) and PROGRESS.md (6,965 → 3 lines) — same failure mode as cc889ed on B1. Restored both files verbatim from 65a6647 (0af8179). Evidence: wc -l before/after; git show 65a6647:DECISIONS.md = 1,958 lines.
 - **cargo-deny advisories FAILED is PRE-EXISTING debt, not A3's:** the identical 8-advisory set (h2 0.3.27 via reqwest/oauth2, rustls 0.21.12, etc.) fails on r-next/integration @ 65a6647 too. A trial `cargo update -p h2 -p rustls` bumps lockfile lines but the advisory set stays (reqwest 0.11 pulls both h2 versions). Recorded for the owner checklist / next daemon packet; A3 does not widen it (oauth2 + url were A2's §3.3-audited additions).
@@ -7191,8 +7334,8 @@ Packet A4 spend: 18/20. Cumulative spend: 18.
 - **Budget**: A4 spend 18 of cap 20. Cumulative ≈ 90 of 400 (22.5%). Alert threshold 320 (80%); hard stop 400.
 - 2026-11-17: Packet B3 (Rule Engine) initiated. Spent ~5 units (est total 20). Cumulative: ~95/400.
 - 2026-11-17: **Packet B3 (Rule Engine) merged** into `r-next/integration` as merge `2c6f288` (branch `r-next/b3-rule-engine` d25435d → 3710a83, no conflicts). **Deliveries**: rule model in `warsha-core` (`RuleAction` deny/ask/allow; `ToolPattern` exact / trailing-`*` prefix / `*`; `ToolRules` evaluated deny→ask→allow, no match = axis default; `InMemoryRuleStore` global + per-project, global deny always wins; 6 unit tests); persistence migration `012_tool_rules.sql` + `save_tool_rules`/`load_tool_rules`; rules RPC `rules.global.get/set` + `rules.project.get/set` (policy: gets Session/Standard, sets Owner/Standard); **allowlist-first precedence** in `CommandPolicy::check_command` — rules can deny or ask on top of the allowlist but can never widen it; native `RunCommand` asks register on the shared `McpApprovals` queue (`server="native"`, run-bound, queue refusal = refuse closed; 2 new tests); approval bridge verified in place (30-min deny, 3 tests); syntax doc `B3-rules-syntax.md`. **Fleet decisions**: D-RN-B3-001 (rule editor UI deferred to E-series), D-RN-B3-002 (rule model in `warsha-core`). **Merge gates** (integration @ 2c6f288): cargo fmt --check clean; clippy --workspace --all-targets -D warnings 0; core 34/0; pipeline 517/0 + integration suites green (protection tests 8/8); warshad 252/0; store 26/0; warsha-cli 7 suites 0 (bridge tests in); providers 58/0; backends 28/0; client 193/193; i18n 58/58; desktop 870/870; i18n-gate 877 keys 0 violations; arch 5/0; policy 8/0; wire 11 checks / 4 violations (pre-existing A1 debt, unchanged); gitleaks clean. **Checkpoint**: tag `r-next/cp-phase1` created after this merge (plan §11). **Budget**: B3 spend 3 of cap 20 (worker attempt ~2 + PM completion ~1). Cumulative ≈ 93 of 400 (23.3%). Alert threshold 320 (80%); hard stop 400.
-2026-11-18 — N2 (Coding-engine catalog, registry, adapters): 15 (cumulative: 108 of 400)
-2026-11-18 | D1: Secretary role implementation complete | 400 | ~493
+  2026-11-18 — N2 (Coding-engine catalog, registry, adapters): 15 (cumulative: 108 of 400)
+  2026-11-18 | D1: Secretary role implementation complete | 400 | ~493
 
 ## 2026-11-18 — D1 completed (PM takeover after two correction rounds) + typed-client fixes
 
@@ -7207,9 +7350,10 @@ Packet A4 spend: 18/20. Cumulative spend: 18.
 - **Merge gates** (integration @ c500b7a): cargo fmt --check clean; clippy --workspace --all-targets -D warnings 0; warshad lib 257/0 (secretary 5/0); store lib 26/0; settings_migration ledger 1..14; pipeline lib 517/0 (+7 ign); warsha-cli 16+4+7+2+3/0; warsha-providers 58/0; warsha-backends lib 37/0; client 193/193 + typecheck rc=0; desktop 870/870 + typecheck rc=0; ui 383/383; i18n 58/58; i18n-gate 881 keys 0 violations; arch 5/0; policy 8/0; wire 11 checks / 4 violations (pre-existing A1 debt catalog.refresh/apply, unchanged); gitleaks clean.
 - **Checkpoint**: none (D1 per plan §11 triggers no tag; next tag = cp-phase3 after D4).
 - **Budget**: reconciliation — D1 spend 12 of cap 20 (A4 18 + D1 12). Cumulative ≈ 122 of 400 (26.3%). Alert threshold 320 (80%); hard stop 400.
-2026-11-18 Packet E1: Implemented mode switch 'developers', updated audit report, started export/import implementation.
+  2026-11-18 Packet E1: Implemented mode switch 'developers', updated audit report, started export/import implementation.
 
 ## [2026-11-18] Packet D4: Run modes (Agent/Plan/SpecFile/Ask)
+
 - [x] Run mode types and migration 015_run_modes.sql
 - [x] Store layer updates
 - [x] CI gates passed
@@ -7264,24 +7408,30 @@ Packet A4 spend: 18/20. Cumulative spend: 18.
 - **Budget**: E4 spend ≈ 11 of cap 20 (worker attempts ≈ 6, PM takeover ≈ 5). E3 spend ≈ 13 of cap 20 (worker attempts+corrs ≈ 7, PM takeover ≈ 6). Cumulative ≈ 180 of 400 (45%). Alert threshold 320 (80%); hard stop 400.
 
 ## 2026-11-19 — E5 visual baseline sweep completed
+
 - **Deliveries**: 144 E5 surfaces (bench, code, developers, factory, frame, settings) baseline sweep @ visual verified in F1 host; manifest updated.
 - **Budget**: E5 spend ≈ 2 of cap 20 (gate setup + verify pass). Cumulative ≈ 182 of 400 (45.5%). Alert 320 (80%); hard stop 400.
 
 - [2026-11-19] A5: Final code-health audit (packet A5 complete, branch r-next/a5-health@978e40e, audit report docs/zadloop/packets/A5-report.md, evidence bridge-io/audit/a5/).
 
 ## Run 2026-11-19 — release-merge-1 (D-RN-REL-M1)
+
 Merged P1 (9293310: ESLint resolver + disable removals) + P2 (dfc0650: wire stubs, wire 11 checks 0 violations) + P3 (12b1120: oauth2 drop, RUSTSEC-2025-0134 cleared) + P5 (1554b48: S-H1 resolve-once + 4 bypass_tests, pipeline lib 522/0) + P8 (39cafab: S-M3 router default removal, providers 60/60, sayl.site 0). Gates on merged tip: fmt 0, versions 0, arch 5/0, wire 0, policy 8/0. Merge done from root session (delegated workers sandbox-blocked on .git index.lock). Unpushed. Next: P6/P7.
 
 ## Run 2026-11-19 — release-merge-2 (D-RN-REL-M2)
+
 Merged P7 (ea888f7: S-M2 symlink containment + 4 tests, pipeline lib 526/0). Merged tip gates: fmt 0, versions 0, arch 5/0, policy 8/0, wire 11/0. Merge done from root session (workers sandbox-blocked on .git index.lock). Unpushed. P6 risky-table correction still running.
 
 ## Run 2026-11-19 — release-merge-3 (D-RN-REL-M3)
+
 Merged P6 (1d1d475: S-M1 shared risky-command table, shells narrowed to inline-eval; correction narrowed bare-shell "*" after 26 regressions). Merged tip gates: fmt 0, versions 0, arch 5/0, wire 11/0, policy 8/0, pipeline lib 527/0 (522 base + P5 4 bypass + P7 4 symlink + P6 row tests, minus overlap). Merge from root session. Unpushed. Remaining: P4, P9, P10-P12, P13.
 
 ## Run 2026-11-19 — release-merge-4 (D-RN-REL-M4)
+
 Merged P9-redo (d53f8bd: S-M5 release.yml hashes from checksums + skip-if-missing, release needs manifests, Homebrew restored; YAML parses, no generated PLACEHOLDER) + P12 (d0724ac: B4b v2 shell deleted 43 paths, main.tsx always V3App, main.test.tsx rewritten always-v3; TODO(M20)=0, eslint main files 0). Merged tip gates: fmt 0, versions 0, arch 5/0, wire 11/0, policy 8/0. Merge from root session. Unpushed. Remaining: P4, P10, P11, P13.
 
 ## Run 2026-11-19 — release-merge-5 (D-RN-REL-M5)
+
 - Merged `rel-p4-final 13c1f9f` into `r-next/integration` as `e566caa` (no conflicts).
 - P4 scope: workspace clippy denies (unwrap/expect/panic) enforced, test-scoped
   mod-level allows, `use <crate> as _;` satisfies, 3 verified-unused dev-dep
@@ -7289,4 +7439,3 @@ Merged P9-redo (d53f8bd: S-M5 release.yml hashes from checksums + skip-if-missin
   (out-of-scope empty-fallback hunk reverted before commit).
 - Gates on merged tip: fmt 0, versions aligned, arch 5/0, wire 11/0, policy 8/0,
   clippy `-D warnings` 0, pipeline 527 + warshad 295 pass.
-

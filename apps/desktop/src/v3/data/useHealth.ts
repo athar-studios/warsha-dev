@@ -8,11 +8,10 @@ import { useResource } from './useResource';
 export interface HealthInfo {
   status: string;
   version: string;
+  uptimeSeconds?: number;
 }
 
-export function useHealth(
-  overrideClient?: WarshaClient | null
-): HookResult<HealthInfo> {
+export function useHealth(overrideClient?: WarshaClient | null): HookResult<HealthInfo> {
   const contextClient = useClient();
   const client = overrideClient !== undefined ? overrideClient : contextClient;
 

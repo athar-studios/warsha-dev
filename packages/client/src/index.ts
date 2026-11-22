@@ -136,7 +136,8 @@ export interface DeviceSummary {
 }
 
 export type SessionId = string & { readonly __brand: unique symbol };
-export type SessionStatus = 'starting' | 'working' | 'waiting_on_owner' | 'idle' | 'done' | 'failed' | 'stopped';
+export type SessionStatus =
+  'starting' | 'working' | 'waiting_on_owner' | 'idle' | 'done' | 'failed' | 'stopped';
 
 export interface Session {
   id: SessionId;
@@ -246,7 +247,12 @@ function decodeProposalAction(source: unknown): ProposalAction {
       case 'gate_approve':
         return { type: 'gate_approve', runId: str('run_id'), stage: str('stage') };
       case 'gate_reject':
-        return { type: 'gate_reject', runId: str('run_id'), stage: str('stage'), reason: optStr('reason') ?? '' };
+        return {
+          type: 'gate_reject',
+          runId: str('run_id'),
+          stage: str('stage'),
+          reason: optStr('reason') ?? '',
+        };
       case 'queue_decide':
         return {
           type: 'queue_decide',
@@ -319,9 +325,8 @@ export function decodeSecretaryThread(source: unknown): SecretaryThread {
   const record = secretaryObject(source, 'thread');
   return {
     id: secretaryString(record, 'id'),
-    projectId: (secretaryOptionalString(record, 'project_id', 'projectId') ?? null) as
-      | ProjectId
-      | null,
+    projectId: (secretaryOptionalString(record, 'project_id', 'projectId') ??
+      null) as ProjectId | null,
     createdAt: secretaryString(record, 'created_at', 'createdAt'),
     updatedAt: secretaryString(record, 'updated_at', 'updatedAt'),
   };
@@ -403,15 +408,9 @@ export function decodeProjectSummary(source: unknown): ProjectSummary {
   const record = summaryObject(source, 'project');
   const createdAt = summaryString(field(record, 'created_at', 'createdAt')) ?? '';
   const confinement = summaryString(field(record, 'confinement')) as
-    | 'read-only'
-    | 'workspace-write'
-    | 'full-access'
-    | undefined;
+    'read-only' | 'workspace-write' | 'full-access' | undefined;
   const approvalMode = summaryString(field(record, 'approval_mode', 'approvalMode')) as
-    | 'ask-always'
-    | 'ask-for-risky'
-    | 'never-ask'
-    | undefined;
+    'ask-always' | 'ask-for-risky' | 'never-ask' | undefined;
 
   // A daemon without the B1 columns omits `permissions` entirely; an absent or non-object
   // value decodes to the workspace-write x ask-for-risky default (B1's new-project default),
@@ -422,8 +421,8 @@ export function decodeProjectSummary(source: unknown): ProjectSummary {
       ? {}
       : summaryObject(permissionsRaw, 'project permissions');
   const permissions = {
-    confinement: (summaryString(field(permissionsRecord, 'confinement')) ??
-      'workspace-write') as 'read-only' | 'workspace-write' | 'full-access',
+    confinement: (summaryString(field(permissionsRecord, 'confinement')) ?? 'workspace-write') as
+      'read-only' | 'workspace-write' | 'full-access',
     approvalMode: (summaryString(field(permissionsRecord, 'approval_mode', 'approvalMode')) ??
       'ask-for-risky') as 'ask-always' | 'ask-for-risky' | 'never-ask',
     isOverride: !!field(permissionsRecord, 'is_override', 'isOverride'),
@@ -480,7 +479,9 @@ export function decodeRunSubtask(source: unknown): RunSubtask {
     throw new Error(`${SUBTASK_ERROR}: "subtask" has an invalid "status"`);
   }
   const filesValue = field(record, 'files');
-  const files = Array.isArray(filesValue) ? filesValue.filter((f): f is string => typeof f === 'string') : null;
+  const files = Array.isArray(filesValue)
+    ? filesValue.filter((f): f is string => typeof f === 'string')
+    : null;
   if (files === null) {
     throw new Error(`${SUBTASK_ERROR}: "subtask" has an invalid "files" list`);
   }
@@ -550,7 +551,8 @@ export function decodeRunSummary(source: unknown): RunSummary {
  */
 export function decodeDeviceSummary(source: unknown): DeviceSummary {
   const record = summaryObject(source, 'device');
-  const pairedAt = summaryString(field(record, 'created_at', 'createdAt', 'pairedAt', 'paired_at')) ?? '';
+  const pairedAt =
+    summaryString(field(record, 'created_at', 'createdAt', 'pairedAt', 'paired_at')) ?? '';
   const lastSeen = summaryString(field(record, 'last_seen', 'lastSeen'));
   const rawRevoked = field(record, 'revoked', 'revoked_at');
   return {
@@ -868,7 +870,12 @@ export interface WarshaEvent {
    * E4: the event's token usage when the stage carried one (`warsha_core::Event.tokens`,
    * `TokenUsage{input,output,total,cost_cents}`); absent when the row had none.
    */
-  tokens?: { input: number | null; output: number | null; total: number | null; costCents: number | null } | null;
+  tokens?: {
+    input: number | null;
+    output: number | null;
+    total: number | null;
+    costCents: number | null;
+  } | null;
   createdAt: string;
   deviceId: DeviceId | null;
   /**
@@ -1186,10 +1193,7 @@ function decodeWarshaEvent(source: Record<string, unknown>): WarshaEvent {
   // Sequence metadata is only on `SequencedEventFrame`s (the `/events` wire and
   // `runs.subscribe`); a bare `Event` row decodes with these left unset.
   const seq = optionalSequence(field(source, 'seq'), 'seq');
-  const gapDetected = optionalBoolean(
-    field(source, 'gap_detected', 'gapDetected'),
-    'gap_detected'
-  );
+  const gapDetected = optionalBoolean(field(source, 'gap_detected', 'gapDetected'), 'gap_detected');
   const droppedCount = optionalSequence(
     field(source, 'dropped_count', 'droppedCount'),
     'dropped_count'
@@ -1244,11 +1248,7 @@ function decodeRunStreamSync(value: unknown): RunStreamSync {
     return v;
   };
   const droppedCount = source['dropped_count'];
-  if (
-    typeof droppedCount !== 'number' ||
-    !Number.isFinite(droppedCount) ||
-    droppedCount < 0
-  ) {
+  if (typeof droppedCount !== 'number' || !Number.isFinite(droppedCount) || droppedCount < 0) {
     throw new Error(`${SUBSCRIBE_SYNC_ERROR}: invalid "dropped_count"`);
   }
   const run = source['run'];
@@ -1346,10 +1346,7 @@ function eventLogLine(value: unknown): string {
  * endpoint the shell resolved — never a guessed port: `/events` is served by the
  * daemon's HTTP listener, which is not the listener RPC answers on.
  */
-function eventEndpoint(
-  url: string,
-  cursor?: { sinceSeq?: number; runId?: RunId }
-): string {
+function eventEndpoint(url: string, cursor?: { sinceSeq?: number; runId?: RunId }): string {
   const socketUrl = url.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
   const trimmed = socketUrl.replace(/\/+$/, '');
   const base = trimmed.endsWith('/events') ? trimmed : `${trimmed}/events`;
@@ -2177,7 +2174,11 @@ export function decodeMcpPermissionsReply(value: unknown, method: string): McpPe
       decodeMcpPermissionRow(row, method)
     ),
     agentRole: wiringString(source['agent_role'], method, 'agent_role'),
-    defaultPermission: decodeMcpPermission(source['default_permission'], method, 'default_permission'),
+    defaultPermission: decodeMcpPermission(
+      source['default_permission'],
+      method,
+      'default_permission'
+    ),
   };
 }
 
@@ -2392,6 +2393,7 @@ export interface HealthReport {
   status: string;
   version: string;
   capabilities: HealthCapabilities;
+  uptimeSeconds?: number;
 }
 
 export class WarshaClient
@@ -2624,7 +2626,9 @@ export class WarshaClient
     return summaryList(rows, 'runs.list', decodeRunSummary);
   }
 
-  async getSwarmSettings(projectId: ProjectId): Promise<{ enableSwarm: boolean; maxParallelAgents: number }> {
+  async getSwarmSettings(
+    projectId: ProjectId
+  ): Promise<{ enableSwarm: boolean; maxParallelAgents: number }> {
     const row = await this.rpc<unknown>('swarm.project.get', { project_id: projectId });
     if (typeof row !== 'object' || row === null) {
       throw new Error('Malformed swarm settings: not a JSON object');
@@ -2632,14 +2636,18 @@ export class WarshaClient
     const record = row as Record<string, unknown>;
     return {
       enableSwarm: record['enable_swarm'] === true,
-      maxParallelAgents: nonNegativeInt(field(record, 'max_parallel_agents'), 'swarm.project', 'max_parallel_agents'),
+      maxParallelAgents: nonNegativeInt(
+        field(record, 'max_parallel_agents'),
+        'swarm.project',
+        'max_parallel_agents'
+      ),
     };
   }
 
   async setSwarmSettings(
     projectId: ProjectId,
     enableSwarm: boolean,
-    maxParallelAgents?: number,
+    maxParallelAgents?: number
   ): Promise<{ enableSwarm: boolean; maxParallelAgents: number }> {
     // Literal object (no spread, no variable): the wire parser checks param
     // names on the call-site literal. `undefined` serialises as absent — the
@@ -2655,7 +2663,11 @@ export class WarshaClient
     const record = row as Record<string, unknown>;
     return {
       enableSwarm: record['enable_swarm'] === true,
-      maxParallelAgents: nonNegativeInt(field(record, 'max_parallel_agents'), 'swarm.project', 'max_parallel_agents'),
+      maxParallelAgents: nonNegativeInt(
+        field(record, 'max_parallel_agents'),
+        'swarm.project',
+        'max_parallel_agents'
+      ),
     };
   }
 
@@ -2668,7 +2680,7 @@ export class WarshaClient
     projectId: ProjectId,
     idea: string,
     runMode?: 'agent' | 'plan' | 'spec-file' | 'ask',
-    specFilePath?: string,
+    specFilePath?: string
   ): Promise<RunSummary> {
     // D4: the wire keeps the daemon's positional shape — trailing optional
     // params serialise as absent fields, never as a params object.
@@ -2807,17 +2819,11 @@ export class WarshaClient
   }
 
   async rejectGate(runId: RunId, stage: Stage, reason: string): Promise<void> {
-    await this.rpc<unknown>(
-      'gates.reject',
-      { run_id: runId, stage, reason, device_id: null }
-    );
+    await this.rpc<unknown>('gates.reject', { run_id: runId, stage, reason, device_id: null });
   }
 
   async requestChanges(runId: RunId, stage: Stage, notes: string): Promise<void> {
-    await this.rpc<unknown>(
-      'gates.changes',
-      { run_id: runId, stage, notes, device_id: null }
-    );
+    await this.rpc<unknown>('gates.changes', { run_id: runId, stage, notes, device_id: null });
   }
 
   // Providers.
@@ -2872,7 +2878,7 @@ export class WarshaClient
   // and no per-provider budget exists (DECISIONS.md 2026-11-03). Both client methods were
   // deleted rather than aliased, so no screen can present a number the daemon never kept.
 
-    // ------------------------------------------------------------------
+  // ------------------------------------------------------------------
   // E2 — the secretary chat (per-project threads + one global thread)
   // ------------------------------------------------------------------
 
@@ -2929,7 +2935,7 @@ export class WarshaClient
     return decodeSecretaryChatReply(row);
   }
 
-// Project Budgets
+  // Project Budgets
   /**
    * `budget.show`, converted from the daemon's cents to the USD the screens present.
    *
@@ -2984,7 +2990,7 @@ export class WarshaClient
   // invented limit.
   async usageByDimension(
     dimension: 'provider_id' | 'model_id' | 'agent_role' | 'project_id',
-    projectId?: ProjectId,
+    projectId?: ProjectId
   ): Promise<UsageRow[]> {
     const wire = await this.rpc<unknown>('usage.by_dimension', {
       dimension,
@@ -2999,31 +3005,32 @@ export class WarshaClient
         dimension: String(source['dimension'] ?? ''),
         key: String(source['key'] ?? ''),
         costCents: nonNegativeInt(source['cost_cents'], 'usage.by_dimension', 'cost_cents'),
-        promptTokens: nonNegativeInt(source['prompt_tokens'], 'usage.by_dimension', 'prompt_tokens'),
+        promptTokens: nonNegativeInt(
+          source['prompt_tokens'],
+          'usage.by_dimension',
+          'prompt_tokens'
+        ),
         completionTokens: nonNegativeInt(
           source['completion_tokens'],
           'usage.by_dimension',
-          'completion_tokens',
+          'completion_tokens'
         ),
         cacheReadTokens: nonNegativeInt(
           source['cache_read_tokens'],
           'usage.by_dimension',
-          'cache_read_tokens',
+          'cache_read_tokens'
         ),
         cacheWriteTokens: nonNegativeInt(
           source['cache_write_tokens'],
           'usage.by_dimension',
-          'cache_write_tokens',
+          'cache_write_tokens'
         ),
         requests: nonNegativeInt(source['requests'], 'usage.by_dimension', 'requests'),
       };
     });
   }
 
-  async usageByTime(
-    granularity: 'day' | 'month',
-    projectId?: ProjectId,
-  ): Promise<UsageTimeRow[]> {
+  async usageByTime(granularity: 'day' | 'month', projectId?: ProjectId): Promise<UsageTimeRow[]> {
     const wire = await this.rpc<unknown>('usage.by_time', {
       granularity,
       projectId: projectId ?? null,
@@ -3040,17 +3047,17 @@ export class WarshaClient
         completionTokens: nonNegativeInt(
           source['completion_tokens'],
           'usage.by_time',
-          'completion_tokens',
+          'completion_tokens'
         ),
         cacheReadTokens: nonNegativeInt(
           source['cache_read_tokens'],
           'usage.by_time',
-          'cache_read_tokens',
+          'cache_read_tokens'
         ),
         cacheWriteTokens: nonNegativeInt(
           source['cache_write_tokens'],
           'usage.by_time',
-          'cache_write_tokens',
+          'cache_write_tokens'
         ),
         requests: nonNegativeInt(source['requests'], 'usage.by_time', 'requests'),
       };
@@ -3082,14 +3089,14 @@ export class WarshaClient
         usagePercentage: nonNegativeInt(
           quota['usage_percentage'],
           'providers.quota',
-          'usage_percentage',
+          'usage_percentage'
         ),
       };
     } else if (state === 'unknown') {
       decoded = { state: 'unknown' };
     } else {
       throw new Error(
-        `${WIRING_RESULT_ERROR} from providers.quota: "state" is not reported, estimated or unknown`,
+        `${WIRING_RESULT_ERROR} from providers.quota: "state" is not reported, estimated or unknown`
       );
     }
     const checkedAt = source['checked_at'];
@@ -3257,10 +3264,14 @@ export class WarshaClient
   async health(): Promise<HealthReport> {
     const result = await this.rpc<unknown>('health');
     const record = wave2Object(result, 'health');
+    const uptime = field(record, 'uptime_seconds');
+    const uptimeSeconds =
+      typeof uptime === 'number' && Number.isFinite(uptime) && uptime >= 0 ? uptime : undefined;
     return {
       status: wave2String(record, 'status'),
       version: wave2String(record, 'version'),
       capabilities: { runControls: healthRunControls(field(record, 'capabilities')) },
+      ...(uptimeSeconds !== undefined ? { uptimeSeconds } : {}),
     };
   }
 
@@ -3901,7 +3912,9 @@ function nonNegativeInt(value: unknown, method: string, name: string): number {
   if (value === null || value === undefined) return 0;
   const n = wiringNumber(value, method, name);
   if (!Number.isInteger(n) || n < 0) {
-    throw new Error(`${WIRING_RESULT_ERROR} from ${method}: "${name}" is not a non-negative integer`);
+    throw new Error(
+      `${WIRING_RESULT_ERROR} from ${method}: "${name}" is not a non-negative integer`
+    );
   }
   return n;
 }
@@ -4077,11 +4090,7 @@ function decodeRoutineState(value: unknown, method: string): RoutineState {
  * absent one is a wire change rather than "no value" — and decoding it as the empty
  * form would show the reviewer a blank where the daemon said something.
  */
-function evidenceField(
-  source: Record<string, unknown>,
-  name: string,
-  method: string
-): unknown {
+function evidenceField(source: Record<string, unknown>, name: string, method: string): unknown {
   if (!Object.prototype.hasOwnProperty.call(source, name)) {
     throw new Error(`${WIRING_RESULT_ERROR} from ${method}: "${name}" is missing`);
   }
@@ -4089,11 +4098,7 @@ function evidenceField(
 }
 
 /** A nested `GateEvidence` object (`tests` or a present `preview`), refused by its field name. */
-function evidenceObject(
-  value: unknown,
-  field: string,
-  method: string
-): Record<string, unknown> {
+function evidenceObject(value: unknown, field: string, method: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error(`${WIRING_RESULT_ERROR} from ${method}: "${field}" is not an object`);
   }
@@ -4106,7 +4111,11 @@ function decodeTestRun(value: unknown, method: string): TestRun {
     program: wiringString(evidenceField(source, 'program', method), method, 'program'),
     args: wiringStringList(evidenceField(source, 'args', method), method, 'args'),
     success: wiringBoolean(evidenceField(source, 'success', method), method, 'success'),
-    exit_code: wiringNullableNumber(evidenceField(source, 'exit_code', method), method, 'exit_code'),
+    exit_code: wiringNullableNumber(
+      evidenceField(source, 'exit_code', method),
+      method,
+      'exit_code'
+    ),
     stdout: wiringString(evidenceField(source, 'stdout', method), method, 'stdout'),
     stderr: wiringString(evidenceField(source, 'stderr', method), method, 'stderr'),
     duration_ms: wiringNumber(evidenceField(source, 'duration_ms', method), method, 'duration_ms'),
@@ -4566,7 +4575,9 @@ export function subscribeEvents(options: SubscribeEventsOptions): EventSubscript
     try {
       socket.send(JSON.stringify({ method, params }));
     } catch (cause) {
-      reportError(new Error(redactToken(`Could not send ${method}: ${describeCause(cause)}`, token)));
+      reportError(
+        new Error(redactToken(`Could not send ${method}: ${describeCause(cause)}`, token))
+      );
     }
   };
 

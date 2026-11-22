@@ -66,7 +66,8 @@ function createMockClient(overrides: Partial<WarshaClient> = {}): WarshaClient {
     },
     server_origin: 'http://127.0.0.1:8766',
     pairing_link: 'http://127.0.0.1:8766/pair',
-    qr_code_png: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    qr_code_png:
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
     loopback_only: true,
   };
 
@@ -464,25 +465,35 @@ describe('SettingsPage (Slice 1)', () => {
     renderSettings('/settings/general', client, 'simple', 'ar');
     await waitFor(() => expect(screen.getByTestId('settings-section-general')).toBeDefined());
 
-    const enBtn = document.querySelector('button[data-action="settings.language.set"][data-value="en"]');
+    const enBtn = document.querySelector(
+      'button[data-action="settings.language.set"][data-value="en"]'
+    );
     expect(enBtn).not.toBeNull();
     fireEvent.click(enBtn as HTMLElement);
     expect(document.documentElement.dir).toBe('ltr');
 
-    const darkBtn = document.querySelector('button[data-action="settings.theme.set"][data-value="dark"]');
+    const darkBtn = document.querySelector(
+      'button[data-action="settings.theme.set"][data-value="dark"]'
+    );
     expect(darkBtn).not.toBeNull();
     fireEvent.click(darkBtn as HTMLElement);
     expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
 
-    const advBtn = document.querySelector('button[data-action="settings.mode-default.set"][data-value="advanced"]');
+    const advBtn = document.querySelector(
+      'button[data-action="settings.mode-default.set"][data-value="advanced"]'
+    );
     expect(advBtn).not.toBeNull();
     fireEvent.click(advBtn as HTMLElement);
     expect(document.documentElement.getAttribute('data-mode')).toBe('developers');
 
-    const budgetInput = screen.getByTestId('general-default-budget-input').querySelector('input') as HTMLInputElement;
+    const budgetInput = screen
+      .getByTestId('general-default-budget-input')
+      .querySelector('input') as HTMLInputElement;
     fireEvent.change(budgetInput, { target: { value: '25' } });
 
-    const saveBtn = document.querySelector('button[data-action="settings.budget-default.save"]') as HTMLElement;
+    const saveBtn = document.querySelector(
+      'button[data-action="settings.budget-default.save"]'
+    ) as HTMLElement;
     fireEvent.click(saveBtn);
 
     await waitFor(() => {
@@ -502,7 +513,9 @@ describe('SettingsPage (Slice 1)', () => {
     renderSettings('/settings/general', client);
     await waitFor(() => expect(screen.getByRole('alert')).toBeDefined());
 
-    const retryBtn = document.querySelector('button[data-action="settings.error.retry"]') as HTMLElement;
+    const retryBtn = document.querySelector(
+      'button[data-action="settings.error.retry"]'
+    ) as HTMLElement;
     fireEvent.click(retryBtn);
 
     await waitFor(() => expect(listPreferences).toHaveBeenCalledTimes(2));
@@ -514,17 +527,26 @@ describe('SettingsPage (Slice 1)', () => {
     await waitFor(() => expect(screen.getByTestId('settings-section-models')).toBeDefined());
 
     // Open add dialog
-    fireEvent.click(document.querySelector('button[data-action="settings.provider.add.open"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.provider.add.open"]') as HTMLElement
+    );
     await waitFor(() => expect(screen.getByTestId('add-provider-dialog')).toBeDefined());
 
-    const keyInput = screen.getByTestId('provider-form-key').querySelector('input') as HTMLInputElement;
+    const keyInput = screen
+      .getByTestId('provider-form-key')
+      .querySelector('input') as HTMLInputElement;
     expect(keyInput.type).toBe('password');
 
-    fireEvent.change(screen.getByTestId('provider-form-name').querySelector('input') as HTMLInputElement, {
-      target: { value: 'prov-new' },
-    });
+    fireEvent.change(
+      screen.getByTestId('provider-form-name').querySelector('input') as HTMLInputElement,
+      {
+        target: { value: 'prov-new' },
+      }
+    );
     fireEvent.change(keyInput, { target: { value: 'sk-secret-key' } });
-    fireEvent.click(document.querySelector('button[data-action="settings.provider.add.save"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.provider.add.save"]') as HTMLElement
+    );
 
     await waitFor(() => {
       expect(client.addProvider).toHaveBeenCalledWith(
@@ -533,16 +555,26 @@ describe('SettingsPage (Slice 1)', () => {
     });
 
     // Test & fetch models
-    fireEvent.click(document.querySelector('button[data-action="settings.provider.test"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.provider.test"]') as HTMLElement
+    );
     await waitFor(() => expect(client.testProvider).toHaveBeenCalledWith('prov-alpha'));
 
-    fireEvent.click(document.querySelector('button[data-action="settings.provider.models.fetch"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.provider.models.fetch"]') as HTMLElement
+    );
     await waitFor(() => expect(client.checkProviderModels).toHaveBeenCalledWith('prov-alpha'));
 
     // Remove provider via Dialog
-    fireEvent.click(document.querySelector('button[data-action="settings.provider.remove.open"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.provider.remove.open"]') as HTMLElement
+    );
     await waitFor(() => expect(screen.getByTestId('remove-provider-dialog')).toBeDefined());
-    fireEvent.click(document.querySelector('button[data-action="settings.provider.remove.confirm"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector(
+        'button[data-action="settings.provider.remove.confirm"]'
+      ) as HTMLElement
+    );
     await waitFor(() => expect(client.removeProvider).toHaveBeenCalledWith('prov-alpha'));
   });
 
@@ -551,19 +583,34 @@ describe('SettingsPage (Slice 1)', () => {
     renderSettings('/settings/models', client);
     await waitFor(() => expect(screen.getByTestId('settings-section-models')).toBeDefined());
 
-    fireEvent.change(screen.getByTestId('custom-model-id-input').querySelector('input') as HTMLInputElement, {
-      target: { value: 'custom-m1' },
-    });
-    fireEvent.click(document.querySelector('button[data-action="settings.model.add"]') as HTMLElement);
-    await waitFor(() => expect(client.addCustomModel).toHaveBeenCalledWith('prov-alpha', 'custom-m1', undefined));
+    fireEvent.change(
+      screen.getByTestId('custom-model-id-input').querySelector('input') as HTMLInputElement,
+      {
+        target: { value: 'custom-m1' },
+      }
+    );
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.model.add"]') as HTMLElement
+    );
+    await waitFor(() =>
+      expect(client.addCustomModel).toHaveBeenCalledWith('prov-alpha', 'custom-m1', undefined)
+    );
 
-    fireEvent.click(document.querySelector('button[data-action="settings.model.remove.open"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.model.remove.open"]') as HTMLElement
+    );
     await waitFor(() => expect(screen.getByTestId('remove-model-dialog')).toBeDefined());
-    fireEvent.click(document.querySelector('button[data-action="settings.model.remove.confirm"]') as HTMLElement);
-    await waitFor(() => expect(client.removeCustomModel).toHaveBeenCalledWith('prov-alpha', 'model-one'));
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.model.remove.confirm"]') as HTMLElement
+    );
+    await waitFor(() =>
+      expect(client.removeCustomModel).toHaveBeenCalledWith('prov-alpha', 'model-one')
+    );
 
     // Role route save
-    fireEvent.click(document.querySelector('button[data-action="settings.role.route.set"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.role.route.set"]') as HTMLElement
+    );
     await waitFor(() => expect(client.setRoleConfig).toHaveBeenCalled());
   });
 
@@ -572,13 +619,21 @@ describe('SettingsPage (Slice 1)', () => {
     renderSettings('/settings/devices', client);
     await waitFor(() => expect(screen.getByTestId('settings-section-devices')).toBeDefined());
 
-    fireEvent.click(document.querySelector('button[data-action="settings.device.pair.start"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.device.pair.start"]') as HTMLElement
+    );
     await waitFor(() => expect(screen.getByTestId('device-pair-dialog')).toBeDefined());
-    fireEvent.click(document.querySelector('button[data-action="settings.dialog.cancel"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.dialog.cancel"]') as HTMLElement
+    );
 
-    fireEvent.click(document.querySelector('button[data-action="settings.device.revoke.open"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.device.revoke.open"]') as HTMLElement
+    );
     await waitFor(() => expect(screen.getByTestId('device-revoke-dialog')).toBeDefined());
-    fireEvent.click(document.querySelector('button[data-action="settings.device.revoke.confirm"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.device.revoke.confirm"]') as HTMLElement
+    );
     await waitFor(() => expect(client.removeDevice).toHaveBeenCalledWith('dev-1'));
   });
 
@@ -590,14 +645,21 @@ describe('SettingsPage (Slice 1)', () => {
   });
 
   it('renders health info and supports refresh and copy in AboutSection', async () => {
-    const client = createMockClient();
+    const client = createMockClient({
+      health: vi.fn().mockResolvedValue({ status: 'ok', version: '0.3.0', uptimeSeconds: 125 }),
+    });
     renderSettings('/settings/about', client);
     await waitFor(() => expect(screen.getByTestId('settings-section-about')).toBeDefined());
+    await waitFor(() => expect(screen.getByText('2m 5s')).toBeDefined());
 
-    fireEvent.click(document.querySelector('button[data-action="settings.about.health.refresh"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.about.health.refresh"]') as HTMLElement
+    );
     await waitFor(() => expect(client.health).toHaveBeenCalled());
 
-    fireEvent.click(document.querySelector('button[data-action="settings.about.copy"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.about.copy"]') as HTMLElement
+    );
     await waitFor(() => expect(document.querySelector('.w-banner--success')).not.toBeNull());
   });
 
@@ -606,21 +668,35 @@ describe('SettingsPage (Slice 1)', () => {
     renderSettings('/settings/workflows', client, 'developers');
     await waitFor(() => expect(screen.getByTestId('settings-section-workflows')).toBeDefined());
 
-    const importArea = screen.getByTestId('workflow-import-textarea').querySelector('textarea') as HTMLTextAreaElement;
+    const importArea = screen
+      .getByTestId('workflow-import-textarea')
+      .querySelector('textarea') as HTMLTextAreaElement;
     fireEvent.change(importArea, { target: { value: '{"id":"wf-new","name":"Imported"}' } });
-    fireEvent.click(document.querySelector('button[data-action="settings.harness.import"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.harness.import"]') as HTMLElement
+    );
     await waitFor(() => expect(client.importHarness).toHaveBeenCalled());
 
-    fireEvent.click(document.querySelector('button[data-action="settings.harness.select"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.harness.select"]') as HTMLElement
+    );
     await waitFor(() => expect(client.selectHarness).toHaveBeenCalledWith('wf-1'));
 
-    fireEvent.click(document.querySelector('button[data-action="settings.harness.view"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.harness.view"]') as HTMLElement
+    );
     await waitFor(() => expect(screen.getByTestId('workflow-view-dialog')).toBeDefined());
-    fireEvent.click(document.querySelector('button[data-action="settings.dialog.cancel"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.dialog.cancel"]') as HTMLElement
+    );
 
-    fireEvent.click(document.querySelector('button[data-action="settings.harness.delete.open"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.harness.delete.open"]') as HTMLElement
+    );
     await waitFor(() => expect(screen.getByTestId('workflow-delete-dialog')).toBeDefined());
-    fireEvent.click(document.querySelector('button[data-action="settings.harness.delete.confirm"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.harness.delete.confirm"]') as HTMLElement
+    );
     await waitFor(() => expect(client.deleteHarness).toHaveBeenCalledWith('wf-1'));
   });
 
@@ -629,21 +705,37 @@ describe('SettingsPage (Slice 1)', () => {
     renderSettings('/settings/skills', client, 'developers');
     await waitFor(() => expect(screen.getByTestId('settings-section-skills')).toBeDefined());
 
-    fireEvent.change(screen.getByTestId('skill-import-name').querySelector('input') as HTMLInputElement, {
-      target: { value: 'skill-new' },
-    });
-    fireEvent.change(screen.getByTestId('skill-import-content').querySelector('textarea') as HTMLTextAreaElement, {
-      target: { value: '# Skill Instructions' },
-    });
-    fireEvent.click(document.querySelector('button[data-action="settings.skill.import"]') as HTMLElement);
-    await waitFor(() => expect(client.importSkill).toHaveBeenCalledWith('# Skill Instructions', 'skill-new'));
+    fireEvent.change(
+      screen.getByTestId('skill-import-name').querySelector('input') as HTMLInputElement,
+      {
+        target: { value: 'skill-new' },
+      }
+    );
+    fireEvent.change(
+      screen.getByTestId('skill-import-content').querySelector('textarea') as HTMLTextAreaElement,
+      {
+        target: { value: '# Skill Instructions' },
+      }
+    );
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.skill.import"]') as HTMLElement
+    );
+    await waitFor(() =>
+      expect(client.importSkill).toHaveBeenCalledWith('# Skill Instructions', 'skill-new')
+    );
 
-    fireEvent.click(document.querySelector('button[data-action="settings.skill.toggle"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.skill.toggle"]') as HTMLElement
+    );
     await waitFor(() => expect(client.toggleSkill).toHaveBeenCalledWith('skill-1', false));
 
-    fireEvent.click(document.querySelector('button[data-action="settings.skill.delete.open"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.skill.delete.open"]') as HTMLElement
+    );
     await waitFor(() => expect(screen.getByTestId('skill-delete-dialog')).toBeDefined());
-    fireEvent.click(document.querySelector('button[data-action="settings.skill.delete.confirm"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.skill.delete.confirm"]') as HTMLElement
+    );
     await waitFor(() => expect(client.deleteSkill).toHaveBeenCalledWith('skill-1'));
   });
 
@@ -652,29 +744,51 @@ describe('SettingsPage (Slice 1)', () => {
     renderSettings('/settings/plugins', client, 'developers');
     await waitFor(() => expect(screen.getByTestId('settings-section-plugins')).toBeDefined());
 
-    fireEvent.change(screen.getByTestId('plugin-install-textarea').querySelector('textarea') as HTMLTextAreaElement, {
-      target: { value: '{"id":"plugin-2"}' },
-    });
-    fireEvent.click(document.querySelector('button[data-action="settings.plugin.install"]') as HTMLElement);
+    fireEvent.change(
+      screen
+        .getByTestId('plugin-install-textarea')
+        .querySelector('textarea') as HTMLTextAreaElement,
+      {
+        target: { value: '{"id":"plugin-2"}' },
+      }
+    );
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.plugin.install"]') as HTMLElement
+    );
     await waitFor(() => expect(client.installPlugin).toHaveBeenCalledWith('{"id":"plugin-2"}'));
 
-    fireEvent.click(document.querySelector('button[data-action="settings.plugin.toggle"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.plugin.toggle"]') as HTMLElement
+    );
     await waitFor(() => expect(client.togglePlugin).toHaveBeenCalledWith('plugin-1', false));
 
-    fireEvent.click(document.querySelector('button[data-action="settings.plugin.configure.open"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.plugin.configure.open"]') as HTMLElement
+    );
     await waitFor(() => expect(screen.getByTestId('plugin-configure-dialog')).toBeDefined());
-    const envValInput = screen.getByTestId('plugin-env-val-input').querySelector('input') as HTMLInputElement;
+    const envValInput = screen
+      .getByTestId('plugin-env-val-input')
+      .querySelector('input') as HTMLInputElement;
     expect(envValInput.type).toBe('password');
-    fireEvent.change(screen.getByTestId('plugin-env-key-input').querySelector('input') as HTMLInputElement, {
-      target: { value: 'API_TOKEN' },
-    });
+    fireEvent.change(
+      screen.getByTestId('plugin-env-key-input').querySelector('input') as HTMLInputElement,
+      {
+        target: { value: 'API_TOKEN' },
+      }
+    );
     fireEvent.change(envValInput, { target: { value: '${secrets:TOK}' } });
-    fireEvent.click(document.querySelector('button[data-action="settings.plugin.configure.save"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.plugin.configure.save"]') as HTMLElement
+    );
     await waitFor(() => expect(client.configurePlugin).toHaveBeenCalled());
 
-    fireEvent.click(document.querySelector('button[data-action="settings.plugin.remove.open"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.plugin.remove.open"]') as HTMLElement
+    );
     await waitFor(() => expect(screen.getByTestId('plugin-remove-dialog')).toBeDefined());
-    fireEvent.click(document.querySelector('button[data-action="settings.plugin.remove.confirm"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.plugin.remove.confirm"]') as HTMLElement
+    );
     await waitFor(() => expect(client.removePlugin).toHaveBeenCalledWith('plugin-1'));
   });
 
@@ -683,24 +797,48 @@ describe('SettingsPage (Slice 1)', () => {
     renderSettings('/settings/integrations', client, 'developers');
     await waitFor(() => expect(screen.getByTestId('settings-section-integrations')).toBeDefined());
 
-    fireEvent.click(document.querySelector('button[data-action="settings.integration.connect.open"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector(
+        'button[data-action="settings.integration.connect.open"]'
+      ) as HTMLElement
+    );
     await waitFor(() => expect(screen.getByTestId('integration-connect-dialog')).toBeDefined());
 
-    const tokenInput = screen.getByTestId('integration-token-input').querySelector('input') as HTMLInputElement;
+    const tokenInput = screen
+      .getByTestId('integration-token-input')
+      .querySelector('input') as HTMLInputElement;
     expect(tokenInput.type).toBe('password');
-    fireEvent.change(screen.getByTestId('integration-id-input').querySelector('input') as HTMLInputElement, {
-      target: { value: 'github' },
-    });
+    fireEvent.change(
+      screen.getByTestId('integration-id-input').querySelector('input') as HTMLInputElement,
+      {
+        target: { value: 'github' },
+      }
+    );
     fireEvent.change(tokenInput, { target: { value: 'ghp-secret-token' } });
-    fireEvent.click(document.querySelector('button[data-action="settings.integration.connect"]') as HTMLElement);
-    await waitFor(() => expect(client.connectIntegration).toHaveBeenCalledWith('github', expect.objectContaining({ token: 'ghp-secret-token' })));
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.integration.connect"]') as HTMLElement
+    );
+    await waitFor(() =>
+      expect(client.connectIntegration).toHaveBeenCalledWith(
+        'github',
+        expect.objectContaining({ token: 'ghp-secret-token' })
+      )
+    );
 
-    fireEvent.click(document.querySelector('button[data-action="settings.integration.test"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.integration.test"]') as HTMLElement
+    );
     await waitFor(() => expect(client.testIntegration).toHaveBeenCalledWith('github'));
 
-    fireEvent.click(document.querySelector('button[data-action="settings.integration.disconnect.open"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector(
+        'button[data-action="settings.integration.disconnect.open"]'
+      ) as HTMLElement
+    );
     await waitFor(() => expect(screen.getByTestId('integration-disconnect-dialog')).toBeDefined());
-    fireEvent.click(document.querySelector('button[data-action="settings.integration.disconnect"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.integration.disconnect"]') as HTMLElement
+    );
     await waitFor(() => expect(client.disconnectIntegration).toHaveBeenCalledWith('github'));
   });
 
@@ -709,16 +847,28 @@ describe('SettingsPage (Slice 1)', () => {
     renderSettings('/settings/routines', client, 'developers');
     await waitFor(() => expect(screen.getByTestId('settings-section-routines')).toBeDefined());
 
-    fireEvent.click(document.querySelector('button[data-action="settings.routine.run-now"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.routine.run-now"]') as HTMLElement
+    );
     await waitFor(() => expect(client.runRoutineNow).toHaveBeenCalledWith('routine-1'));
 
-    fireEvent.click(document.querySelector('button[data-action="settings.routine.pause"]:not([disabled])') as HTMLElement);
+    fireEvent.click(
+      document.querySelector(
+        'button[data-action="settings.routine.pause"]:not([disabled])'
+      ) as HTMLElement
+    );
     await waitFor(() => expect(client.pauseRoutine).toHaveBeenCalledWith('routine-1'));
 
-    fireEvent.click(document.querySelector('button[data-action="settings.routine.resume"]:not([disabled])') as HTMLElement);
+    fireEvent.click(
+      document.querySelector(
+        'button[data-action="settings.routine.resume"]:not([disabled])'
+      ) as HTMLElement
+    );
     await waitFor(() => expect(client.resumeRoutine).toHaveBeenCalledWith('routine-2'));
 
-    fireEvent.click(document.querySelector('button[data-action="settings.routine.view"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.routine.view"]') as HTMLElement
+    );
     await waitFor(() => expect(screen.getByTestId('routine-view-dialog')).toBeDefined());
   });
 
@@ -727,9 +877,13 @@ describe('SettingsPage (Slice 1)', () => {
     renderSettings('/settings/budgets', client, 'developers');
     await waitFor(() => expect(screen.getByTestId('settings-section-budgets')).toBeDefined());
 
-    const input = screen.getByTestId('project-budget-input-proj-1').querySelector('input') as HTMLInputElement;
+    const input = screen
+      .getByTestId('project-budget-input-proj-1')
+      .querySelector('input') as HTMLInputElement;
     fireEvent.change(input, { target: { value: '35' } });
-    fireEvent.click(document.querySelector('button[data-action="settings.budget.save"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.budget.save"]') as HTMLElement
+    );
     await waitFor(() => expect(client.setProjectBudget).toHaveBeenCalledWith('proj-1', 3500));
   });
 
@@ -738,19 +892,31 @@ describe('SettingsPage (Slice 1)', () => {
     renderSettings('/settings/postlaunch', client, 'developers');
     await waitFor(() => expect(screen.getByTestId('settings-section-postlaunch')).toBeDefined());
 
-    fireEvent.change(screen.getByTestId('postlaunch-run-filter-input').querySelector('input') as HTMLInputElement, {
-      target: { value: 'run-1' },
-    });
-    fireEvent.click(document.querySelector('button[data-action="settings.crashes.filter"]') as HTMLElement);
+    fireEvent.change(
+      screen.getByTestId('postlaunch-run-filter-input').querySelector('input') as HTMLInputElement,
+      {
+        target: { value: 'run-1' },
+      }
+    );
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.crashes.filter"]') as HTMLElement
+    );
     await waitFor(() => expect(client.listCrashReports).toHaveBeenCalledWith('run-1'));
 
-    fireEvent.click(document.querySelector('button[data-action="settings.crash.copy"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.crash.copy"]') as HTMLElement
+    );
     await waitFor(() => expect(document.querySelector('.w-banner--success')).not.toBeNull());
 
-    fireEvent.change(screen.getByTestId('postlaunch-store-select').querySelector('select') as HTMLSelectElement, {
-      target: { value: 'play' },
-    });
-    fireEvent.click(document.querySelector('button[data-action="settings.reviews.filter"]') as HTMLElement);
+    fireEvent.change(
+      screen.getByTestId('postlaunch-store-select').querySelector('select') as HTMLSelectElement,
+      {
+        target: { value: 'play' },
+      }
+    );
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.reviews.filter"]') as HTMLElement
+    );
     await waitFor(() => expect(client.listStoreReviews).toHaveBeenCalledWith('play'));
   });
 
@@ -759,15 +925,21 @@ describe('SettingsPage (Slice 1)', () => {
     renderSettings('/settings/backend', client, 'developers');
     await waitFor(() => expect(screen.getByTestId('settings-section-backend')).toBeDefined());
 
-    const supabaseBtn = document.querySelector('button[data-action="settings.backend.kind.set"][data-value="supabase"]') as HTMLElement;
+    const supabaseBtn = document.querySelector(
+      'button[data-action="settings.backend.kind.set"][data-value="supabase"]'
+    ) as HTMLElement;
     fireEvent.click(supabaseBtn);
     await waitFor(() => expect(client.setBackendKit).toHaveBeenCalled());
 
-    const featureBtn = document.querySelector('button[data-action="settings.backend.feature.toggle"][data-value="auth"]') as HTMLElement;
+    const featureBtn = document.querySelector(
+      'button[data-action="settings.backend.feature.toggle"][data-value="auth"]'
+    ) as HTMLElement;
     fireEvent.click(featureBtn);
     await waitFor(() => expect(client.setBackendKit).toHaveBeenCalled());
 
-    fireEvent.click(document.querySelector('button[data-action="settings.backend.export"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.backend.export"]') as HTMLElement
+    );
     await waitFor(() => expect(client.exportBackend).toHaveBeenCalled());
   });
 
@@ -776,14 +948,20 @@ describe('SettingsPage (Slice 1)', () => {
     renderSettings('/settings/general', client);
     await waitFor(() => expect(screen.getByTestId('settings-section-general')).toBeDefined());
 
-    const budgetInput = screen.getByTestId('general-default-budget-input').querySelector('input') as HTMLInputElement;
+    const budgetInput = screen
+      .getByTestId('general-default-budget-input')
+      .querySelector('input') as HTMLInputElement;
     fireEvent.change(budgetInput, { target: { value: '-5' } });
 
-    const saveBtn = document.querySelector('button[data-action="settings.budget-default.save"]') as HTMLElement;
+    const saveBtn = document.querySelector(
+      'button[data-action="settings.budget-default.save"]'
+    ) as HTMLElement;
     fireEvent.click(saveBtn);
 
     await waitFor(() => {
-      expect(screen.getByText(/أدخل قيمة رقمية موجبة صالحة|Enter a valid positive number/)).toBeDefined();
+      expect(
+        screen.getByText(/أدخل قيمة رقمية موجبة صالحة|Enter a valid positive number/)
+      ).toBeDefined();
     });
     expect(client.recordPreference).not.toHaveBeenCalled();
   });
@@ -793,10 +971,14 @@ describe('SettingsPage (Slice 1)', () => {
     renderSettings('/settings/models', client);
     await waitFor(() => expect(screen.getByTestId('settings-section-models')).toBeDefined());
 
-    fireEvent.click(document.querySelector('button[data-action="settings.provider.add.open"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.provider.add.open"]') as HTMLElement
+    );
     await waitFor(() => expect(screen.getByTestId('add-provider-dialog')).toBeDefined());
 
-    fireEvent.click(document.querySelector('button[data-action="settings.provider.add.save"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.provider.add.save"]') as HTMLElement
+    );
     await waitFor(() => expect(document.querySelector('.w-banner--danger')).not.toBeNull());
     expect(client.addProvider).not.toHaveBeenCalled();
   });
@@ -806,12 +988,21 @@ describe('SettingsPage (Slice 1)', () => {
     renderSettings('/settings/models', client);
     await waitFor(() => expect(screen.getByTestId('settings-section-models')).toBeDefined());
 
-    fireEvent.change(screen.getByTestId('custom-model-id-input').querySelector('input') as HTMLInputElement, {
-      target: { value: '' },
-    });
-    fireEvent.click(document.querySelector('button[data-action="settings.model.add"]') as HTMLElement);
+    fireEvent.change(
+      screen.getByTestId('custom-model-id-input').querySelector('input') as HTMLInputElement,
+      {
+        target: { value: '' },
+      }
+    );
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.model.add"]') as HTMLElement
+    );
     await waitFor(() => {
-      expect(screen.getByText(/يرجى تحديد المزوّد وإدخال معرّف النموذج|Please select a provider and enter a model ID/)).toBeDefined();
+      expect(
+        screen.getByText(
+          /يرجى تحديد المزوّد وإدخال معرّف النموذج|Please select a provider and enter a model ID/
+        )
+      ).toBeDefined();
     });
     expect(client.addCustomModel).not.toHaveBeenCalled();
   });
@@ -824,11 +1015,15 @@ describe('SettingsPage (Slice 1)', () => {
   });
 
   it('handles provider test failure in ModelsSection', async () => {
-    const client = createMockClient({ testProvider: vi.fn().mockRejectedValue(new Error('Connection refused')) });
+    const client = createMockClient({
+      testProvider: vi.fn().mockRejectedValue(new Error('Connection refused')),
+    });
     renderSettings('/settings/models', client);
     await waitFor(() => expect(screen.getByTestId('settings-section-models')).toBeDefined());
 
-    fireEvent.click(document.querySelector('button[data-action="settings.provider.test"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.provider.test"]') as HTMLElement
+    );
     await waitFor(() => expect(client.testProvider).toHaveBeenCalledWith('prov-alpha'));
     await waitFor(() => {
       expect(screen.getByText(/فشل الاختبار|Test failed/)).toBeDefined();
@@ -836,12 +1031,17 @@ describe('SettingsPage (Slice 1)', () => {
   });
 
   it('renders error banner and retries in DevicesSection when listDevices fails', async () => {
-    const listDevices = vi.fn().mockRejectedValueOnce(new Error('Device read failed')).mockResolvedValueOnce([]);
+    const listDevices = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Device read failed'))
+      .mockResolvedValueOnce([]);
     const client = createMockClient({ listDevices });
     renderSettings('/settings/devices', client);
     await waitFor(() => expect(screen.getByTestId('settings-section-devices')).toBeDefined());
 
-    const retryBtn = document.querySelector('button[data-action="settings.error.retry"]') as HTMLElement;
+    const retryBtn = document.querySelector(
+      'button[data-action="settings.error.retry"]'
+    ) as HTMLElement;
     expect(retryBtn).not.toBeNull();
     fireEvent.click(retryBtn);
     await waitFor(() => expect(listDevices).toHaveBeenCalledTimes(2));
@@ -852,7 +1052,9 @@ describe('SettingsPage (Slice 1)', () => {
     renderSettings('/settings/devices', client);
     await waitFor(() => expect(screen.getByTestId('settings-section-devices')).toBeDefined());
 
-    fireEvent.click(document.querySelector('button[data-action="settings.device.pair.start"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.device.pair.start"]') as HTMLElement
+    );
     await waitFor(() => expect(screen.getByTestId('device-pair-dialog')).toBeDefined());
     expect(document.querySelector('.w-banner--info')).not.toBeNull();
   });
@@ -862,9 +1064,15 @@ describe('SettingsPage (Slice 1)', () => {
     renderSettings('/settings/workflows', client, 'developers');
     await waitFor(() => expect(screen.getByTestId('settings-section-workflows')).toBeDefined());
 
-    fireEvent.click(document.querySelector('button[data-action="settings.harness.import"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.harness.import"]') as HTMLElement
+    );
     await waitFor(() => {
-      expect(screen.getByText(/أدخل تعريف مسار العمل بصيغة JSON أولًا|Enter the workflow definition in JSON first/)).toBeDefined();
+      expect(
+        screen.getByText(
+          /أدخل تعريف مسار العمل بصيغة JSON أولًا|Enter the workflow definition in JSON first/
+        )
+      ).toBeDefined();
     });
     expect(client.importHarness).not.toHaveBeenCalled();
   });
@@ -881,9 +1089,13 @@ describe('SettingsPage (Slice 1)', () => {
     renderSettings('/settings/skills', client, 'developers');
     await waitFor(() => expect(screen.getByTestId('settings-section-skills')).toBeDefined());
 
-    fireEvent.click(document.querySelector('button[data-action="settings.skill.import"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.skill.import"]') as HTMLElement
+    );
     await waitFor(() => {
-      expect(screen.getByText(/أدخل محتوى المهارة أولًا|Enter the skill content first/)).toBeDefined();
+      expect(
+        screen.getByText(/أدخل محتوى المهارة أولًا|Enter the skill content first/)
+      ).toBeDefined();
     });
     expect(client.importSkill).not.toHaveBeenCalled();
   });
@@ -900,9 +1112,15 @@ describe('SettingsPage (Slice 1)', () => {
     renderSettings('/settings/plugins', client, 'developers');
     await waitFor(() => expect(screen.getByTestId('settings-section-plugins')).toBeDefined());
 
-    fireEvent.click(document.querySelector('button[data-action="settings.plugin.install"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.plugin.install"]') as HTMLElement
+    );
     await waitFor(() => {
-      expect(screen.getByText(/أدخل بيان الإضافة بصيغة JSON أولًا|Enter the plugin manifest in JSON first/)).toBeDefined();
+      expect(
+        screen.getByText(
+          /أدخل بيان الإضافة بصيغة JSON أولًا|Enter the plugin manifest in JSON first/
+        )
+      ).toBeDefined();
     });
     expect(client.installPlugin).not.toHaveBeenCalled();
   });
@@ -919,12 +1137,20 @@ describe('SettingsPage (Slice 1)', () => {
     renderSettings('/settings/integrations', client, 'developers');
     await waitFor(() => expect(screen.getByTestId('settings-section-integrations')).toBeDefined());
 
-    fireEvent.click(document.querySelector('button[data-action="settings.integration.connect.open"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector(
+        'button[data-action="settings.integration.connect.open"]'
+      ) as HTMLElement
+    );
     await waitFor(() => expect(screen.getByTestId('integration-connect-dialog')).toBeDefined());
 
-    fireEvent.click(document.querySelector('button[data-action="settings.integration.connect"]') as HTMLElement);
+    fireEvent.click(
+      document.querySelector('button[data-action="settings.integration.connect"]') as HTMLElement
+    );
     await waitFor(() => {
-      expect(screen.getByText(/يرجى إدخال معرّف التكامل|Please enter the integration ID/)).toBeDefined();
+      expect(
+        screen.getByText(/يرجى إدخال معرّف التكامل|Please enter the integration ID/)
+      ).toBeDefined();
     });
     expect(client.connectIntegration).not.toHaveBeenCalled();
   });
@@ -951,14 +1177,20 @@ describe('SettingsPage (Slice 1)', () => {
   });
 
   it('renders EmptyState in PostLaunchSection when crashes list is empty', async () => {
-    const client = createMockClient({ listCrashReports: vi.fn().mockResolvedValue([]), listStoreReviews: vi.fn().mockResolvedValue([]) });
+    const client = createMockClient({
+      listCrashReports: vi.fn().mockResolvedValue([]),
+      listStoreReviews: vi.fn().mockResolvedValue([]),
+    });
     renderSettings('/settings/postlaunch', client, 'developers');
     await waitFor(() => expect(screen.getByTestId('settings-section-postlaunch')).toBeDefined());
     expect(document.querySelector('.w-empty-state')).not.toBeNull();
   });
 
   it('renders EmptyState in BackendSection when runs list is empty', async () => {
-    const client = createMockClient({ listProjects: vi.fn().mockResolvedValue([]), listRuns: vi.fn().mockResolvedValue([]) });
+    const client = createMockClient({
+      listProjects: vi.fn().mockResolvedValue([]),
+      listRuns: vi.fn().mockResolvedValue([]),
+    });
     renderSettings('/settings/backend', client, 'developers');
     await waitFor(() => expect(screen.getByTestId('settings-section-backend')).toBeDefined());
     expect(document.querySelector('.w-empty-state')).not.toBeNull();

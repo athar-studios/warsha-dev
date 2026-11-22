@@ -11,9 +11,11 @@ export default {
   'settings.search.placeholder': 'Search settings...',
   'settings.search.empty': 'No matching settings',
   'settings.export.title': 'Exported settings',
-  'settings.export.desc': 'Export your preferences as a file you can import on another device. Secrets never leave the keychain; connected services show as references only.',
+  'settings.export.desc':
+    'Export your preferences as a file you can import on another device. Secrets never leave the keychain; connected services show as references only.',
   'settings.export.export': 'Export settings',
-  'settings.export.import_desc': 'Paste an exported settings file below to restore it. Entries whose data is missing on this device are flagged for re-entry.',
+  'settings.export.import_desc':
+    'Paste an exported settings file below to restore it. Entries whose data is missing on this device are flagged for re-entry.',
   'settings.export.import_placeholder': 'Paste exported settings JSON here',
   'settings.export.import_success': 'Settings imported. Items needing re-entry are flagged.',
   'settings.export.import_error': 'That file is not valid exported settings. Nothing was changed.',
@@ -31,7 +33,8 @@ export default {
   'settings.section.devices': 'Devices',
   'settings.section.devices.desc': 'Phones and devices authorized to review decisions remotely.',
   'settings.section.mcp': 'MCP permissions',
-  'settings.section.mcp.desc': 'Which MCP tools the agent may call without asking, and which are denied.',
+  'settings.section.mcp.desc':
+    'Which MCP tools the agent may call without asking, and which are denied.',
   'settings.section.workflows': 'Workflows',
   'settings.section.workflows.desc': 'Select the default workflow or import a custom pipeline.',
   'settings.section.skills': 'Skills',
@@ -39,7 +42,8 @@ export default {
   'settings.section.plugins': 'Plugins & MCP servers',
   'settings.section.plugins.desc': 'Install and configure external extensions over MCP.',
   'settings.section.integrations': 'Integrations',
-  'settings.section.integrations.desc': 'Connect external services such as GitHub and Slack securely.',
+  'settings.section.integrations.desc':
+    'Connect external services such as GitHub and Slack securely.',
   'settings.section.routines': 'Scheduled routines',
   'settings.section.routines.desc': 'Inspect recurring tasks and run, pause, or resume them.',
   'settings.section.budgets': 'Budgets',
@@ -47,7 +51,8 @@ export default {
   'settings.section.usage': 'Usage and quotas',
   'settings.section.usage.desc': 'Spend, tokens, and provider quotas by day and month.',
   'settings.section.permissions': 'Permissions',
-  'settings.section.permissions.desc': 'Control tool confinement and approval modes globally and per project.',
+  'settings.section.permissions.desc':
+    'Control tool confinement and approval modes globally and per project.',
   'settings.section.postlaunch': 'Post-launch',
   'settings.section.postlaunch.desc': 'Crash reports and app store reviews after release.',
   'settings.section.backend': 'Backend',
@@ -91,7 +96,8 @@ export default {
   'settings.providers.models_fetched': 'Fetched {count} models',
   'settings.providers.remove': 'Remove provider',
   'settings.providers.remove.title': 'Remove provider {name}',
-  'settings.providers.remove.desc': 'Provider {name} and its keychain secret will be removed. Roles routed to it will stop working.',
+  'settings.providers.remove.desc':
+    'Provider {name} and its keychain secret will be removed. Roles routed to it will stop working.',
   'settings.providers.status.enabled': 'Enabled',
   'settings.providers.status.disabled': 'Disabled',
   'settings.providers.key_saved_hint': 'Stored in the OS keychain and never leaves your device.',
@@ -153,9 +159,11 @@ export default {
   'settings.devices.status.revoked': 'Revoked',
   'settings.devices.revoke': 'Revoke access',
   'settings.devices.revoke.title': 'Revoke access for {name}',
-  'settings.devices.revoke.desc': 'Device {name} will immediately lose access to the Warsha daemon and can no longer approve gates.',
+  'settings.devices.revoke.desc':
+    'Device {name} will immediately lose access to the Warsha daemon and can no longer approve gates.',
   'settings.devices.pair.title': 'Scan QR code to pair',
-  'settings.devices.pair.desc': 'Open the Warsha app on your phone and scan this code to complete secure pairing.',
+  'settings.devices.pair.desc':
+    'Open the Warsha app on your phone and scan this code to complete secure pairing.',
   'settings.devices.pair.origin': 'Daemon origin',
   'settings.devices.pair.expires': 'Expires at',
   'settings.devices.pair.loopback_note': 'This daemon is listening on loopback only.',
@@ -223,7 +231,8 @@ export default {
   'settings.workflows.view': 'View details',
   'settings.workflows.delete': 'Delete workflow',
   'settings.workflows.delete.title': 'Delete workflow {name}',
-  'settings.workflows.delete.desc': 'Workflow {name} will be permanently deleted and unavailable for future runs.',
+  'settings.workflows.delete.desc':
+    'Workflow {name} will be permanently deleted and unavailable for future runs.',
   'settings.workflows.detail.title': 'Workflow details',
   'settings.workflows.detail.stages': 'Stages',
   'settings.workflows.detail.max_repairs': 'Max repair iterations',
@@ -252,7 +261,8 @@ export default {
   'settings.plugins.configure.save': 'Save configuration',
   'settings.plugins.remove': 'Remove plugin',
   'settings.plugins.remove.title': 'Remove plugin {name}',
-  'settings.plugins.remove.desc': 'Plugin {name} will be disconnected and its configuration removed.',
+  'settings.plugins.remove.desc':
+    'Plugin {name} will be disconnected and its configuration removed.',
   'settings.plugins.tools_count': '{count} tools',
 
   'settings.integrations.connect_btn': 'Connect integration',
@@ -263,7 +273,8 @@ export default {
   'settings.integrations.test': 'Test',
   'settings.integrations.disconnect': 'Disconnect',
   'settings.integrations.disconnect.title': 'Disconnect {name}',
-  'settings.integrations.disconnect.desc': 'Integration {name} will be disconnected and its stored credentials removed.',
+  'settings.integrations.disconnect.desc':
+    'Integration {name} will be disconnected and its stored credentials removed.',
   'settings.integrations.form.title': 'Connect integration',
   'settings.integrations.form.id': 'Integration ID',
   'settings.integrations.form.token': 'Access token',
@@ -367,6 +378,7 @@ export default {
   'settings.about.status': 'Daemon status',
   'settings.about.status.ok': 'Connected',
   'settings.about.status.down': 'Unavailable',
+  'settings.about.uptime': 'Uptime',
   'settings.about.data_dir': 'Data directory',
   'settings.about.refresh': 'Refresh status',
   'settings.about.copy': 'Copy system info',
@@ -387,7 +399,8 @@ export default {
   'settings.catalog.diff.desc': 'New models added: {added}. Prices updated for: {updated}.',
   'settings.catalog.apply': 'Apply update',
   'settings.catalog.prices_estimated': 'All prices are estimates from models.dev.',
-  'settings.permissions.honest_copy': 'Warsha\'s own tools are confined by path checks; CLI stages are confined by the CLI\'s own sandbox and flags; there is no operating-system sandbox around Warsha itself; "full access" means no path confinement for Warsha\'s tools and the CLI runs without its sandbox.',
+  'settings.permissions.honest_copy':
+    "Warsha's own tools are confined by path checks; CLI stages are confined by the CLI's own sandbox and flags; there is no operating-system sandbox around Warsha itself; \"full access\" means no path confinement for Warsha's tools and the CLI runs without its sandbox.",
   'settings.permissions.confinement_label': 'Confinement',
   'settings.permissions.confinement.read_only': 'Read only',
   'settings.permissions.confinement.workspace_write': 'Workspace write',
@@ -405,9 +418,11 @@ export default {
   'settings.permissions.projects_title': 'Project-specific overrides',
   'settings.permissions.reset_to_inherit': 'Reset to inherit defaults',
   'settings.section.swarm': 'Swarm',
-  'settings.section.swarm.desc': 'Run the Code stage as parallel subagents with their own worktrees.',
+  'settings.section.swarm.desc':
+    'Run the Code stage as parallel subagents with their own worktrees.',
   'swarm.enable': 'Enable Swarm',
-  'swarm.enable.description': 'Swarm parallelism uses more tokens and budget. Suitable for large refactors or multi-file changes. Experimental.',
+  'swarm.enable.description':
+    'Swarm parallelism uses more tokens and budget. Suitable for large refactors or multi-file changes. Experimental.',
   'swarm.max_agents': 'Max Parallel Agents',
   'swarm.max_agents.capped': 'Hard cap 20',
   'swarm.select_project': 'Project',
