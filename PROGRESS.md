@@ -1,5 +1,26 @@
 # PROGRESS.md — Warsha Build Log
 
+## Run 2026-11-20 — UX Issue 2: Server status on Windows (m08378)
+- **Problem**:
+  1. Shell failed to expose `data_dir` in `get_config`, resulting in Settings > About showing "-" for data folder.
+  2. Late-starting daemon on Windows left desktop client null with dead retry button.
+  3. `useHealth` returned null on missing client, causing `isEmpty` to report `status: 'empty'` instead of `'error'` ("silent green").
+  4. Startup routing misrouted to `/onboarding` on config read errors or skipped health when client was null.
+- **Fix**:
+  1. Added `CONFIG_DATA_DIR` to shell-owned keys in `apps/desktop/src-tauri/src/lib.rs`.
+  2. Added `reloadClient` callback and `useReloadClient` hook in `ClientContext.tsx`.
+  3. Made `useHealth` fail-closed when client is null or daemon is offline, and added `isDaemonHealthy`.
+  4. Updated `Frame.tsx` and `AboutSection.tsx` to truthfully show server status and retry via `reloadClient`.
+  5. Updated `startup.ts` to return Frame route with error, never onboarding, when daemon is unreachable.
+- **Verification**:
+  - `cargo fmt --check`: PASSED.
+  - `cargo clippy -p warshad -- -D warnings`: PASSED (0 warnings).
+  - `cargo test -p warshad health`: 5 passed.
+  - `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings`: PASSED (0 warnings).
+  - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`: 8 passed.
+  - `pnpm --filter warsha-desktop typecheck`: PASSED (0 errors).
+  - `pnpm --filter warsha-desktop test`: 79 test files passed, 673 tests passed (including all 7 startup, 7 useHealth, 14 Frame, 36 Settings tests).
+
 ## Run 2026-11-20 — Pre-release gate matrix (r-next/integration@d2a4e3d)
 - **Commands**:
   - `cargo fmt --all -- --check`: exit 0

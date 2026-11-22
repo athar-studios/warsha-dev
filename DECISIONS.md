@@ -1,4 +1,15 @@
 
+## 2026-11-20 — D-RN-UX-SERVER-WINDOWS: Truthful server status, working retry, and fail-closed startup routing on Windows
+- **Decision**:
+  1. In `apps/desktop/src-tauri/src/lib.rs`: Expose `CONFIG_DATA_DIR` ("data_dir") as a shell-owned key in `ShellState::get` and `SHELL_OWNED_KEYS`, returning the true runtime `data_dir` to the webview and Settings > About.
+  2. In `apps/desktop/src/v3/app/ClientContext.tsx`: Expose `reloadClient()` to re-query `readDaemonEndpoint(invoke)` (reading `get_config('daemon_url')` and `get_config('daemon_token')`) so late-starting daemons (common on Windows) can resolve without requiring app restart.
+  3. In `apps/desktop/src/v3/data/useHealth.ts`: `useHealth` throws `Cannot reach Warsha daemon` if `!client` (setting status to `'error'` rather than `'empty'`), throws `Daemon status: <status>` if status is `'offline'` or `'error'`, and exports `isDaemonHealthy(status)` recognizing `'healthy'`, `'ok'`, `'ready'`, and `'degraded'` as online statuses.
+  4. In `apps/desktop/src/v3/pages/frame/Frame.tsx`: Calculate `daemonOffline` truthfulness across status `error`, `empty`, and offline payload; update retry action to re-resolve client via `reloadClient()` and re-query `activeClient.health()`.
+  5. In `apps/desktop/src/v3/pages/settings/sections/AboutSection.tsx`: Calculate `isOnline` via `isDaemonHealthy(health?.status) && status === 'ready'` and wire retry button to `refreshAction` (which re-resolves client).
+  6. In `apps/desktop/src/v3/app/startup.ts`: If client is null or health check fails or `readConfig` throws, return Frame route with danger error (`{ route: '/', error }`), never route to `/onboarding`.
+- **Reason**: On Windows, Settings > About showed "حالة الخادم: غير متاح" (down) and "-" for data folder and version even when daemon was running; when daemon failed to start, startup route incorrectly sent owners back to `/onboarding` or silently showed green with dead retry.
+- **Record**: Real mock-based tests in `startup.test.ts`, `useHealth.test.ts`, `Frame.test.tsx`, and Rust test in `apps/desktop/src-tauri/src/lib.rs`.
+
 ## 2026-11-20 — D-RN-REL-AARCH64-1: 0.3.0 ships x86_64-only; aarch64 verifier checks informational only
 - **Decision**: 0.3.0 ships x86_64-only per pipeline matrix; verifier requires x86_64 hard, aarch64 informational only; future aarch64 legs are a separate decision.
 - **Reason**: Draft 452168316 holds 15 x86_64-only assets (6 rust binaries, 6 desktop installers, 2 SBOMs, checksums.sha256). `release.yml` rust-build matrix (lines 128-138) and desktop matrix (lines 232-246) target x86_64 only by pipeline design. The promotion gate verifier previously hard-failed on missing aarch64 CLI/daemon assets.
