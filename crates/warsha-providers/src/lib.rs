@@ -1142,12 +1142,29 @@ impl ProviderRouter {
     /// records spend is its own lock, taken and released around two integer adds — so a
     /// second paid call shares the concurrency bound with this one and a `providers.*`
     /// or `roles.set` call is not queued behind a backoff sleep (audit N-3).
+    ///
+    /// Returns only the response. Callers that need the target that served the call
+    /// use [`Self::chat_with_fallback_served`].
     pub async fn chat_with_fallback(
         &self,
         role: Role,
         project_id: &str,
-        mut request: ChatRequest,
+        request: ChatRequest,
     ) -> Result<ChatResponse> {
+        let (response, _provider_id, _model_id) = self
+            .chat_with_fallback_served(role, project_id, request)
+            .await?;
+        Ok(response)
+    }
+
+    /// [`Self::chat_with_fallback`], plus the provider id and model id of the target
+    /// that served the call.
+    pub async fn chat_with_fallback_served(
+        &self,
+        role: Role,
+        project_id: &str,
+        mut request: ChatRequest,
+    ) -> Result<(ChatResponse, String, String)> {
         // Everything the walk reads about the router is snapshotted here, under locks that
         // are gone before the first `await`.
         let (targets, fallback_enabled) = self.routing_for(role)?;
@@ -1215,7 +1232,7 @@ impl ProviderRouter {
 
                         let cost = provider.cost_of(&target.model_id, &response.usage)?;
                         self.record_spend(project_id, cost);
-                        return Ok(response);
+                        return Ok((response, target.provider_id.clone(), target.model_id.clone()));
                     }
                     Err(err) => {
                         let retryable = err.is_retryable();

@@ -1051,6 +1051,7 @@ const ROLE_VALUES: readonly Role[] = [
   'release',
   'marketer',
   'feedback',
+  'secretary',
 ];
 
 /**
@@ -1117,6 +1118,13 @@ function isRole(value: unknown): value is Role {
   return typeof value === 'string' && ROLE_VALUES.some((role) => role === value);
 }
 
+/** Historical rows stored `"p_m"` / `"q_a"` before Role serialized as `pm` / `qa`. */
+function canonicalRole(value: unknown): Role | null {
+  if (value === 'p_m') return 'pm';
+  if (value === 'q_a') return 'qa';
+  return isRole(value) ? value : null;
+}
+
 /** A sequence flag off a `SequencedEventFrame`: absent/null is false, wrong types throw. */
 function optionalBoolean(value: unknown, name: string): boolean | undefined {
   if (value === null || value === undefined) return undefined;
@@ -1169,10 +1177,11 @@ function decodeWarshaEvent(source: Record<string, unknown>): WarshaEvent {
   const roleValue = field(source, 'role');
   let role: Role | null = null;
   if (roleValue !== null && roleValue !== undefined) {
-    if (!isRole(roleValue)) {
+    const canonical = canonicalRole(roleValue);
+    if (canonical === null) {
       throw new Error(`${EVENT_FRAME_ERROR}: unknown "role"`);
     }
-    role = roleValue;
+    role = canonical;
   }
 
   const kind = requiredString(field(source, 'kind'), 'kind');
@@ -2024,7 +2033,8 @@ export function decodeSession(source: unknown): Session {
     id: wave2Id(record, 'id') as SessionId,
     runId: wave2NullableString(record, 'run_id') as RunId | null,
     projectId: wave2Id(record, 'project_id') as ProjectId,
-    role: wave2String(record, 'role') as Role,
+    // Unknown session roles fall back to intake so one bad row cannot blank the list.
+    role: canonicalRole(field(record, 'role')) ?? wave2Role(record, 'role'),
     backend: wave2String(record, 'backend'),
     provider: wave2String(record, 'provider'),
     model: wave2String(record, 'model'),

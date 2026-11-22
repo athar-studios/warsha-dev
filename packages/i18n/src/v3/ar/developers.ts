@@ -2,6 +2,7 @@ export default {
   'developers.title': 'المطورون',
   'developers.sessions': 'الجلسات',
   'developers.loading': 'جارٍ تحميل الجلسات…',
+  'developers.load.malformedFrame': 'سجل الأحداث فيه إطار لا تستطيع هذه الشاشة قراءته.',
   'developers.detail': 'تفاصيل الجلسة',
   'developers.no_sessions': 'لا جلسات لعرضها',
   'developers.no_sessions.desc': 'اختر مشروعًا وتشغيلًا، وستظهر هنا جلسات وكلائه فور بدئها.',

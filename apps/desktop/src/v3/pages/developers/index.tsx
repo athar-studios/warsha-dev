@@ -52,15 +52,23 @@ const DevelopersPage: React.FC = () => {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const describeCause = (cause: unknown): string =>
+    cause instanceof Error ? cause.message : String(cause);
+
   const refreshAction = useAction('developers.list.refresh', async () => {
     if (!client || !runId) return;
-    try {
-      setSessions(await client.listRunSessions(runId));
-      setEvents(await client.getRunEvents(runId));
-      setSubtasks(await client.listRunSubtasks(runId));
+    const [sessionResult, eventResult, subtaskResult] = await Promise.allSettled([
+      client.listRunSessions(runId),
+      client.getRunEvents(runId),
+      client.listRunSubtasks(runId),
+    ]);
+    if (sessionResult.status === 'fulfilled') setSessions(sessionResult.value);
+    if (subtaskResult.status === 'fulfilled') setSubtasks(subtaskResult.value);
+    if (eventResult.status === 'fulfilled') {
+      setEvents(eventResult.value);
       setError(null);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+    } else {
+      setError(describeCause(eventResult.reason));
     }
   });
 
@@ -119,19 +127,19 @@ const DevelopersPage: React.FC = () => {
     let cancelled = false;
     const load = async (): Promise<void> => {
       if (!client || !runId) return;
-      try {
-        const [runSessions, runEvents, runSubtasks] = await Promise.all([
-          client.listRunSessions(runId),
-          client.getRunEvents(runId),
-          client.listRunSubtasks(runId),
-        ]);
-        if (cancelled) return;
-        setSessions(runSessions);
-        setEvents(runEvents);
-        setSubtasks(runSubtasks);
+      const [sessionResult, eventResult, subtaskResult] = await Promise.allSettled([
+        client.listRunSessions(runId),
+        client.getRunEvents(runId),
+        client.listRunSubtasks(runId),
+      ]);
+      if (cancelled) return;
+      if (sessionResult.status === 'fulfilled') setSessions(sessionResult.value);
+      if (subtaskResult.status === 'fulfilled') setSubtasks(subtaskResult.value);
+      if (eventResult.status === 'fulfilled') {
+        setEvents(eventResult.value);
         setError(null);
-      } catch (cause) {
-        if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
+      } else {
+        setError(describeCause(eventResult.reason));
       }
     };
     void load();
@@ -287,7 +295,9 @@ const DevelopersPage: React.FC = () => {
       {error !== null && (
         <Banner variant="danger" data-testid="developers-error">
           <div className="developers-banner-row">
-            <span>{error}</span>
+            <p className="developers-banner__message">
+              {error.startsWith('Malformed event frame') ? t('developers.load.malformedFrame') : error}
+            </p>
             <Button
               size="sm"
               variant="secondary"

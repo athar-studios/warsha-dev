@@ -1053,6 +1053,7 @@ impl<S: SettingsProvider> PipelineEngine<S> {
                     project_id: run.project_id,
                     role,
                     backend: "native".to_string(),
+                    // Placeholder until dispatch_chat returns the target that served the call.
                     provider: "routed".to_string(),
                     model: "default".to_string(),
                     status: warsha_core::SessionStatus::Working,
@@ -1082,7 +1083,7 @@ impl<S: SettingsProvider> PipelineEngine<S> {
                 let dispatch_project_id = run.project_id.0.to_string();
                 let stage_timeout = providers.dispatch_timeout();
                 let stage_start = std::time::Instant::now();
-                let response = tokio::select! {
+                let (response, provider_id, model_id) = tokio::select! {
                     biased;
                     _ = cancel_rx.changed() => {
                         let _ = self.store.finish_session(session_id, warsha_core::SessionStatus::Stopped, Utc::now()).await;
@@ -1095,9 +1096,10 @@ impl<S: SettingsProvider> PipelineEngine<S> {
                         Self::dispatch_chat(&providers, role, &dispatch_project_id, request),
                     ) => {
                         match timed_res {
-                            Ok(Ok(response)) => {
+                            Ok(Ok((response, provider_id, model_id))) => {
+                                let _ = self.store.update_session_provider_model(session_id, &provider_id, &model_id).await;
                                 let _ = self.store.finish_session(session_id, warsha_core::SessionStatus::Done, Utc::now()).await;
-                                response
+                                (response, provider_id, model_id)
                             }
                             Ok(Err(error)) => {
                                 let _ = self.store.finish_session(session_id, warsha_core::SessionStatus::Failed, Utc::now()).await;
@@ -1621,23 +1623,26 @@ impl<S: SettingsProvider> PipelineEngine<S> {
     /// Take one stage/follow-up request to the provider that should answer it.
     ///
     /// 1. The role IS routed (`providers.route(role).is_some()`): the request goes
-    ///    through [`ProviderRouter::chat_with_fallback`].
+    ///    through [`ProviderRouter::chat_with_fallback_served`].
     /// 2. If `WARSHA_LLM_PROVIDER=fake` is explicitly set in the environment,
     ///    [`FakeProvider`] answers for zero-network testing.
     /// 3. If the environment carries `WARSHA_LLM_API_KEY` (and `WARSHA_LLM_PROVIDER`
     ///    is not "fake"), an OpenAI-compatible client built from [`EnvLlmConfig`] answers.
     /// 4. Otherwise, the unrouted role produces an explicit [`PipelineError::NoProviderRouted`]
     ///    error — no silent fake answers are fabricated.
+    ///
+    /// The pair beside the response is the provider id and model id that served the call.
     async fn dispatch_chat(
         providers: &ProviderRouter,
         role: Role,
         project_id: &str,
         request: ChatRequest,
-    ) -> Result<warsha_providers::ChatResponse> {
+    ) -> Result<(warsha_providers::ChatResponse, String, String)> {
         if providers.route(role).is_some() {
-            return Ok(providers
-                .chat_with_fallback(role, project_id, request)
-                .await?);
+            return providers
+                .chat_with_fallback_served(role, project_id, request)
+                .await
+                .map_err(PipelineError::from);
         }
 
         let env_cfg = EnvLlmConfig::from_env()?;
@@ -1655,11 +1660,13 @@ impl<S: SettingsProvider> PipelineEngine<S> {
                 model: env_cfg.model.clone(),
                 ..request
             };
-            return Ok(provider.chat(request).await?);
+            let response = provider.chat(request).await?;
+            return Ok((response, "env-openai".to_string(), env_cfg.model.clone()));
         }
 
         if forced_fake {
-            return Ok(FakeProvider::new().chat(request).await?);
+            let response = FakeProvider::new().chat(request.clone()).await?;
+            return Ok((response, "fake".to_string(), request.model.clone()));
         }
 
         Err(PipelineError::NoProviderRouted(role))
@@ -2289,7 +2296,7 @@ impl<S: SettingsProvider> PipelineEngine<S> {
         let dispatch_project_id = run.project_id.0.to_string();
         let followup_timeout = providers.dispatch_timeout();
         let followup_start = std::time::Instant::now();
-        let response = tokio::select! {
+        let (response, _provider_id, _model_id) = tokio::select! {
             biased;
             _ = cancel_rx.changed() => {
                 return Err(PipelineError::Other("Run cancelled during followup".to_string()));

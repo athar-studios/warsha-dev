@@ -186,13 +186,13 @@ impl std::fmt::Display for DeviceId {
 pub enum Role {
     Intake,
     Researcher,
-    #[serde(alias = "pm")]
+    #[serde(rename = "pm", alias = "p_m")]
     PM,
     Designer,
     Architect,
     Coder,
     Reviewer,
-    #[serde(alias = "qa")]
+    #[serde(rename = "qa", alias = "q_a")]
     QA,
     Security,
     Release,
@@ -723,5 +723,28 @@ mod tests {
             cost_cents: None,
         };
         assert_eq!(usage.total, usage.input + usage.output);
+    }
+}
+
+#[cfg(test)]
+mod role_wire_tests {
+    use super::Role;
+
+    #[test]
+    fn pm_and_qa_serialize_as_short_names_and_accept_historical_snake_case() {
+        assert_eq!(serde_json::to_string(&Role::PM).unwrap(), "\"pm\"");
+        assert_eq!(serde_json::to_string(&Role::QA).unwrap(), "\"qa\"");
+        assert_eq!(serde_json::from_str::<Role>("\"pm\"").unwrap(), Role::PM);
+        assert_eq!(serde_json::from_str::<Role>("\"p_m\"").unwrap(), Role::PM);
+        assert_eq!(serde_json::from_str::<Role>("\"qa\"").unwrap(), Role::QA);
+        assert_eq!(serde_json::from_str::<Role>("\"q_a\"").unwrap(), Role::QA);
+        assert_eq!(
+            serde_json::from_str::<Role>("\"secretary\"").unwrap(),
+            Role::Secretary
+        );
+        for role in Role::all() {
+            let wire = serde_json::to_string(role).unwrap();
+            assert_eq!(serde_json::from_str::<Role>(&wire).unwrap(), *role);
+        }
     }
 }

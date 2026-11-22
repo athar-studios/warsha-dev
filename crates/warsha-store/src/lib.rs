@@ -966,6 +966,22 @@ impl Store {
         Ok(())
     }
 
+    /// Replace the pre-dispatch placeholder provider and model with the target that served the call.
+    pub async fn update_session_provider_model(
+        &self,
+        session_id: SessionId,
+        provider: &str,
+        model: &str,
+    ) -> Result<()> {
+        sqlx::query("UPDATE sessions SET provider = ?, model = ? WHERE id = ?")
+            .bind(provider)
+            .bind(model)
+            .bind(session_id.0.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// List a run's sessions in creation order.
     pub async fn list_sessions_by_run(&self, run_id: RunId) -> Result<Vec<Session>> {
         let rows = sqlx::query(
@@ -2937,5 +2953,36 @@ mod tests {
             .expect("sessions list");
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, session_id);
+
+        let routed_id = SessionId::new();
+        let routed = Session {
+            id: routed_id,
+            run_id: Some(run.id),
+            project_id: project.id,
+            role: Role::Coder,
+            backend: "native".to_string(),
+            provider: "routed".to_string(),
+            model: "default".to_string(),
+            status: SessionStatus::Working,
+            started_at: Utc::now(),
+            ended_at: None,
+            parent_session_id: None,
+            cli_session_id: None,
+        };
+        store
+            .create_session(&routed)
+            .await
+            .expect("placeholder session creates");
+        store
+            .update_session_provider_model(routed_id, "openai", "gpt-4o")
+            .await
+            .expect("served provider and model write");
+        let served = store
+            .get_session(routed_id)
+            .await
+            .expect("served session fetches")
+            .expect("served session is found");
+        assert_eq!(served.provider, "openai");
+        assert_eq!(served.model, "gpt-4o");
     }
 }

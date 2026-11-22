@@ -2,6 +2,7 @@ export default {
   'developers.title': 'Developers',
   'developers.sessions': 'Sessions',
   'developers.loading': 'Loading sessions…',
+  'developers.load.malformedFrame': 'The event log has a frame this screen cannot read.',
   'developers.detail': 'Session details',
   'developers.no_sessions': 'No sessions to show',
   'developers.no_sessions.desc': 'Pick a project and a run; their agent sessions appear here as soon as they start.',
