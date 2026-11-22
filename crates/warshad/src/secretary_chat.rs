@@ -366,16 +366,25 @@ impl SecretaryChat {
 
         let mut pending_gates = Vec::new();
         for run in &active {
-            for gate in self.store.list_gates(run.id).await? {
-                if gate.state == GateState::Pending {
-                    pending_gates.push(GateSummary {
-                        run_id: run.id.to_string(),
-                        stage: serde_json::to_value(gate.stage)
-                            .ok()
-                            .and_then(|v| v.as_str().map(str::to_string))
-                            .unwrap_or_else(|| format!("{:?}", gate.stage).to_lowercase()),
-                    });
-                }
+            // Live gate state lives on the run, not in the `gates` table. That table's
+            // only writer, `create_gate`, has no production caller, so reading it
+            // answers `[]` for every real run and the secretary reports no pending
+            // gates while the owner is looking at one. `start_run` seeds every gate
+            // stage `Pending`, so a pending stage the run has not reached yet is not a
+            // decision either — only the gate the run is standing on is.
+            if run.current_stage.is_gate()
+                && matches!(
+                    run.gate_states.get(&run.current_stage),
+                    Some(GateState::Pending) | None
+                )
+            {
+                pending_gates.push(GateSummary {
+                    run_id: run.id.to_string(),
+                    stage: serde_json::to_value(run.current_stage)
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_string))
+                        .unwrap_or_else(|| format!("{:?}", run.current_stage).to_lowercase()),
+                });
             }
         }
         let active_runs = active

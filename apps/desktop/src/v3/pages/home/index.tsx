@@ -325,8 +325,14 @@ export interface NeedsYouRow {
 
 /**
  * E2: merge gate waits with approval asks into one longest-waiting-first strip.
- * A gate's waiting time is its run's `updatedAt` (the daemon's last change to the run row,
- * which for a parked run is the gate's arrival); an ask carries its own `requestedAt`.
+ *
+ * A gate card exists only for the gate the run is actually standing on. `gates.list`
+ * answers every gate stage, each one `pending` from the moment a run starts, so a row
+ * whose stage is not the run's current stage is a future gate, not a decision. A run
+ * that has ended (`completed`, `cancelled`, `failed`) has no decision left either —
+ * a failed run keeps its own retry row instead. The waiting time is the run row's
+ * `updatedAt`, which is when the pipeline parked the run on that gate; an ask carries
+ * its own `requestedAt`.
  */
 export function buildNeedsYou(
   t: (key: string) => string,
@@ -368,14 +374,20 @@ export function buildNeedsYou(
       });
       continue;
     }
+    if (run.status === 'completed' || run.status === 'cancelled') continue;
     const pending = gatesByRun[run.id] ?? [];
     for (const gate of pending) {
-      if (!gate.pending) continue;
+      // Only the gate the run stands on is a decision. Every other pending stage is a
+      // future gate `gates.list` reports from the moment the run starts.
+      if (!gate.pending || gate.stage !== run.stage) continue;
+      const projectName = projectNames.get(run.projectId);
       rows.push({
         key: `gate-${run.id}-${gate.stage}`,
         kind: 'gate',
         labelKey: 'home.needsyou.gate',
-        subject: t(`bench.stage.${gate.stage}`),
+        subject: projectName
+          ? `${projectName} · ${t(`bench.stage.${gate.stage}`)}`
+          : t(`bench.stage.${gate.stage}`),
         runId: run.id,
         projectId: run.projectId,
         since: gate.runUpdatedAt,
@@ -597,7 +609,8 @@ export default function HomePage(): React.ReactElement {
                   projectId: run.projectId,
                   runUpdatedAt: run.updatedAt,
                   stage: g.stage,
-                  pending: g.state.state === 'pending',
+                  // A future gate is pending in the table from run start; it is not waiting.
+                  pending: g.state.state === 'pending' && g.stage === run.stage,
                 }));
 
                 for (const row of gateRows[run.id]) {

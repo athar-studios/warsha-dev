@@ -19,7 +19,7 @@ use warsha_providers::{
     ChatChoice, ChatMessage, ChatProvider, ChatRequest, ChatResponse, ChatStreamChunk, HealthCheck,
     MessageRole, ModelInfo, ProviderError, ProviderRouter,
 };
-use warsha_store::{Gate, Store};
+use warsha_store::Store;
 
 /// A mock ChatProvider that returns canned responses from a queue.
 struct TestProvider {
@@ -223,22 +223,15 @@ async fn stored_project_run(store: &Store, name: &str) -> (Project, Run) {
     (project, run)
 }
 
+/// Park `run` on `stage` the way the pipeline does: the live gate state is the run's
+/// `gate_states` map, and a run standing on a gate has that stage as `current_stage`.
+/// The `gates` table is deliberately not written — nothing in production writes it.
 async fn pending_gate(store: &Store, run: &Run, stage: Stage) {
-    store
-        .create_gate(&Gate {
-            id: ulid::Ulid::new(),
-            run_id: run.id,
-            stage,
-            state: GateState::Pending,
-            decided_by_device_id: None,
-            reason: None,
-            notes: None,
-            decided_at: None,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-        })
-        .await
-        .unwrap();
+    let mut parked = run.clone();
+    parked.current_stage = stage;
+    parked.gate_states.insert(stage, GateState::Pending);
+    parked.updated_at = chrono::Utc::now();
+    store.update_run(&parked).await.unwrap();
 }
 
 fn register_ask(approvals: &McpApprovals, run: &Run) -> String {
