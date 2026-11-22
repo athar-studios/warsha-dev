@@ -1,3 +1,4 @@
+#![allow(unused_crate_dependencies)]
 // A4 acceptance tests: failover, cooldown, budget, and the estimate.
 // All five groups the packet names, against the mock provider only — no
 // real model APIs are dialled (AGENTS.md).

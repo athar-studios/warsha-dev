@@ -1,3 +1,9 @@
+#![allow(
+    unused_crate_dependencies,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 //! Integration tests for the relay's inbound endpoints (security audit H-01, H-02).
 //!
 //! These drive a real listener on loopback: an HTTP submission, a WebSocket handshake

@@ -67,6 +67,7 @@ impl std::fmt::Debug for EnvLlmConfig {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

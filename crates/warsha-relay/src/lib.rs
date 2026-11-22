@@ -1,3 +1,4 @@
+#![allow(unused_crate_dependencies)]
 //! Warsha Relay — Tiny optional relay server (axum) — opaque frame forwarding
 //!
 //! The relay forwards encrypted frames it cannot read. Two things follow from that
@@ -1051,6 +1052,7 @@ fn display_device_ids(ids: &[DeviceId]) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use chrono::Utc;

@@ -5,6 +5,10 @@ edition = { workspace = true }
 license = { workspace = true }
 description = "Daemon binary: local API (JSON-RPC over Unix socket / named pipe + localhost HTTP/WebSocket with token)"
 
+[lints]
+workspace = true
+
+
 [dependencies]
 warsha-core = { path = "../warsha-core" }
 warsha-store = { path = "../warsha-store" }

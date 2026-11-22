@@ -5,6 +5,10 @@ edition = { workspace = true }
 license = { workspace = true }
 description = "Provider layer: adapters, router, fallback, cost & quota meter"
 
+[lints]
+workspace = true
+
+
 [dependencies]
 warsha-core = { path = "../warsha-core" }
 thiserror = { workspace = true }
@@ -14,16 +18,6 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 reqwest = { workspace = true }
-oauth2 = "4.4.2"
-url = { workspace = true }
 async-trait = "0.1"
 keyring = { workspace = true }
-ulid = { workspace = true }
-chrono = { workspace = true }
-semver = { workspace = true }
 futures = { workspace = true }
-
-[dev-dependencies]
-mockall = { workspace = true }
-tempfile = { workspace = true }
-pretty_assertions = "1.4"

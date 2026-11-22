@@ -1424,8 +1424,11 @@ impl<S: SettingsProvider> PipelineEngine<S> {
             .as_ref()
             .and_then(|u| u.cost_cents) // Need to check if usage has cost_cents
             .unwrap_or(0);
-        let cost_known =
-            result.usage.is_some() && result.usage.as_ref().unwrap().cost_cents.is_some();
+        let cost_known = result
+            .usage
+            .as_ref()
+            .map(|u| u.cost_cents.is_some())
+            .unwrap_or(false);
         let estimated = true; // Always estimated for CLI
 
         Ok(Some(StageCompletion {
@@ -2550,6 +2553,7 @@ impl<S: SettingsProvider> PipelineEngine<S> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use crate::test_util::fresh_tempdir;

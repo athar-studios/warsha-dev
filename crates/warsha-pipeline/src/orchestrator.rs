@@ -548,6 +548,7 @@ fn format_answer_value(value: &serde_json::Value) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

@@ -1,3 +1,9 @@
+#![allow(
+    unused_crate_dependencies,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 use ulid::Ulid;
 use warsha_pipeline::swarm::{Subtask, SwarmScheduler};
 

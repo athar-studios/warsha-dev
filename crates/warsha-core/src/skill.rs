@@ -533,6 +533,7 @@ default-soup designs are not neutral, they are forgettable.
    done.
 "#;
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -578,8 +579,8 @@ mod tests {
     #[test]
     fn skills_round_trip_through_json() {
         for skill in bundled_skills() {
-            let encoded = serde_json::to_string(&skill).expect("encodes");
-            let decoded: SkillDefinition = serde_json::from_str(&encoded).expect("decodes");
+            let encoded = serde_json::to_string(&skill).unwrap();
+            let decoded: SkillDefinition = serde_json::from_str(&encoded).unwrap();
             assert_eq!(decoded, skill);
         }
     }

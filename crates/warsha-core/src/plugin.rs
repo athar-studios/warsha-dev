@@ -326,6 +326,7 @@ fn security_strix_pack() -> PluginDefinition {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,8 +374,8 @@ mod tests {
     #[test]
     fn plugins_round_trip_through_json() {
         for plugin in bundled_plugins() {
-            let encoded = serde_json::to_string(&plugin).expect("encodes");
-            let decoded: PluginDefinition = serde_json::from_str(&encoded).expect("decodes");
+            let encoded = serde_json::to_string(&plugin).unwrap();
+            let decoded: PluginDefinition = serde_json::from_str(&encoded).unwrap();
             assert_eq!(decoded, plugin);
         }
     }

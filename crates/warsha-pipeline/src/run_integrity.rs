@@ -19,6 +19,7 @@ impl<S: crate::settings::SettingsProvider> crate::PipelineEngine<S> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use crate::settings::SettingsStore;
     use crate::PipelineEngine;

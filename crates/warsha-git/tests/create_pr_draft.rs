@@ -12,6 +12,13 @@
 //! `draft == false`; and a draft refusal keeps today's `GitError::GitHub` shape,
 //! message prefix included, without leaking the token.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    unused_crate_dependencies
+)]
+
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;

@@ -1,3 +1,9 @@
+#![allow(
+    unused_crate_dependencies,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 //! N3 acceptance tests: CLI Code stage isolation.
 //!
 //! The CLI Code stage must run in the run's own worktree — never the project

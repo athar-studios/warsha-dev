@@ -195,6 +195,7 @@ impl CustomBackendDefinition {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,8 +209,8 @@ mod tests {
             context_window: Some(262_144),
             enabled: true,
         };
-        let encoded = serde_json::to_string(&model).expect("encodes");
-        let decoded: CustomModelRecord = serde_json::from_str(&encoded).expect("decodes");
+        let encoded = serde_json::to_string(&model).unwrap();
+        let decoded: CustomModelRecord = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, model);
     }
 
@@ -222,8 +223,8 @@ mod tests {
             configured_at: Some(DateTime::from_timestamp(1_735_689_600, 0).unwrap_or_default()),
             details: Some(serde_json::json!({ "org": "warsha" })),
         };
-        let encoded = serde_json::to_string(&status).expect("encodes");
-        let decoded: IntegrationStatus = serde_json::from_str(&encoded).expect("decodes");
+        let encoded = serde_json::to_string(&status).unwrap();
+        let decoded: IntegrationStatus = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded.id, status.id);
         assert_eq!(decoded.connected, status.connected);
         assert_eq!(decoded.configured_at, status.configured_at);
@@ -250,20 +251,17 @@ mod tests {
             protected: false,
             git_status: Some("M".to_string()),
         };
-        let encoded = serde_json::to_string(&entry).expect("encodes");
-        assert_eq!(
-            serde_json::from_str::<FileEntry>(&encoded).expect("decodes"),
-            entry
-        );
+        let encoded = serde_json::to_string(&entry).unwrap();
+        assert_eq!(serde_json::from_str::<FileEntry>(&encoded).unwrap(), entry);
 
         let content = FileContent {
             path: "docs/README.md".to_string(),
             content: "# Warsha".to_string(),
             mime_type: "text/markdown".to_string(),
         };
-        let encoded = serde_json::to_string(&content).expect("encodes");
+        let encoded = serde_json::to_string(&content).unwrap();
         assert_eq!(
-            serde_json::from_str::<FileContent>(&encoded).expect("decodes"),
+            serde_json::from_str::<FileContent>(&encoded).unwrap(),
             content
         );
 
@@ -274,11 +272,8 @@ mod tests {
             current_content: "# Warsha".to_string(),
             mime_type: "text/markdown".to_string(),
         };
-        let encoded = serde_json::to_string(&diff).expect("encodes");
-        assert_eq!(
-            serde_json::from_str::<FileDiff>(&encoded).expect("decodes"),
-            diff
-        );
+        let encoded = serde_json::to_string(&diff).unwrap();
+        assert_eq!(serde_json::from_str::<FileDiff>(&encoded).unwrap(), diff);
     }
 
     #[test]

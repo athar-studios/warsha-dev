@@ -131,6 +131,7 @@ pub fn refresh_catalog(
     Ok((new_catalog, diff))
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,26 +160,27 @@ mod tests {
 
         let mut new = current.clone();
         // Add m2
-        new.get_mut("v1").unwrap().models.insert(
-            "m2".to_string(),
-            Model {
-                id: "m2".to_string(),
-                name: "m2".to_string(),
-                description: None,
-                cost: None,
-            },
-        );
+        if let Some(vendor) = new.get_mut("v1") {
+            vendor.models.insert(
+                "m2".to_string(),
+                Model {
+                    id: "m2".to_string(),
+                    name: "m2".to_string(),
+                    description: None,
+                    cost: None,
+                },
+            );
+        }
         // Change price m1
-        new.get_mut("v1")
-            .unwrap()
-            .models
-            .get_mut("m1")
-            .unwrap()
-            .cost = Some(ModelCost {
-            input: 2.0,
-            output: 2.0,
-            cache_read: None,
-        });
+        if let Some(vendor) = new.get_mut("v1") {
+            if let Some(model) = vendor.models.get_mut("m1") {
+                model.cost = Some(ModelCost {
+                    input: 2.0,
+                    output: 2.0,
+                    cache_read: None,
+                });
+            }
+        }
 
         let diff = CatalogWrapper(current.clone()).compute_diff(&new);
         assert_eq!(diff.added, vec![("v1".to_string(), "m2".to_string())]);
@@ -195,8 +197,6 @@ mod tests {
         let bytes = b"{ malformed: json ]";
         let result = refresh_catalog(bytes, &current);
         assert!(result.is_err());
-        // Verify current catalog intact (result is an Err, but we can check if it passed current)
-        // refresh_catalog doesn't modify current, it returns a new one or error
     }
 
     #[test]
@@ -209,16 +209,13 @@ mod tests {
             description: None,
             cost: None,
         };
-        overrides.insert(
-            ("v1".to_string(), "custom-m1".to_string()),
-            custom_model.clone(),
-        );
+        overrides.insert(("v1".to_string(), "custom-m1".to_string()), custom_model);
 
         let refreshed = apply_catalog(current, &overrides);
-        assert!(refreshed
+        let has_custom = refreshed
             .get("v1")
-            .unwrap()
-            .models
-            .contains_key("custom-m1"));
+            .map(|v| v.models.contains_key("custom-m1"))
+            .unwrap_or(false);
+        assert!(has_custom);
     }
 }

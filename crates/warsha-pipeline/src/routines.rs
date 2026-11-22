@@ -576,6 +576,7 @@ fn next_daily_after(hour: u8, minute: u8, after_unix: u64) -> u64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};

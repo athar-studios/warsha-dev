@@ -296,6 +296,7 @@ async fn ensure_repository(repo: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod e3 {
     use super::*;
     use std::process::Command;

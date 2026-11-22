@@ -1,3 +1,10 @@
+#![allow(
+    unused_crate_dependencies,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
+
 use uuid::Uuid;
 use warsha_store::Store;
 

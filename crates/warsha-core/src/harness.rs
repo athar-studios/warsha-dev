@@ -518,6 +518,7 @@ fn solo_bench() -> HarnessDefinition {
     )
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -545,7 +546,7 @@ mod tests {
         let graph = bundled_harnesses()
             .into_iter()
             .find(|h| h.id == "graph-gated")
-            .expect("the preset exists");
+            .unwrap();
         assert_eq!(graph.rules.max_repair_iterations, 3);
     }
 
@@ -554,7 +555,7 @@ mod tests {
         let factory = bundled_harnesses()
             .into_iter()
             .find(|h| h.id == "autonomous-factory")
-            .expect("the preset exists");
+            .unwrap();
         assert_eq!(factory.stages.len(), 9);
         assert!(factory.rules.require_verification_receipt);
     }
@@ -562,8 +563,8 @@ mod tests {
     #[test]
     fn harness_definitions_round_trip_through_json() {
         for harness in bundled_harnesses() {
-            let encoded = serde_json::to_string(&harness).expect("encodes");
-            let decoded: HarnessDefinition = serde_json::from_str(&encoded).expect("decodes");
+            let encoded = serde_json::to_string(&harness).unwrap();
+            let decoded: HarnessDefinition = serde_json::from_str(&encoded).unwrap();
             assert_eq!(decoded, harness);
         }
     }

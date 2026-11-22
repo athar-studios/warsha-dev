@@ -1,3 +1,4 @@
+#![allow(unused_crate_dependencies)]
 //! Warshad — Daemon binary: local API (JSON-RPC over Unix socket / named pipe + localhost HTTP/WebSocket with token)
 
 use chrono::Utc;

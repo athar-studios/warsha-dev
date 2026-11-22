@@ -1,3 +1,9 @@
+#![allow(
+    unused_crate_dependencies,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 //! T1–T7 (R-EXT-4): the Streamable HTTP transport, over a fake client.
 //!
 //! Nothing here opens a socket. [`FakeHttp`] implements [`McpHttpClient`] and

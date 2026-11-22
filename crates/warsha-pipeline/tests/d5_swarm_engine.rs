@@ -1,3 +1,10 @@
+#![allow(
+    unused_crate_dependencies,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unimplemented
+)]
 //! D5 acceptance tests: the swarm run mode (engine half).
 //!
 //! Spec anchor: `docs/zadloop/R-NEXT-MASTER-PLAN.md` §D5 (`:1490-1560`). The

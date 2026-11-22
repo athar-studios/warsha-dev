@@ -1,3 +1,9 @@
+#![allow(
+    unused_crate_dependencies,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 use chrono::Utc;
 use std::collections::HashMap;
 use ulid::Ulid;

@@ -5,6 +5,10 @@ edition = { workspace = true }
 license = { workspace = true }
 description = "CLI binary: warsha command"
 
+[lints]
+workspace = true
+
+
 [dependencies]
 warsha-core = { path = "../warsha-core" }
 warsha-providers = { path = "../warsha-providers" }

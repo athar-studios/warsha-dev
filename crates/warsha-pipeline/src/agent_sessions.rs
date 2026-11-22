@@ -185,6 +185,7 @@ impl RunAgentSessions {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod e2 {
     use super::*;
     use crate::agent_workflow::AgentMode;

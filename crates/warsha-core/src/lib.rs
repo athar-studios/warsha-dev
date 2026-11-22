@@ -27,6 +27,9 @@ pub use subtask::{parse_subtask_status, RunSubtask, RunSubtaskStatus};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+extern crate pretty_assertions;
+
 use std::collections::HashMap;
 use ulid::Ulid;
 use uuid::Uuid;
@@ -582,6 +585,7 @@ pub struct RoutingTarget {
     pub weight: u32,
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

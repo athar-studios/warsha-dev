@@ -40,6 +40,7 @@ pub fn mask_secrets(input: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

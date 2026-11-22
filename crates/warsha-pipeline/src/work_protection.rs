@@ -404,6 +404,7 @@ pub fn policy_for_permissions(p: ProjectPermissions) -> WorkProtectionPolicy {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

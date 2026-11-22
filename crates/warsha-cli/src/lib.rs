@@ -1414,6 +1414,7 @@ pub fn no_token_message(lang: CliLang, config_path: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

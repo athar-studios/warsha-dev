@@ -1,3 +1,10 @@
+#![allow(
+    unused_crate_dependencies,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
+
 use sqlx::SqlitePool;
 use warsha_store::{SettingsRepo, StoredProjectSwarmSettings};
 

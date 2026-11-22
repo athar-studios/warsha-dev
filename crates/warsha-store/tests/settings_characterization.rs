@@ -12,6 +12,13 @@
 //!
 //! Only the SQLite file is touched, and only inside a temporary directory.
 
+#![allow(
+    unused_crate_dependencies,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
+
 use std::path::{Path, PathBuf};
 
 use tempfile::TempDir;

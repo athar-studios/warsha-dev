@@ -1,3 +1,4 @@
+#![allow(unused_crate_dependencies)]
 //! Warsha Git — Git + GitHub integration: repos, branches, issues, PRs, checks.
 //!
 //! Git operations shell out to the `git` CLI through [`std::process::Command`],
@@ -1090,6 +1091,7 @@ impl ProjectTemplate {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use tempfile::TempDir;

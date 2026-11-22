@@ -1,3 +1,9 @@
+#![allow(
+    unused_crate_dependencies,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 //! Harness + Skills wiring test for pipeline execution.
 //!
 //! This test verifies that the `execute_stage` method correctly:

@@ -1,3 +1,9 @@
+#![allow(
+    unused_crate_dependencies,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 //! Tests for K3 status and provider truthfulness (no silent fakes).
 
 use std::sync::Arc;

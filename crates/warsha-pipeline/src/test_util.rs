@@ -9,6 +9,7 @@ use tempfile::TempDir;
 /// binary's `deps` directory (the target dir is writable wherever the build
 /// ran), and only then the system temp dir — which on some Windows machines is
 /// protected and rejects even creating a tempdir (`Access is denied`).
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 pub(crate) fn fresh_tempdir() -> TempDir {
     if let Some(base) = std::env::var_os("CARGO_TARGET_TMPDIR") {
         let base = PathBuf::from(base);

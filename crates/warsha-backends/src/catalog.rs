@@ -225,8 +225,10 @@ impl EngineCatalog {
     /// Get the global built-in catalog instance.
     pub fn builtin() -> &'static EngineCatalog {
         BUILTIN_CATALOG.get_or_init(|| {
-            Self::load_from_str(BUILTIN_CATALOG_JSON)
-                .expect("built-in data/catalog/engines.json must be valid")
+            #[allow(clippy::panic)]
+            Self::load_from_str(BUILTIN_CATALOG_JSON).unwrap_or_else(|e| {
+                panic!("built-in data/catalog/engines.json must be valid: {}", e)
+            })
         })
     }
 
@@ -277,6 +279,7 @@ impl Default for EngineCatalog {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

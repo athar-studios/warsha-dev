@@ -1,3 +1,9 @@
+#![allow(
+    unused_crate_dependencies,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
 //! D4 acceptance: run modes — Plan, SpecFile, and Ask.
 //!
 //! Spec anchor: `docs/zadloop/R-NEXT-MASTER-PLAN.md` §D4 (`:1259-1293`). The

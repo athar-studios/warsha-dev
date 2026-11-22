@@ -412,6 +412,7 @@ impl ChatProvider for RemovedProvider {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

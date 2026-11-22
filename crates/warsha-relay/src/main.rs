@@ -1,3 +1,4 @@
+#![allow(unused_crate_dependencies)]
 //! Warsha Relay binary entry point
 
 use clap::Parser;
