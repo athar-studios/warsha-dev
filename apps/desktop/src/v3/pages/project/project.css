@@ -5,6 +5,8 @@
   display: flex;
   flex-direction: column;
   gap: var(--w-space-4);
+  min-inline-size: 0;
+  max-inline-size: 100%;
 }
 
 
@@ -31,6 +33,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--w-space-4);
+  min-inline-size: 0;
 }
 
 .v3-secretary-empty {
@@ -44,6 +47,8 @@
   gap: var(--w-space-3);
   padding: var(--w-space-3);
   border-radius: var(--w-radius-lg);
+  min-inline-size: 0;
+  max-inline-size: 100%;
 }
 
 .v3-secretary-turn--owner {
@@ -59,11 +64,16 @@
   font-weight: var(--w-font-weight-bold);
   font-size: var(--w-font-size-sm);
   color: var(--w-text-muted);
-  min-width: var(--w-space-10);
+  min-inline-size: var(--w-space-10);
+  flex: none;
 }
 
 .v3-secretary-turn-content {
   flex: 1;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
   font-size: var(--w-font-size-md);
   line-height: var(--w-line-height-md);
 }
@@ -99,9 +109,11 @@
 
 .v3-secretary-composer {
   display: flex;
+  flex-direction: column;
   gap: var(--w-space-2);
   padding-block-start: var(--w-space-4);
   border-block-start: var(--w-border-width) solid var(--w-line);
+  min-inline-size: 0;
 }
 
 .v3-secretary-composer-label {
@@ -109,8 +121,15 @@
   color: var(--w-text-muted);
 }
 
+.v3-secretary-composer-row {
+  display: flex;
+  gap: var(--w-space-2);
+  min-inline-size: 0;
+}
+
 .v3-secretary-input {
-  flex: 1;
+  flex: 1 1 auto;
+  min-inline-size: 0;
 }
 
 /* apps/desktop/src/v3/pages/project/project.css — Design System v3 styles for Project page (DS v3 §2.6, §7) */

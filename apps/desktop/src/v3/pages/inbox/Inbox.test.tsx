@@ -183,8 +183,10 @@ describe('InboxPage helpers', () => {
   it('formatTime24 formats valid ISO strings and handles invalid inputs gracefully', () => {
     expect(formatTime24('')).toBe('');
     expect(formatTime24('not-a-date')).toBe('');
+    const instant = new Date('2026-10-04T09:30:00.000Z');
     const formatted = formatTime24('2026-10-04T09:30:00.000Z');
-    expect(formatted).toBe('09:30');
+    const expected = `${String(instant.getHours()).padStart(2, '0')}:${String(instant.getMinutes()).padStart(2, '0')}`;
+    expect(formatted).toBe(expected);
   });
 
   it('findPendingGateAtCurrentStage enforces Amendment §5.5-b', () => {

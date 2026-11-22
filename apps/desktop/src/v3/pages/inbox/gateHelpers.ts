@@ -17,8 +17,10 @@ export function formatTime24(iso: string): string {
   if (!iso) return '';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
-  const hours = String(d.getUTCHours()).padStart(2, '0');
-  const mins = String(d.getUTCMinutes()).padStart(2, '0');
+  // Local zone, not UTC: Simple-mode Activity and the inbox share this clock
+  // with the project workspace (`formatEventTime` / `formatTime`).
+  const hours = String(d.getHours()).padStart(2, '0');
+  const mins = String(d.getMinutes()).padStart(2, '0');
   return `${hours}:${mins}`;
 }
 

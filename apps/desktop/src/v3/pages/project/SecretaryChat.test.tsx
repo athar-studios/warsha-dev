@@ -1,5 +1,7 @@
 // E2: the secretary chat panel — proposals, injection refusal, confirm flow.
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type {
   CostEstimate,
   ProposalAction,
@@ -14,7 +16,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ClientProvider } from '../../app/ClientContext';
 
-import SecretaryChat, { ProposalCard } from './SecretaryChat';
+import SecretaryChat, { ProposalCard, stripDisplayedTurnIds } from './SecretaryChat';
 
 type ProjectId = Parameters<WarshaClient['startRun']>[0];
 
@@ -544,6 +546,62 @@ describe('SecretaryChat', () => {
     await waitFor(() => {
       expect(client.cancelRun).toHaveBeenCalledWith('run-1', 'secretary.proposal.cancel_reason');
     });
+  });
+
+  it('hides backtick-wrapped turn ids and wraps reply text inside the sheet', async () => {
+    const unbroken = 'A'.repeat(80);
+    const reply: SecretaryTurn = {
+      ...proposalTurn('turn-1'),
+      content: `${unbroken} \`0197abcd-1234-5678-9abc-def012345678\` \`[turn: 0197ABCD-1234-5678-9ABC-DEF012345678]\` keep \`code\` and \`01ARZ3NDEKTSV4RRFFQ69G5FAV\``,
+    };
+    const client = mockClient({ turns: [ownerTurn, reply] });
+    renderPanel(client, 'p1' as ProjectId);
+    const node = await screen.findByTestId('secretary-turn-secretary');
+    const content = node.querySelector('.v3-secretary-turn-content');
+    expect(content).toBeTruthy();
+    const text = content?.textContent ?? '';
+    expect(text).toContain(unbroken);
+    expect(text).toContain('`code`');
+    expect(text).not.toContain('0197abcd-1234-5678-9abc-def012345678');
+    expect(text).not.toContain('0197ABCD-1234-5678-9ABC-DEF012345678');
+    expect(text).not.toContain('[turn:');
+    expect(text).not.toContain('01ARZ3NDEKTSV4RRFFQ69G5FAV');
+    expect(content?.className).toContain('v3-secretary-turn-content');
+
+    const textarea = screen.getByTestId('secretary-input');
+    expect(textarea.className).toContain('v3-secretary-input');
+    expect(textarea.parentElement?.className).toContain('v3-secretary-composer-row');
+    expect(textarea.parentElement?.querySelector('[data-testid="secretary-send"]')).toBeTruthy();
+    const label = document.querySelector('label[for="secretary-input"]');
+    expect(label?.parentElement?.className).toContain('v3-secretary-composer');
+    expect(label?.parentElement).not.toBe(textarea.parentElement);
+
+    const css = readFileSync(resolve(__dirname, 'project.css'), 'utf8');
+    const rule = (selector: string): string => {
+      const start = css.indexOf(selector);
+      expect(start).toBeGreaterThanOrEqual(0);
+      return css.slice(start, css.indexOf('}', start));
+    };
+    const input = rule('.v3-secretary-input {');
+    expect(input).toContain('min-inline-size: 0');
+    expect(input).toContain('flex: 1 1 auto');
+    const body = rule('.v3-secretary-turn-content {');
+    expect(body).toContain('min-inline-size: 0');
+    expect(body).toContain('overflow-wrap: anywhere');
+    expect(body).toContain('white-space: pre-wrap');
+    const panel = rule('.v3-secretary {');
+    expect(panel).toContain('min-inline-size: 0');
+    expect(panel).toContain('max-inline-size: 100%');
+  });
+
+  it('stripDisplayedTurnIds leaves ordinary backticks and bare ids alone', () => {
+    expect(stripDisplayedTurnIds('see `code` and `not a uuid`')).toBe('see `code` and `not a uuid`');
+    expect(stripDisplayedTurnIds('`[turn: 0197abcd-1234-5678-9abc-def012345678]` tail')).toBe(
+      ' tail'
+    );
+    expect(stripDisplayedTurnIds('plain 0197abcd-1234-5678-9abc-def012345678 stays')).toContain(
+      '0197abcd'
+    );
   });
 
   it('ProposalCard never treats a synthesized owner turn as a persisted owner turn', () => {

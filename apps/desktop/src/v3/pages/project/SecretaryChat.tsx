@@ -182,6 +182,26 @@ type ProjectId = Parameters<WarshaClient['startRun']>[0];
 
 const NIL_UUID = '00000000-0000-0000-0000-000000000000';
 
+/**
+ * Ids the owner prompt stamps as `[turn: <id>]` (see `secretary_chat.rs`).
+ * The model echoes them inside backticks; the panel hides those tokens only.
+ * A ULID is Crockford base32 (no I, L, O, U), 26 characters.
+ */
+const BACKTICK_ID =
+  /`(?:turn:\s*)?(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9A-HJKMNP-TV-Z]{26})`/gi;
+
+const TURN_STAMP =
+  /`\[turn:\s*(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9A-HJKMNP-TV-Z]{26})\]`/gi;
+
+/**
+ * Display-only: drop backtick-wrapped UUIDs, ULIDs, and `[turn: <uuid-or-ulid>]`
+ * (an optional leading `turn:` inside the backticks). Other backtick spans stay.
+ * Stored turn content is not rewritten.
+ */
+export function stripDisplayedTurnIds(content: string): string {
+  return content.replace(TURN_STAMP, '').replace(BACKTICK_ID, '');
+}
+
 /** The chat body: thread switcher (global / this project), turns, input, proposal card. */
 export default function SecretaryChat({
   projectId,
@@ -563,7 +583,7 @@ export default function SecretaryChat({
               <span className="v3-secretary-turn-role">
                 {turn.role === 'owner' ? t('secretary.role.owner') : t('secretary.role.assistant')}
               </span>
-              <span className="v3-secretary-turn-content">{turn.content}</span>
+              <span className="v3-secretary-turn-content">{stripDisplayedTurnIds(turn.content)}</span>
             </div>
           ))}
           <div ref={tailRef} />
@@ -596,32 +616,34 @@ export default function SecretaryChat({
         <label htmlFor="secretary-input" className="v3-secretary-composer-label">
           {t('secretary.input_label')}
         </label>
-        <textarea
-          id="secretary-input"
-          className="v3-secretary-input"
-          value={input}
-          placeholder={t('secretary.input_placeholder')}
-          rows={2}
-          data-testid="secretary-input"
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey) {
-              event.preventDefault();
+        <div className="v3-secretary-composer-row">
+          <textarea
+            id="secretary-input"
+            className="v3-secretary-input"
+            value={input}
+            placeholder={t('secretary.input_placeholder')}
+            rows={2}
+            data-testid="secretary-input"
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                void send();
+              }
+            }}
+          />
+          <Button
+            variant="primary"
+            data-action="secretary.send"
+            data-testid="secretary-send"
+            disabled={sending || input.trim() === ''}
+            onClick={() => {
               void send();
-            }
-          }}
-        />
-        <Button
-          variant="primary"
-          data-action="secretary.send"
-          data-testid="secretary-send"
-          disabled={sending || input.trim() === ''}
-          onClick={() => {
-            void send();
-          }}
-        >
-          {sending ? t('secretary.loading') : t('secretary.send')}
-        </Button>
+            }}
+          >
+            {sending ? t('secretary.loading') : t('secretary.send')}
+          </Button>
+        </div>
       </div>
       <span className="v3-secretary-scope-name">{t(scopeKey)}</span>
     </div>

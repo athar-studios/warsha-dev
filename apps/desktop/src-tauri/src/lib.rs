@@ -34,13 +34,25 @@ pub const CONFIG_DAEMON_TOKEN: &str = "daemon_token";
 /// Config key reporting the data directory the daemon and desktop settings live in.
 pub const CONFIG_DATA_DIR: &str = "data_dir";
 
+/// Whether the labeled window `main` was maximized when it last closed.
+///
+/// Shell-owned, like the daemon keys: a webview write must not be able to force the next
+/// launch into a maximized frame the owner did not leave. Only this boolean is stored —
+/// a window that was merely resized reopens at the size in `tauri.conf.json`.
+pub const CONFIG_WINDOW_MAXIMIZED: &str = "window_maximized";
+
+/// The label of the single window this shell creates (`tauri.conf.json`).
+const MAIN_WINDOW_LABEL: &str = "main";
+
 /// The keys above are the shell's to answer: `set_config` refuses them, so a stray write
-/// from the webview cannot point the app at an endpoint that is not there or alter the data directory.
-const SHELL_OWNED_KEYS: [&str; 4] = [
+/// from the webview cannot point the app at an endpoint that is not there, alter the data
+/// directory, or spoof the restored maximized state.
+const SHELL_OWNED_KEYS: [&str; 5] = [
     CONFIG_DAEMON_URL,
     CONFIG_DAEMON_WS_URL,
     CONFIG_DAEMON_TOKEN,
     CONFIG_DATA_DIR,
+    CONFIG_WINDOW_MAXIMIZED,
 ];
 
 /// Name of the settings file the non-daemon preferences live in, inside the daemon's data dir.
@@ -111,6 +123,12 @@ impl ShellState {
             CONFIG_DAEMON_WS_URL => self.endpoint.ws_url.clone(),
             CONFIG_DAEMON_TOKEN => self.endpoint.token.clone(),
             CONFIG_DATA_DIR => self.data_dir.display().to_string(),
+            // Answered from the file, but only the shell writes it (see [`SHELL_OWNED_KEYS`]).
+            CONFIG_WINDOW_MAXIMIZED => self
+                .preferences()
+                .get(CONFIG_WINDOW_MAXIMIZED)
+                .cloned()
+                .unwrap_or_else(|| "false".to_string()),
             _ => self.preferences().get(key).cloned().unwrap_or_default(),
         }
     }
@@ -149,6 +167,21 @@ impl ShellState {
             self.note(&format!("could not store {key}: {error}"));
             error
         })
+    }
+
+    /// Persist a shell-owned key. [`set`] refuses those keys so the webview cannot spoof them;
+    /// the shell itself still has to record `window_maximized` on close.
+    fn set_shell_owned(&self, key: &str, value: &str) -> Result<(), String> {
+        let snapshot = {
+            let mut settings = self.preferences();
+            settings.insert(key.to_string(), value.to_string());
+            settings.clone()
+        };
+        let mut merged = read_settings(&self.settings_path);
+        for (name, stored) in snapshot {
+            merged.insert(name, stored);
+        }
+        write_settings(&self.settings_path, &merged)
     }
 
     /// Append one line to the shell's log, best effort: a log that cannot be written must not be
@@ -910,6 +943,50 @@ fn set_config(key: String, value: String, state: State<'_, ShellState>) -> Resul
     state.set(&key, &value)
 }
 
+/// `true` only for the stored token the shell itself writes. Anything else — including a
+/// missing key, which [`ShellState::get`] answers as `"false"` — reopens at the configured size.
+fn should_maximize(stored: &str) -> bool {
+    stored == "true"
+}
+
+/// The value to store for a window that is, or is not, maximized. A resize that is not a
+/// maximize stores `false`, so the next launch uses `tauri.conf.json` rather than a stale flag.
+fn window_maximized_value(is_maximized: bool) -> &'static str {
+    if is_maximized {
+        "true"
+    } else {
+        "false"
+    }
+}
+
+/// Best-effort: remember whether `main` is maximized. A window that is already gone, or a
+/// settings write that fails, must not block the close — same standard as [`ShellState::note`].
+fn remember_window_maximized(state: &ShellState, is_maximized: bool) {
+    if let Err(error) = state.set_shell_owned(
+        CONFIG_WINDOW_MAXIMIZED,
+        window_maximized_value(is_maximized),
+    ) {
+        state.note(&format!(
+            "could not store {CONFIG_WINDOW_MAXIMIZED}: {error}"
+        ));
+    }
+}
+
+/// Best-effort: maximize `main` when the stored flag says the last close left it that way.
+fn restore_window_maximized(app: &tauri::AppHandle, state: &ShellState) {
+    if !should_maximize(&state.get(CONFIG_WINDOW_MAXIMIZED)) {
+        return;
+    }
+    let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
+        return;
+    };
+    if let Err(error) = window.maximize() {
+        state.note(&format!(
+            "could not restore maximized {MAIN_WINDOW_LABEL}: {error}"
+        ));
+    }
+}
+
 /// Build and run the app: start the daemon, publish where it is, and reap it on exit.
 ///
 /// The daemon starts *before* the window is created, and synchronously. The webview's first
@@ -954,6 +1031,13 @@ pub fn run() -> anyhow::Result<()> {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(shell)
+        .setup(|app| {
+            // The config window exists before `setup` (Tauri builds it on Ready, then calls
+            // this). Restoring here, not on Exit, is what a relaunch actually sees.
+            let state = app.state::<ShellState>();
+            restore_window_maximized(app.handle(), &state);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![get_config, set_config])
         .build(tauri::generate_context!())?;
 
@@ -970,17 +1054,40 @@ pub fn run() -> anyhow::Result<()> {
         // block for it. And a process that is killed outright takes this daemon down with it
         // because it was never a separate `warshad`: the shell's own exit is the daemon's exit,
         // which is the reason there is no orphan `warshad` to find in the first place.
-        if let RunEvent::Exit = event {
-            let state = handle.state::<ShellState>();
-            let owned = state
-                .process
-                .lock()
-                .ok()
-                .and_then(|mut process| process.take());
-            if let Some(handle) = owned {
-                tauri::async_runtime::block_on(handle.shutdown());
-                state.note("daemon stopped");
+        //
+        // Maximized state is read on `CloseRequested`, not on `Exit` or `ExitRequested`.
+        // wry drops the native window while handling the close, and only then emits
+        // `ExitRequested`; by `Exit` the labeled window is already gone, so `is_maximized`
+        // cannot be answered. `CloseRequested` still has the live window.
+        match event {
+            RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::CloseRequested { .. },
+                ..
+            } if label == MAIN_WINDOW_LABEL => {
+                let state = handle.state::<ShellState>();
+                if let Some(window) = handle.get_webview_window(MAIN_WINDOW_LABEL) {
+                    match window.is_maximized() {
+                        Ok(is_maximized) => remember_window_maximized(&state, is_maximized),
+                        Err(error) => state.note(&format!(
+                            "could not read maximized {MAIN_WINDOW_LABEL}: {error}"
+                        )),
+                    }
+                }
             }
+            RunEvent::Exit => {
+                let state = handle.state::<ShellState>();
+                let owned = state
+                    .process
+                    .lock()
+                    .ok()
+                    .and_then(|mut process| process.take());
+                if let Some(daemon) = owned {
+                    tauri::async_runtime::block_on(daemon.shutdown());
+                    state.note("daemon stopped");
+                }
+            }
+            _ => {}
         }
     });
 
@@ -1200,6 +1307,46 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
         std::fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("{} must be readable: {error}", path.display()))
+    }
+
+    #[test]
+    fn window_maximized_round_trips_and_a_webview_cannot_set_it() {
+        let directory = scratch("window-maximized");
+        let state = shell(&directory);
+
+        // A webview `set` is the same refusal the daemon keys get.
+        assert_eq!(
+            state.set(CONFIG_WINDOW_MAXIMIZED, "true"),
+            Err(format!(
+                "{CONFIG_WINDOW_MAXIMIZED} is reported by the shell and cannot be set"
+            ))
+        );
+        assert!(
+            !should_maximize(&state.get(CONFIG_WINDOW_MAXIMIZED)),
+            "a refused write does not maximize the next launch"
+        );
+
+        // The shell records the live window. Only `true` restores; a resize stores false
+        // so the next launch uses tauri.conf.json rather than a stale maximized flag.
+        assert_eq!(window_maximized_value(true), "true");
+        assert_eq!(window_maximized_value(false), "false");
+        remember_window_maximized(&state, true);
+        let reloaded = shell(&directory);
+        assert!(should_maximize(&reloaded.get(CONFIG_WINDOW_MAXIMIZED)));
+        assert_eq!(
+            read_settings(&directory.join(SETTINGS_FILE)).get(CONFIG_WINDOW_MAXIMIZED),
+            Some(&"true".to_string())
+        );
+
+        remember_window_maximized(&reloaded, false);
+        let resized = shell(&directory);
+        assert!(
+            !should_maximize(&resized.get(CONFIG_WINDOW_MAXIMIZED)),
+            "a window that was only resized must not reopen maximized"
+        );
+        assert!(!should_maximize("false"));
+        assert!(!should_maximize("TRUE"));
+        assert!(!should_maximize(""));
     }
 
     #[test]
