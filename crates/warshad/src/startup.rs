@@ -16,20 +16,22 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use chrono::{TimeZone, Utc};
 use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{error, info, warn};
 use warsha_backends::BackendFactory;
+use warsha_core::DeviceId;
 use warsha_git::GitHubClient;
 use warsha_pipeline::{
     BackendKind, BackendKit, CommandPolicy, InMemoryCrashReportStore, InMemoryMcpManager,
     InMemoryPairingStore, InMemoryPreferenceStore, InMemoryProcessManager,
-    InMemoryStoreReviewStore, LivePreviewManager, McpApprovals, McpManager, Preference,
-    ProcessManager, RoutineRegistry, RoutineRunner, RoutineScheduler, RunAgentSessions, RunMode,
-    RunModeConfig, StaticPermissions,
+    InMemoryStoreReviewStore, LivePreviewManager, McpApprovals, McpManager, PairingStore,
+    PhonePairing, Preference, ProcessManager, RoutineRegistry, RoutineRunner, RoutineScheduler,
+    RunAgentSessions, RunMode, RunModeConfig, StaticPermissions,
 };
 use warsha_providers::{KeychainSecretStore, ProviderRouter, SecretStore};
-use warsha_remote::DeviceRegistry;
+use warsha_remote::{DeviceIdentity, DeviceRegistry};
 use warsha_store::Store;
 
 use crate::auth::cors_origins;
@@ -117,6 +119,54 @@ async fn seed_preferences(
 /// The stored phone pairings, revocation included.
 async fn seed_pairings(settings: &SettingsStore) -> Result<InMemoryPairingStore> {
     Ok(settings.load_pairings().await?)
+}
+
+/// Rebuild every persisted device into the registry the fresh daemon just created.
+///
+/// `devices.list` reads this registry, and it used to start holding only the
+/// daemon. A pairing row that also stored a display name and a 32-byte static
+/// public key is a device; a legacy `pairing.create` row (no name, or a key that
+/// is not 32 bytes) is left as a secret only — inventing a key would put a
+/// device on the list that was never enrolled. `add_device` refuses a revoked
+/// identity, so a revoked row is inserted active and then revoked, which is also
+/// what sets `revoked_at`.
+async fn seed_devices(devices: &DeviceRegistry, pairings: &InMemoryPairingStore) -> Result<()> {
+    for pairing in pairings.list() {
+        if let Some(identity) = device_identity_from_pairing(&pairing) {
+            let revoked = identity.revoked;
+            let device_id = identity.device_id;
+            let mut insertable = identity;
+            insertable.revoked = false;
+            insertable.revoked_at = None;
+            devices.add_device(insertable).await?;
+            if revoked {
+                devices.revoke_device(device_id).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The device a stored pairing can restore, or `None` when the row has no identity.
+fn device_identity_from_pairing(pairing: &PhonePairing) -> Option<DeviceIdentity> {
+    let name = pairing.name.clone()?;
+    let key = pairing.static_public.as_deref()?;
+    let static_public: [u8; 32] = key.try_into().ok()?;
+    let device_id = uuid::Uuid::parse_str(pairing.device_id.trim())
+        .ok()
+        .map(DeviceId)?;
+    // `unwrap_or(i64::MAX)` is still `unwrap_used`, and a timestamp that does
+    // not fit in `i64` is not a device this process can restore. Skip the row.
+    let created_secs = i64::try_from(pairing.created_at).ok()?;
+    let created_at = Utc.timestamp_opt(created_secs, 0).single()?;
+    Some(DeviceIdentity {
+        device_id,
+        static_public,
+        name,
+        created_at,
+        revoked: pairing.revoked,
+        revoked_at: None,
+    })
 }
 
 /// Start the daemon and return a handle for management.
@@ -440,6 +490,7 @@ pub(crate) async fn start_daemon_with_interfaces(
     let backend_kits = seed_backend_kits(&store, &settings).await?;
     let stored_preferences = seed_preferences(&store, &settings).await?;
     let pairings = seed_pairings(&settings).await?;
+    seed_devices(&devices, &pairings).await?;
     // The three Wave 2 catalogs, from `warsha-core` rather than from the file. They
     // are seeded because they are *shipped*: a fresh daemon must answer
     // `harness.list`, `skills.list` and `plugins.list` with the presets the product

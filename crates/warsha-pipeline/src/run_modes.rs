@@ -360,6 +360,16 @@ pub struct PhonePairing {
     /// record the legacy path created without an expiry.
     #[serde(default)]
     pub expires_at: Option<u64>,
+    /// Display name stored beside the secret so `devices.list` can rebuild the
+    /// device after a restart. Absent on a `pairing.create` record, which never
+    /// enrolled a device. Skipped on the wire: `pairing.list` did not grow a field.
+    #[serde(default, skip_serializing)]
+    pub name: Option<String>,
+    /// Raw X25519 static public key (32 bytes) captured at pair time. A public
+    /// key, not the pairing secret. Skipped on the wire for the same reason as
+    /// `name`.
+    #[serde(default, skip_serializing)]
+    pub static_public: Option<Vec<u8>>,
 }
 
 impl PhonePairing {
@@ -384,7 +394,23 @@ impl PhonePairing {
             created_at,
             revoked: false,
             expires_at,
+            name: None,
+            static_public: None,
         }
+    }
+
+    /// Attach the device identity `devices.list` has to restore after a restart.
+    ///
+    /// `pairing.create` never had one, so the constructors leave both fields
+    /// empty and only the device-enrolment path fills them in.
+    pub fn with_device_identity(
+        mut self,
+        name: impl Into<String>,
+        static_public: [u8; 32],
+    ) -> Self {
+        self.name = Some(name.into());
+        self.static_public = Some(static_public.to_vec());
+        self
     }
 
     /// Whether the offer's expiry has passed at `now` (Unix seconds).
@@ -410,6 +436,8 @@ impl fmt::Debug for PhonePairing {
             .field("created_at", &self.created_at)
             .field("revoked", &self.revoked)
             .field("expires_at", &self.expires_at)
+            .field("name", &self.name)
+            .field("static_public", &self.static_public)
             .finish()
     }
 }
@@ -505,6 +533,15 @@ impl InMemoryPairingStore {
             .find(|pairing| pairing.device_id == device_id)
     }
 
+    /// The record for a device id, mutably, so a caller can attach the device
+    /// identity after `create_with_expiry` has accepted the secret.
+    pub fn get_mut(&mut self, device_id: &str) -> Option<&mut PhonePairing> {
+        let device_id = device_id.trim();
+        self.pairings
+            .iter_mut()
+            .find(|pairing| pairing.device_id == device_id)
+    }
+
     /// Persist every pairing — revoked ones included — into the SQLite store.
     ///
     /// Revocation is a value on the row, not a delete, so a revoked device is
@@ -518,6 +555,8 @@ impl InMemoryPairingStore {
                     created_at: pairing.created_at,
                     revoked: pairing.revoked,
                     expires_at: pairing.expires_at,
+                    name: pairing.name.clone(),
+                    static_public: pairing.static_public.clone(),
                 })
                 .await?;
         }
@@ -541,6 +580,8 @@ impl InMemoryPairingStore {
                 created_at: row.created_at,
                 revoked: row.revoked,
                 expires_at: row.expires_at,
+                name: row.name,
+                static_public: row.static_public,
             })
             .collect();
         Ok(Self { pairings })

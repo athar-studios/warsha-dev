@@ -737,6 +737,8 @@ async fn save_and_load_pairings_keeps_revoked_rows<S: SettingsOps>() {
         created_at: 1_700_000_000,
         revoked: false,
         expires_at: Some(1_700_000_600),
+        name: None,
+        static_public: None,
     };
     let second = StoredPairing {
         device_id: "device-2".to_string(),
@@ -744,6 +746,8 @@ async fn save_and_load_pairings_keeps_revoked_rows<S: SettingsOps>() {
         created_at: 1_700_000_100,
         revoked: true,
         expires_at: None,
+        name: None,
+        static_public: None,
     };
     store.save_pairing(&first).await.expect("the first row");
     store.save_pairing(&second).await.expect("the second row");
@@ -782,6 +786,8 @@ async fn save_and_load_pairings_preserves_the_expiry<S: SettingsOps>() {
         created_at: 1_700_000_000,
         revoked: false,
         expires_at: Some(1_700_000_600),
+        name: Some("Paired Device".to_string()),
+        static_public: Some(vec![7u8; 32]),
     };
     let permanent = StoredPairing {
         device_id: "device-2".to_string(),
@@ -789,6 +795,8 @@ async fn save_and_load_pairings_preserves_the_expiry<S: SettingsOps>() {
         created_at: 1_700_000_100,
         revoked: false,
         expires_at: None,
+        name: None,
+        static_public: None,
     };
     store
         .save_pairing(&expiring)
@@ -832,6 +840,8 @@ async fn migration_applies_to_an_empty_and_a_legacy_database<S: SettingsOps>() {
         created_at: 1_700_000_000,
         revoked: false,
         expires_at: None,
+        name: None,
+        static_public: None,
     };
     empty
         .save_pairing(&fresh_row)
@@ -1282,6 +1292,8 @@ fn debug_redacts_the_pairing_secret() {
         created_at: 42,
         revoked: false,
         expires_at: None,
+        name: None,
+        static_public: None,
     };
     let rendered = format!("{pairing:?}");
     assert!(rendered.contains("device-1"));

@@ -282,6 +282,7 @@ impl Store {
             .map_err(|e| StoreError::Migration(e.to_string()))?;
         let mut transaction = pool.begin().await?;
         repair_settings_expiry(&mut transaction).await?;
+        repair_pairing_device_identity(&mut transaction).await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -1586,7 +1587,7 @@ fn migration_migrator() -> sqlx::migrate::Migrator {
 /// It is deliberately conditional on the column's absence: a pairing row with a
 /// `NULL` deadline written after the column existed means "revocation only", and
 /// a repair that ran unconditionally would silently give it one.
-async fn repair_settings_expiry(connection: &mut sqlx::SqliteConnection) -> Result<()> {
+pub(crate) async fn repair_settings_expiry(connection: &mut sqlx::SqliteConnection) -> Result<()> {
     let has_expiry: Option<String> =
         sqlx::query_scalar("SELECT name FROM pragma_table_info('pairing_devices') WHERE name = ?")
             .bind("expires_at")
@@ -1603,6 +1604,37 @@ async fn repair_settings_expiry(connection: &mut sqlx::SqliteConnection) -> Resu
         )
         .execute(&mut *connection)
         .await?;
+    }
+    Ok(())
+}
+
+/// Add the device-identity columns a pairing row needs so `devices.list` can
+/// be rebuilt after a restart.
+///
+/// `006_settings.sql` creates `pairing_devices` without them, and that file's
+/// checksum is already applied, so the columns arrive here — the same guarded
+/// shape as [`repair_settings_expiry`]. A missing column is added nullable.
+/// Nothing is invented for a row that was written before the column existed:
+/// a NULL name or key is skipped when the daemon seeds `DeviceRegistry`.
+pub(crate) async fn repair_pairing_device_identity(
+    connection: &mut sqlx::SqliteConnection,
+) -> Result<()> {
+    for (column, ddl) in [
+        ("name", "ALTER TABLE pairing_devices ADD COLUMN name TEXT"),
+        (
+            "static_public",
+            "ALTER TABLE pairing_devices ADD COLUMN static_public BLOB",
+        ),
+    ] {
+        let present: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM pragma_table_info('pairing_devices') WHERE name = ?",
+        )
+        .bind(column)
+        .fetch_optional(&mut *connection)
+        .await?;
+        if present.is_none() {
+            sqlx::query(ddl).execute(&mut *connection).await?;
+        }
     }
     Ok(())
 }

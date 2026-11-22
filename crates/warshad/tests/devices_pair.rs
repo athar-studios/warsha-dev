@@ -22,7 +22,7 @@
 
 use reqwest::Client;
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::TempDir;
 use warsha_providers::InMemorySecretStore;
@@ -448,4 +448,110 @@ async fn a_minted_pairing_authenticates_the_session_and_dies_on_revoke() {
     );
 
     daemon.shutdown().await;
+}
+
+/// A daemon bound to a data directory the caller keeps, so a second process can
+/// open the same file after the first has shut down.
+fn daemon_config(data_dir: &Path) -> DaemonConfig {
+    DaemonConfig {
+        data_dir: data_dir.to_path_buf(),
+        socket_path: data_dir.join("warshad.sock"),
+        http_port: 0,
+        ws_port: 0,
+        auth_token: OWNER.to_string(),
+        allowed_origins: vec!["http://localhost:5173".to_string()],
+        allowed_commands: Vec::new(),
+        rate_limits: RateLimitConfig::default(),
+        ..DaemonConfig::default()
+    }
+}
+
+async fn start_on(data_dir: &Path) -> DaemonHandle {
+    start_daemon_with_secrets(
+        daemon_config(data_dir),
+        Arc::new(InMemorySecretStore::new()),
+    )
+    .await
+    .expect("the daemon starts")
+}
+
+/// The paired device row inside a `devices.list` result, or a panic naming the list.
+fn listed_device<'a>(devices: &'a Value, identity: &DeviceIdentity) -> &'a Value {
+    devices
+        .as_array()
+        .expect("devices.list is a list")
+        .iter()
+        .find(|device| device["device_id"] == device_id_value(identity))
+        .unwrap_or_else(|| panic!("the paired device is not in devices.list: {devices}"))
+}
+
+/// A paired device survives a restart: same id, the name `devices.pair` stored,
+/// the same static public key, and still not revoked. Revoking it and restarting
+/// again brings the same id back with `revoked: true` — the list keeps revoked
+/// devices. The daemon's own identity is regenerated and is not this device.
+#[tokio::test]
+async fn a_paired_device_survives_a_daemon_restart() {
+    let dir = fresh_tempdir();
+    let data_dir = dir.path().to_path_buf();
+
+    let (identity, pairing) = fresh_pairing();
+    let expected_key = pairing_json(&pairing)["static_public"].clone();
+
+    let first = start_on(&data_dir).await;
+    let port = first.rpc_port();
+    rpc_ok(
+        port,
+        OWNER,
+        "devices.pair",
+        json!({ "pairing_data": pairing_json(&pairing) }),
+    )
+    .await;
+    let before = rpc_ok(port, OWNER, "devices.list", json!([])).await;
+    let paired = listed_device(&before, &identity);
+    assert_eq!(paired["name"], "Paired Device");
+    assert_eq!(paired["static_public"], expected_key);
+    assert_eq!(paired["revoked"], false);
+    assert!(
+        before.as_array().expect("devices.list is a list").len() >= 2,
+        "the daemon device and the paired device should both be listed: {before}"
+    );
+    first.shutdown().await;
+
+    let second = start_on(&data_dir).await;
+    let port = second.rpc_port();
+    let after = rpc_ok(port, OWNER, "devices.list", json!([])).await;
+    let restored = listed_device(&after, &identity);
+    assert_eq!(restored["device_id"], device_id_value(&identity));
+    assert_eq!(restored["name"], "Paired Device");
+    assert_eq!(restored["static_public"], expected_key);
+    assert_eq!(restored["revoked"], false);
+    assert!(
+        after.as_array().expect("devices.list is a list").len() >= 2,
+        "a restart listed the paired device without the daemon: {after}"
+    );
+
+    rpc_ok(
+        port,
+        OWNER,
+        "devices.revoke",
+        json!([identity.device_id.0.to_string()]),
+    )
+    .await;
+    second.shutdown().await;
+
+    let third = start_on(&data_dir).await;
+    let port = third.rpc_port();
+    let revoked_list = rpc_ok(port, OWNER, "devices.list", json!([])).await;
+    let revoked = listed_device(&revoked_list, &identity);
+    assert_eq!(revoked["device_id"], device_id_value(&identity));
+    assert_eq!(revoked["name"], "Paired Device");
+    assert_eq!(revoked["static_public"], expected_key);
+    assert_eq!(revoked["revoked"], true);
+    assert!(
+        revoked
+            .get("revoked_at")
+            .is_some_and(|value| !value.is_null()),
+        "a revoked device should come back with revoked_at: {revoked}"
+    );
+    third.shutdown().await;
 }

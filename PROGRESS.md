@@ -1,5 +1,11 @@
 # PROGRESS.md — Warsha Build Log
 
+## Run 2026-11-23 — Persist paired devices across daemon restart (D-PAIR-DEVICE-1)
+
+- **Scope**: `devices.list` kept paired devices only in the process-local `DeviceRegistry`. Pairing secrets in `pairing_devices` now also store `name` and `static_public`, and startup reloads those rows into the registry. Expiry and auth unchanged. Local-only; no push.
+- **Proving test**: `a_paired_device_survives_a_daemon_restart` in `crates/warshad/tests/devices_pair.rs`.
+- **Seed edge**: `device_identity_from_pairing` skips a row whose `created_at` does not fit in `i64` (`try_from` then `ok()?`), instead of substituting `i64::MAX`. Revoked rows are still inserted active and then `revoke_device`d, so they come back revoked.
+
 ## Run 2026-11-22 — Practical UI drive proof for R9 (GAP-H3 + MISS-1) (D-R9-DRIVE-1)
 - **Scope**: Practical end-to-end UI drive on `r-next/integration` for merged tip `db29346` (lane `5764fe8` GAP-H3 + lane `db29346` MISS-1), per permanent owner rule OD-PRACTICAL-REVIEW-1. Local-only: no push, no tag, no publish, main untouched.
 - **Drive implementation**:

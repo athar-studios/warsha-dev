@@ -1,6 +1,13 @@
 
 # DECISIONS.md — Architecture and Design Decisions
 
+## 2026-11-23 — D-PAIR-DEVICE-1: Persist paired device identity beside the pairing secret
+
+- **Decision**: `devices.list` reads `DeviceRegistry`, which was rebuilt with only the daemon identity on every start. `pairing_devices` already kept the secret, expiry and revocation, but not the display name or the X25519 static public key, so a relaunch listed the phone as gone. `repair_pairing_device_identity` (called from `Store::run_migrations` and `SettingsRepo::migrate`, beside `repair_settings_expiry`) adds nullable `name` (TEXT) and `static_public` (BLOB) only when the column is missing. A numbered migration cannot do this: `006_settings.sql` is checksummed and `CREATE TABLE IF NOT EXISTS`, and an `ALTER` in a later file collides with the repair on a database the settings path already updated. `devices.pair` and `devices.pair-start` store both through the existing `save_pairings` path. Startup still seeds pairing secrets, then inserts each row that has a name and a 32-byte key into `DeviceRegistry` (`add_device` with `revoked: false`, then `revoke_device` when the pairing is revoked, which also sets `revoked_at`). A legacy row with NULL name or key is skipped rather than given an invented key. The 10-minute secret expiry, auth, and the daemon's own generated identity are unchanged. The unused `devices` table stays unused.
+- **Reason**: A paired device has to survive an app restart so the desktop Devices page, the phone bench, and gate approvals that need a listed paired device do not require a fresh pairing. Pairing credentials still expire 10 minutes after they are minted.
+- **Proving test**: `crates/warshad/tests/devices_pair.rs` `a_paired_device_survives_a_daemon_restart` — pair, restart on the same data dir, assert id / name / `static_public` / `revoked: false`; revoke, restart, assert the same id returns `revoked: true`.
+- **Scope**: `crates/warsha-store/src/lib.rs` (`repair_pairing_device_identity`), `crates/warsha-store/src/settings.rs`, `crates/warsha-pipeline/src/run_modes.rs`, `crates/warshad/src/lib.rs`, `crates/warshad/src/startup.rs`, store characterization fixtures, `crates/warshad/tests/devices_pair.rs`. Local-only; no push.
+
 ## 2026-11-22 — D-R9-DRIVE-1: Practical UI Drive Proof for R9 (GAP-H3 Fast Failover + MISS-1 Greenfield Git Auto-Init)
 - **Decision**:
   1. Automated practical drive script `scripts/ui-drive-r9-failover-autoinit.mjs` orchestrating a real `warshad` daemon and headless Chromium in Arabic locale (`ar-EG`, RTL, dark theme) exercising both R9 fixes end-to-end:

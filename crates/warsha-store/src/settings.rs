@@ -28,8 +28,8 @@ use sqlx::{Row, SqlitePool};
 use warsha_core::ProjectPermissions;
 
 use crate::{
-    column_int, column_opt_int, column_opt_text, column_text, repair_settings_expiry, Result,
-    StoreError,
+    column_int, column_opt_blob, column_opt_int, column_opt_text, column_text,
+    repair_pairing_device_identity, repair_settings_expiry, Result, StoreError,
 };
 
 // --------------------------------------------------------------- stored rows
@@ -105,6 +105,14 @@ pub struct StoredPairing {
     /// Unix seconds after which the secret stops authenticating; `None` for a
     /// record the legacy `pairing.create` path wrote.
     pub expires_at: Option<u64>,
+    /// Display name captured when the device was enrolled. `None` on a row
+    /// written before the identity columns existed, or by `pairing.create`,
+    /// which never had a device identity to store.
+    pub name: Option<String>,
+    /// Raw X25519 static public key (32 bytes). `None` for the same legacy
+    /// rows that have no name; a present value that is not 32 bytes is still
+    /// loaded, and the registry seed is what refuses to invent a key.
+    pub static_public: Option<Vec<u8>>,
 }
 
 impl fmt::Debug for StoredPairing {
@@ -115,6 +123,8 @@ impl fmt::Debug for StoredPairing {
             .field("created_at", &self.created_at)
             .field("revoked", &self.revoked)
             .field("expires_at", &self.expires_at)
+            .field("name", &self.name)
+            .field("static_public", &self.static_public)
             .finish()
     }
 }
@@ -344,6 +354,7 @@ impl SettingsRepo {
             .execute(&mut *transaction)
             .await?;
         repair_settings_expiry(&mut transaction).await?;
+        repair_pairing_device_identity(&mut transaction).await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -602,17 +613,21 @@ impl SettingsRepo {
             .map(|expires_at| sql_int(expires_at, "pairing_devices.expires_at"))
             .transpose()?;
         sqlx::query(
-            "INSERT INTO pairing_devices (device_id, secret, created_at, revoked, expires_at) \
-             VALUES (?, ?, ?, ?, ?) \
+            "INSERT INTO pairing_devices \
+                (device_id, secret, created_at, revoked, expires_at, name, static_public) \
+             VALUES (?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT(device_id) DO UPDATE SET \
              secret = excluded.secret, created_at = excluded.created_at, \
-             revoked = excluded.revoked, expires_at = excluded.expires_at",
+             revoked = excluded.revoked, expires_at = excluded.expires_at, \
+             name = excluded.name, static_public = excluded.static_public",
         )
         .bind(&pairing.device_id)
         .bind(&pairing.secret)
         .bind(sql_int(pairing.created_at, "pairing_devices.created_at")?)
         .bind(i64::from(pairing.revoked))
         .bind(expires_at)
+        .bind(pairing.name.as_deref())
+        .bind(pairing.static_public.as_deref())
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -621,7 +636,8 @@ impl SettingsRepo {
     /// Every pairing, active and revoked, oldest first.
     pub async fn load_pairings(&self) -> Result<Vec<StoredPairing>> {
         let rows = sqlx::query(
-            "SELECT device_id, secret, created_at, revoked, expires_at FROM pairing_devices \
+            "SELECT device_id, secret, created_at, revoked, expires_at, name, static_public \
+             FROM pairing_devices \
              ORDER BY created_at ASC, device_id ASC",
         )
         .fetch_all(&self.pool)
@@ -640,6 +656,8 @@ impl SettingsRepo {
                     )?,
                     revoked: column_bool(row, "revoked")?,
                     expires_at,
+                    name: column_opt_text(row, "name")?,
+                    static_public: column_opt_blob(row, "static_public")?,
                 })
             })
             .collect()

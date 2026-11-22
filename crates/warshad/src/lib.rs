@@ -1806,6 +1806,7 @@ impl WarshaApiServer for WarshaRpc {
         let expires_at = u64::try_from(pairing_data.expires_at.timestamp())
             .map_err(|_| rpc_error("this pairing's expiry is before the Unix epoch".to_string()))?;
 
+        let created_at = now_epoch_secs();
         let device = warsha_remote::DeviceIdentity {
             device_id: pairing_data.device_id,
             static_public: pairing_data.static_public,
@@ -1816,21 +1817,27 @@ impl WarshaApiServer for WarshaRpc {
         };
         self.state
             .devices
-            .add_device(device)
+            .add_device(device.clone())
             .await
             .map_err(|e| ErrorObject::owned(-32000, e.to_string(), None::<()>))?;
 
         {
             let mut pairings = self.state.pairings.write().await;
             if pairings.get(&pairing_data.device_id.to_string()).is_none() {
-                pairings
+                let pairing = pairings
                     .create_with_expiry(
                         &pairing_data.device_id.to_string(),
                         &pairing_data.secret_token(),
-                        now_epoch_secs(),
+                        created_at,
                         Some(expires_at),
                     )
                     .map_err(|e| rpc_error(e.to_string()))?;
+                // The secret row is also the device row: name and static key have
+                // to ride with it or a restart lists only the daemon.
+                let recorded = pairings
+                    .get_mut(&pairing.device_id)
+                    .ok_or_else(|| rpc_error("the pairing was not recorded".to_string()))?;
+                *recorded = pairing.with_device_identity(device.name, device.static_public);
             }
         }
         self.save_pairings().await?;
@@ -1885,7 +1892,7 @@ impl WarshaApiServer for WarshaRpc {
 
         {
             let mut pairings = self.state.pairings.write().await;
-            pairings
+            let pairing = pairings
                 .create_with_expiry(
                     &device.device_id.to_string(),
                     &offer.pairing.secret_token(),
@@ -1893,6 +1900,10 @@ impl WarshaApiServer for WarshaRpc {
                     Some(expires_at),
                 )
                 .map_err(|error| rpc_error(error.to_string()))?;
+            let recorded = pairings
+                .get_mut(&pairing.device_id)
+                .ok_or_else(|| rpc_error("the pairing was not recorded".to_string()))?;
+            *recorded = pairing.with_device_identity(device.name.clone(), device.static_public);
         }
         self.save_pairings().await?;
 
