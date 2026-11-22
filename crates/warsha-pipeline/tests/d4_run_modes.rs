@@ -155,7 +155,7 @@ async fn plan_run_stops_at_gateb_with_zero_workspace_changes() {
 
     let run = fx
         .engine
-        .start_run_in_mode(fx.project.id, "Plan only for now", RunMode::Plan, None)
+        .start_run_in_mode(fx.project.id, "Plan only for now", RunMode::Plan, None, None)
         .await
         .expect("plan run starts");
 
@@ -186,7 +186,7 @@ async fn plan_run_approval_advances_same_run_id_and_receipt_carries_plan_approve
     let fx = fixture().await;
     let run = fx
         .engine
-        .start_run_in_mode(fx.project.id, "Plan then build", RunMode::Plan, None)
+        .start_run_in_mode(fx.project.id, "Plan then build", RunMode::Plan, None, None)
         .await
         .expect("plan run starts");
     let run_id = run.id;
@@ -251,7 +251,7 @@ async fn plan_run_rejection_at_gateb_ends_the_run_plan_only() {
     let fx = fixture().await;
     let run = fx
         .engine
-        .start_run_in_mode(fx.project.id, "Plan to reject", RunMode::Plan, None)
+        .start_run_in_mode(fx.project.id, "Plan to reject", RunMode::Plan, None, None)
         .await
         .expect("plan run starts");
     let run_id = run.id;
@@ -308,6 +308,7 @@ async fn specfile_run_carries_the_spec_as_a_fenced_untrusted_brief() {
             "irrelevant for spec-file",
             RunMode::SpecFile,
             Some("packet.md"),
+            None,
         )
         .await
         .expect("spec-file run starts");
@@ -344,7 +345,7 @@ async fn specfile_refusals_are_named() {
     fx.store.create_project(&detached).await.expect("project");
     let err = fx
         .engine
-        .start_run_in_mode(detached.id, "brief", RunMode::SpecFile, Some("packet.md"))
+        .start_run_in_mode(detached.id, "brief", RunMode::SpecFile, Some("packet.md"), None)
         .await
         .expect_err("refused: no repo");
     let msg = err.to_string();
@@ -356,7 +357,7 @@ async fn specfile_refusals_are_named() {
     // Repo attached but no spec_file_path given.
     let err = fx
         .engine
-        .start_run_in_mode(fx.project.id, "brief", RunMode::SpecFile, None)
+        .start_run_in_mode(fx.project.id, "brief", RunMode::SpecFile, None, None)
         .await
         .expect_err("refused: no path");
     assert!(
@@ -374,6 +375,7 @@ async fn specfile_refusals_are_named() {
             "brief",
             RunMode::SpecFile,
             Some(outside.to_string_lossy().as_ref()),
+            None,
         )
         .await
         .expect_err("refused: outside the repo");
@@ -390,6 +392,7 @@ async fn specfile_refusals_are_named() {
             "an agent brief",
             RunMode::Agent,
             Some("packet.md"),
+            None,
         )
         .await
         .expect_err("refused: spec path on a non-SpecFile run");

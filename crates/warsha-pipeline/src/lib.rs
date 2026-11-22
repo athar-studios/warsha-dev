@@ -643,7 +643,7 @@ impl<S: SettingsProvider> PipelineEngine<S> {
     /// applies, and it happens before the run row exists, so a refused start leaves
     /// no orphan run behind. The new run inherits the budget the project carries so
     pub async fn start_run(&self, project_id: ProjectId, idea: &str) -> Result<Run> {
-        self.start_run_in_mode(project_id, idea, warsha_core::RunMode::Agent, None)
+        self.start_run_in_mode(project_id, idea, warsha_core::RunMode::Agent, None, None)
             .await
     }
 
@@ -653,6 +653,7 @@ impl<S: SettingsProvider> PipelineEngine<S> {
         idea: &str,
         mode: warsha_core::RunMode,
         #[allow(unused_variables)] spec_file_path: Option<&str>,
+        budget_cents: Option<u64>,
     ) -> Result<Run> {
         let project = self.store.get_project(project_id).await?;
 
@@ -662,14 +663,20 @@ impl<S: SettingsProvider> PipelineEngine<S> {
 
         let (project_budget_cents, project_spent_cents) =
             self.project_budget_state(project_id).await?;
-        if let Some(budget_cents) = project_budget_cents {
-            if project_spent_cents >= budget_cents {
-                return Err(PipelineError::ProjectBudgetExhausted {
-                    budget_cents,
-                    spent_cents: project_spent_cents,
-                });
+        // An explicit per-run cap is the owner's new ceiling. It is applied on the
+        // row below and must not be refused because the previous run already spent
+        // the previous cap. Omitted still uses that inherited ceiling.
+        if budget_cents.is_none() {
+            if let Some(budget_cents) = project_budget_cents {
+                if project_spent_cents >= budget_cents {
+                    return Err(PipelineError::ProjectBudgetExhausted {
+                        budget_cents,
+                        spent_cents: project_spent_cents,
+                    });
+                }
             }
         }
+        let run_budget_cents = budget_cents.or(project_budget_cents);
 
         let mut run = Run {
             id: RunId::new(),
@@ -680,7 +687,7 @@ impl<S: SettingsProvider> PipelineEngine<S> {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             status: RunStatus::Running,
-            budget_cents: project_budget_cents,
+            budget_cents: run_budget_cents,
             spent_cents: 0,
             worktree_path: None,
             worktree_branch: None,
