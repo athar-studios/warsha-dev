@@ -1,5 +1,34 @@
 # PROGRESS.md — Warsha Build Log
 
+## Run 2026-11-20 — FIX-UX-3: Provider model discovery chain, diff rendering, and row error surfacing (D-RN-UX-MODELS-1)
+- **Objective**: Fix UX issue 3 of 4: "model discovery" per owner order m08378 and Issue #17.
+- **Root cause**:
+  1. `crates/warsha-providers/src/lib.rs` `MockProvider::list_models` unconditionally returned mock models, ignoring `should_fail` and `fail_with`.
+  2. `crates/warshad/src/lib.rs` `check_provider_models` called `check_model_updates(&name, &[])` with empty catalog, failing to diff against saved custom models.
+  3. `crates/warshad/src/lib.rs` `check_provider_models` only accepted provider name, unable to probe unsaved credentials during provider addition.
+  4. `apps/desktop/src/v3/pages/settings/sections/ModelsSection.tsx` swallowed `fetchModelsAction` errors into toast without displaying failure banners on provider rows, and never rendered live list diffs or model chips.
+  5. Error messages from provider endpoints could leak bearer tokens or secret keys.
+- **Changes**:
+  - `crates/warsha-providers/src/lib.rs`: Updated `MockProvider::list_models` to check `should_fail` and return `fail_with` error; exported `probe_models`.
+  - `crates/warsha-providers/src/openai.rs` & `ollama.rs`: Wired live model discovery query with fallback.
+  - `crates/warsha-providers/src/provider_setup.rs`: Added `probe_models` function to probe `/models` or `/api/tags` and scrub secrets.
+  - `crates/warshad/src/api.rs`: Updated `providers.check_models` RPC declaration with optional `api_base`, `key`, `kind`.
+  - `crates/warshad/src/lib.rs`: Implemented unsaved discovery probing and diffing against saved custom models in `check_provider_models`; added secret scrubbing with `scrub_key` and `mask_secrets`.
+  - `crates/warshad/src/tests/mod.rs`: Added `providers_check_models_rpc`, `providers_check_models_diffs_against_local_catalog`, and `providers_check_models_surfaces_error_without_leaking_key`.
+  - `packages/client/src/index.ts`: Updated `checkProviderModels` to accept optional `{ api_base, key, kind }`.
+  - `packages/i18n/src/v3/en/` & `ar/`: Added i18n keys for model discovery diffs, counts, warnings, and error banners in `settings.ts` and `onboarding.ts`.
+  - `apps/desktop/src/v3/pages/settings/sections/ModelsSection.tsx`: Captured and rendered catalog diffs (+N new, M retained, model item chips) and row error banners on `fetchModelsAction`; added "Fetch models" and model picker to Add Provider dialog with fallback warning.
+  - `apps/desktop/src/v3/pages/settings/sections/ModelsSection.test.tsx`: Added 5 unit tests for live diff rendering, error surfacing, secret sanitization, dialog discovery, and Arabic RTL i18n.
+- **Verification**:
+  - `cargo fmt --check`: 0 violations.
+  - `cargo clippy -p warsha-providers -p warshad --all-targets -- -D warnings`: 0 warnings.
+  - `cargo test -p warsha-providers -p warshad`: all 65 provider tests and targeted daemon tests passed.
+  - `node scripts/ci/i18n-gate.mjs`: 1031 keys, 0 missing/unused keys.
+  - `node scripts/check-wire-contract.mjs`: 11 checks, 0 violations.
+  - `pnpm --filter warsha-desktop typecheck`: 0 errors.
+  - `pnpm --filter warsha-desktop test`: all ModelsSection, Onboarding, and Settings tests passed.
+- **Status**: uncommitted in isolated worktree `.agents/worktrees/fix-ux-models`.
+
 ## Run 2026-11-20 — Pre-release gate matrix (r-next/integration@d2a4e3d)
 - **Commands**:
   - `cargo fmt --all -- --check`: exit 0

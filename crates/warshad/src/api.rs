@@ -298,6 +298,9 @@ pub trait WarshaApi {
     async fn check_provider_models(
         &self,
         name: String,
+        api_base: Option<String>,
+        key: Option<String>,
+        kind: Option<String>,
     ) -> RpcResult<warsha_providers::ModelCatalogDiff>;
 
     /// One provider's quota (A3): what the provider reports, what the daemon
