@@ -98,6 +98,7 @@ export default {
   'bench.role.release': 'المُطلق',
   'bench.role.marketer': 'المسوق',
   'bench.role.feedback': 'الموثق',
+  'bench.role.secretary': 'السكرتير',
   'bench.gate.rationale': 'يتطلب التشغيل موافقتك على هذه البوابة للمتابعة إلى المرحلة التالية.',
   'bench.gate.consequence_continue': 'عند الموافقة، ينتقل الفريق تلقائيًا إلى المرحلة التالية.',
   'bench.gate.consequence_review': 'يمكنك مراجعة المخرجات والأحداث قبل اتخاذ القرار.',

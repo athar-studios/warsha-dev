@@ -1,6 +1,7 @@
 // apps/desktop/src/v3/pages/settings/sections/ModelsSection.tsx
 import {
   ALL_ROLES,
+  normalizeRole,
   type AuthStatus,
   type CustomModelRecord,
   type ModelCatalogDiff,
@@ -154,9 +155,13 @@ export function ModelsSection(): React.ReactElement {
         client.listCustomModels(),
         client.listRoleRoutings(),
       ]);
+      const normalizedRoutings = rotList.map((routing) => ({
+        ...routing,
+        role: normalizeRole(routing.role),
+      }));
       setProviders(provList);
       setCustomModels(modList);
-      setRoleRoutings(rotList);
+      setRoleRoutings(normalizedRoutings);
       
       const statuses: Record<string, AuthStatus> = {};
       for (const p of provList) {
@@ -172,7 +177,7 @@ export function ModelsSection(): React.ReactElement {
         setModelProvider((prev) => prev || provList[0].name);
       }
       const nextDrafts: Partial<Record<Role, string>> = {};
-      for (const r of rotList) {
+      for (const r of normalizedRoutings) {
         const primary = r.targets[0];
         if (primary) {
           nextDrafts[r.role] = `${primary.provider_id}::${primary.model_id}`;
@@ -368,7 +373,7 @@ export function ModelsSection(): React.ReactElement {
     if (sepIdx <= 0) return;
     const providerId = chosen.slice(0, sepIdx);
     const modelId = chosen.slice(sepIdx + 2);
-    const existing = roleRoutings.find((r) => r.role === role);
+    const existing = roleRoutings.find((r) => normalizeRole(r.role) === role);
     await client.setRoleConfig({
       role,
       targets: [{ provider_id: providerId, model_id: modelId, weight: 100 }],

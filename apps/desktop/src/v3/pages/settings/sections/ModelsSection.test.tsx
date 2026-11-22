@@ -1,12 +1,14 @@
 // apps/desktop/src/v3/pages/settings/sections/ModelsSection.test.tsx
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type {
-  CustomModelRecord,
-  ModelCatalogDiff,
-  ModelInfo,
-  ProviderConfig,
-  RoleRouting,
-  WarshaClient,
+import {
+  ALL_ROLES,
+  type CustomModelRecord,
+  type ModelCatalogDiff,
+  type ModelInfo,
+  type ProviderConfig,
+  type Role,
+  type RoleRouting,
+  type WarshaClient,
 } from '@warsha/client';
 import { I18nProvider, type Locale } from '@warsha/i18n/v3';
 import React from 'react';
@@ -451,5 +453,97 @@ describe('ModelsSection - Model Discovery & Live List Diff', () => {
     // Save button loading state is reset
     expect(saveBtn).not.toHaveAttribute('aria-busy');
     expect(saveBtn).not.toBeDisabled();
+  });
+
+  it('shows all 13 roles and maps stored p_m and q_a routings onto Product Manager and QA', async () => {
+    const storedRoles: Array<{ role: string; modelId: string }> = [
+      { role: 'intake', modelId: 'intake-model' },
+      { role: 'researcher', modelId: 'researcher-model' },
+      { role: 'p_m', modelId: 'pm-model' },
+      { role: 'designer', modelId: 'designer-model' },
+      { role: 'architect', modelId: 'architect-model' },
+      { role: 'coder', modelId: 'coder-model' },
+      { role: 'reviewer', modelId: 'reviewer-model' },
+      { role: 'q_a', modelId: 'qa-model' },
+      { role: 'security', modelId: 'security-model' },
+      { role: 'release', modelId: 'release-model' },
+      { role: 'marketer', modelId: 'marketer-model' },
+      { role: 'feedback', modelId: 'feedback-model' },
+      { role: 'secretary', modelId: 'secretary-model' },
+    ];
+    const routings = storedRoles.map(
+      (entry): RoleRouting => ({
+        role: entry.role as Role,
+        targets: [{ provider_id: 'mock-provider', model_id: entry.modelId, weight: 100 }],
+        fallback_enabled: entry.role === 'p_m' ? false : true,
+        budget_cents_per_run: entry.role === 'p_m' ? 15 : entry.role === 'q_a' ? 9 : 0,
+        daily_spend_cap_cents: entry.role === 'q_a' ? 40 : null,
+      })
+    );
+    const client = createClient({
+      listRoleRoutings: vi.fn().mockResolvedValue(routings),
+    });
+
+    renderSection(client, 'en');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('role-route-select-secretary')).toBeDefined();
+    });
+
+    const labels: Record<Role, string> = {
+      intake: 'Intake',
+      researcher: 'Researcher',
+      pm: 'Product Manager',
+      designer: 'Designer',
+      architect: 'Architect',
+      coder: 'Coder',
+      reviewer: 'Reviewer',
+      qa: 'QA',
+      security: 'Security',
+      release: 'Release',
+      marketer: 'Marketer',
+      feedback: 'Feedback',
+      secretary: 'Secretary',
+    };
+    expect(ALL_ROLES).toHaveLength(13);
+    const table = screen.getByRole('table', { name: 'Who works with which model' });
+    for (const role of ALL_ROLES) {
+      expect(within(table).getByText(labels[role])).toBeDefined();
+      expect(within(table).queryByText(`settings.role.${role}`)).toBeNull();
+    }
+
+    const pmSelect = within(screen.getByTestId('role-route-select-pm')).getByRole('combobox');
+    const qaSelect = within(screen.getByTestId('role-route-select-qa')).getByRole('combobox');
+    const secretarySelect = within(screen.getByTestId('role-route-select-secretary')).getByRole(
+      'combobox'
+    );
+    expect((pmSelect as HTMLSelectElement).value).toBe('mock-provider::pm-model');
+    expect((qaSelect as HTMLSelectElement).value).toBe('mock-provider::qa-model');
+    expect((secretarySelect as HTMLSelectElement).value).toBe('mock-provider::secretary-model');
+    expect((pmSelect as HTMLSelectElement).value).not.toBe('');
+    expect(within(screen.getByTestId('role-route-select-pm')).queryByDisplayValue('No model')).toBeNull();
+
+    const saveButtons = within(table).getAllByRole('button', { name: 'Save route' });
+    const pmIndex = ALL_ROLES.indexOf('pm');
+    const qaIndex = ALL_ROLES.indexOf('qa');
+    fireEvent.click(saveButtons[pmIndex]!);
+    fireEvent.click(saveButtons[qaIndex]!);
+
+    await waitFor(() => {
+      expect(client.setRoleConfig).toHaveBeenCalledWith({
+        role: 'pm',
+        targets: [{ provider_id: 'mock-provider', model_id: 'pm-model', weight: 100 }],
+        fallback_enabled: false,
+        budget_cents_per_run: 15,
+        daily_spend_cap_cents: null,
+      });
+      expect(client.setRoleConfig).toHaveBeenCalledWith({
+        role: 'qa',
+        targets: [{ provider_id: 'mock-provider', model_id: 'qa-model', weight: 100 }],
+        fallback_enabled: true,
+        budget_cents_per_run: 9,
+        daily_spend_cap_cents: 40,
+      });
+    });
   });
 });

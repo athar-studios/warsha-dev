@@ -23,6 +23,7 @@ import {
   decodeRoutine,
   decodeRunSummary,
   encodeBackendKit,
+  ALL_ROLES,
   parseWarshaEvent,
   pairingDataFromQrPayload,
   redactToken,
@@ -987,6 +988,77 @@ describe('configured provider and agent wiring (C2)', () => {
 
     fetchMock.mockResolvedValueOnce(okResponse([]));
     await expect(client.getRoleConfig('qa')).rejects.toThrow('no routing is set for role qa');
+  });
+
+  it('lists every pipeline role, including secretary, and normalizes snake_case PM and QA', async () => {
+    expect(ALL_ROLES).toHaveLength(13);
+    expect(ALL_ROLES).toContain('secretary');
+    expect(ALL_ROLES).toEqual([
+      'intake',
+      'researcher',
+      'pm',
+      'designer',
+      'architect',
+      'coder',
+      'reviewer',
+      'qa',
+      'security',
+      'release',
+      'marketer',
+      'feedback',
+      'secretary',
+    ]);
+
+    const wire = [
+      {
+        role: 'p_m',
+        targets: [{ provider_id: 'mock-provider', model_id: 'pm-model', weight: 100 }],
+        fallback_enabled: false,
+        budget_cents_per_run: 12,
+        daily_spend_cap_cents: 80,
+      },
+      {
+        role: 'q_a',
+        targets: [{ provider_id: 'mock-provider', model_id: 'qa-model', weight: 100 }],
+        fallback_enabled: true,
+        budget_cents_per_run: 7,
+        daily_spend_cap_cents: null,
+      },
+      {
+        role: 'secretary',
+        targets: [{ provider_id: 'mock-provider', model_id: 'sec-model', weight: 100 }],
+        fallback_enabled: true,
+        budget_cents_per_run: null,
+        daily_spend_cap_cents: null,
+      },
+    ];
+
+    fetchMock.mockResolvedValueOnce(okResponse(wire));
+    const routings = await client.listRoleRoutings();
+    expect(lastBody().method).toBe('roles.list');
+    expect(routings.map((routing) => routing.role)).toEqual(['pm', 'qa', 'secretary']);
+    expect(routings[0]?.fallback_enabled).toBe(false);
+    expect(routings[0]?.budget_cents_per_run).toBe(12);
+    expect(routings[0]?.daily_spend_cap_cents).toBe(80);
+
+    fetchMock.mockResolvedValueOnce(okResponse(wire));
+    await expect(client.listRoles()).resolves.toEqual(['pm', 'qa', 'secretary']);
+
+    fetchMock.mockResolvedValueOnce(okResponse(wire));
+    const pm = await client.getRoleConfig('pm');
+    expect(pm.role).toBe('pm');
+    expect(pm.targets).toEqual([{ provider_id: 'mock-provider', model_id: 'pm-model', weight: 100 }]);
+    expect(pm.fallback_enabled).toBe(false);
+    expect(pm.budget_cents_per_run).toBe(12);
+    expect(pm.daily_spend_cap_cents).toBe(80);
+
+    fetchMock.mockResolvedValueOnce(okResponse(wire));
+    const qa = await client.getRoleConfig('qa');
+    expect(qa.role).toBe('qa');
+    expect(qa.targets).toEqual([{ provider_id: 'mock-provider', model_id: 'qa-model', weight: 100 }]);
+    expect(qa.fallback_enabled).toBe(true);
+    expect(qa.budget_cents_per_run).toBe(7);
+    expect(qa.daily_spend_cap_cents).toBeNull();
   });
 
   it('drives the agent through the three methods that reach the loop', async () => {

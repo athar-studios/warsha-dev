@@ -249,6 +249,7 @@ export const messages: Record<Locale, Record<string, string>> = {
     'role.release': 'الإصدار',
     'role.marketer': 'التسويق',
     'role.feedback': 'التغذية الراجعة',
+    'role.secretary': 'السكرتير',
     // Simple workbench: the agent rail, the transcript, the composer, the activity panel.
     'simple.team': 'الفريق',
     'simple.team_count': '{count} عضواً',
@@ -1550,6 +1551,7 @@ export const messages: Record<Locale, Record<string, string>> = {
     'role.release': 'Release',
     'role.marketer': 'Marketer',
     'role.feedback': 'Feedback',
+    'role.secretary': 'Secretary',
     'simple.team': 'Team',
     'simple.team_count': '{count} team members',
     'simple.state_idle': 'idle',

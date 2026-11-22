@@ -587,7 +587,7 @@ describe('Advanced Workbench (U4)', () => {
     fireEvent.click(screen.getByTestId('bench-terminal-copy-btn'));
   });
 
-  it('TeamTab renders all 12 roles with metrics and triggers role routing change', () => {
+  it('TeamTab renders all 13 roles with metrics and triggers role routing change', () => {
     const onSetRoleModel = vi.fn();
     const routings: RoleRouting[] = [
       {
@@ -612,7 +612,7 @@ describe('Advanced Workbench (U4)', () => {
     );
 
     const rows = document.querySelectorAll('tr[data-role-row]');
-    expect(rows.length).toBe(12);
+    expect(rows.length).toBe(13);
     expect(screen.getByText('$0.15')).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('team-model-apply-btn-coder'));

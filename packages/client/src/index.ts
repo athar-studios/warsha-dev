@@ -1051,17 +1051,31 @@ const ROLE_VALUES: readonly Role[] = [
   'release',
   'marketer',
   'feedback',
+  'secretary',
 ];
 
 /**
  * Every role the pipeline can staff, in the order `roles.list`/`roles.set` name them.
  *
- * Exported because three screens need the same twelve rows: Settings → Models draws one
+ * Exported because three screens need the same thirteen rows: Settings → Models draws one
  * routing row per role, and both custom-endpoint flows (onboarding and Settings → Providers)
  * route the whole team to the model the owner just registered. A second copy of this list in
  * a screen is a role the screen silently stops routing.
  */
 export const ALL_ROLES: readonly Role[] = ROLE_VALUES;
+
+/**
+ * Map a daemon wire role onto this client's `Role`.
+ *
+ * `warsha_core::Role` serializes with `#[serde(rename_all = "snake_case")]`, so `PM` and
+ * `QA` leave the daemon as `p_m` and `q_a`. Screens key those roles as `pm` and `qa`;
+ * leaving the underscores in place makes a configured routing look unrouted.
+ */
+export function normalizeRole(value: string): Role {
+  if (value === 'p_m') return 'pm';
+  if (value === 'q_a') return 'qa';
+  return value as Role;
+}
 
 const REDACTED = '[redacted]';
 const EVENT_FRAME_ERROR = 'Malformed event frame';
@@ -1113,8 +1127,11 @@ function isStage(value: unknown): value is Stage {
   return typeof value === 'string' && STAGE_VALUES.some((stage) => stage === value);
 }
 
-function isRole(value: unknown): value is Role {
-  return typeof value === 'string' && ROLE_VALUES.some((role) => role === value);
+/** True for a client role name or a daemon wire alias (`p_m`, `q_a`). */
+function isRole(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const normalized = normalizeRole(value);
+  return ROLE_VALUES.some((role) => role === normalized);
 }
 
 /** A sequence flag off a `SequencedEventFrame`: absent/null is false, wrong types throw. */
@@ -1169,10 +1186,10 @@ function decodeWarshaEvent(source: Record<string, unknown>): WarshaEvent {
   const roleValue = field(source, 'role');
   let role: Role | null = null;
   if (roleValue !== null && roleValue !== undefined) {
-    if (!isRole(roleValue)) {
+    if (typeof roleValue !== 'string' || !isRole(roleValue)) {
       throw new Error(`${EVENT_FRAME_ERROR}: unknown "role"`);
     }
-    role = roleValue;
+    role = normalizeRole(roleValue);
   }
 
   const kind = requiredString(field(source, 'kind'), 'kind');
@@ -1793,7 +1810,7 @@ export interface FileContent {
 /** A Wave 2 `Role`; a missing or unknown role reads as the pipeline's first role. */
 function wave2Role(source: Record<string, unknown>, ...names: string[]): Role {
   const value = field(source, ...names);
-  return isRole(value) ? value : 'intake';
+  return typeof value === 'string' && isRole(value) ? normalizeRole(value) : 'intake';
 }
 
 function decodeHarnessStage(source: unknown): HarnessStage {
@@ -3197,7 +3214,8 @@ export class WarshaClient
   // configured; what it accepts is what the next call reaches, and what the daemon after a
   // restart reads back.
   async listRoleRoutings(): Promise<RoleRouting[]> {
-    return this.rpc<RoleRouting[]>('roles.list');
+    const routings = await this.rpc<RoleRouting[]>('roles.list');
+    return routings.map((routing) => ({ ...routing, role: normalizeRole(routing.role) }));
   }
 
   /**

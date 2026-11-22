@@ -98,6 +98,7 @@ export default {
   'bench.role.release': 'Release',
   'bench.role.marketer': 'Marketer',
   'bench.role.feedback': 'Feedback',
+  'bench.role.secretary': 'Secretary',
   'bench.gate.rationale':
     'The run requires your approval at this gate to proceed to the next stage.',
   'bench.gate.consequence_continue':
