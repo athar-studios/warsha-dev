@@ -1,6 +1,10 @@
 
 # DECISIONS.md — Architecture and Design Decisions
 
+## 2026-11-23 — D-CATALOG-1: Persist a fetched provider catalog in the daemon
+- **Decision**: `providers.check_models` writes every id in `updated_catalog` through `SettingsStore::save_custom_model` after a successful discovery, on both the `probe_models` branch and the `router.check_model_updates` branch. An empty discovery writes nothing and deletes nothing. A row for this provider whose id is in the live list is left as the owner saved it (label, window, enabled). A row for this provider whose id is absent is deleted with `delete_custom_model`. Other providers are not touched. Settings reloads `listCustomModels` after a non-empty fetch and drops that provider's stale ids, so a remount lists the live catalog rather than every id ever saved.
+- **Reason**: The fetch only updated React state in the current mount and `check_provider_models` returned a diff without storing it. Insert-only persist then kept ids a later fetch no longer returned, so the role select showed "models ever saved" instead of the catalog just fetched.
+
 ## 2026-11-22 — D-R9-DRIVE-1: Practical UI Drive Proof for R9 (GAP-H3 Fast Failover + MISS-1 Greenfield Git Auto-Init)
 - **Decision**:
   1. Automated practical drive script `scripts/ui-drive-r9-failover-autoinit.mjs` orchestrating a real `warshad` daemon and headless Chromium in Arabic locale (`ar-EG`, RTL, dark theme) exercising both R9 fixes end-to-end:

@@ -1528,11 +1528,9 @@ impl WarshaApiServer for WarshaRpc {
                     warsha_core::mask_secrets(&warsha_providers::scrub_key(&e.to_string(), k));
                 rpc_error(sanitized)
             })?;
-            return Ok(warsha_providers::reconcile_model_catalog(
-                &name,
-                &[],
-                discovered,
-            ));
+            let diff = warsha_providers::reconcile_model_catalog(&name, &[], discovered.clone());
+            self.persist_discovered_catalog(&name, &discovered).await?;
+            return Ok(diff);
         }
 
         let current_catalog = self
@@ -1566,19 +1564,31 @@ impl WarshaApiServer for WarshaRpc {
 
         let stored_key = self.state.secrets.load(&name).await.ok();
 
-        router
-            .check_model_updates(&name, &current_catalog)
-            .await
-            .map_err(|e| {
-                let err_str = e.to_string();
-                let scrubbed = if let Some(ref k) = stored_key {
-                    warsha_providers::scrub_key(&err_str, k)
-                } else {
-                    err_str
-                };
-                let sanitized = warsha_core::mask_secrets(&scrubbed);
-                rpc_error(sanitized)
-            })
+        // The live list, not the merged diff. `check_model_updates` keeps every id
+        // the local store already had, so persisting that catalog would never drop a
+        // model the provider no longer returns. One `list_models` call: a failure
+        // returns before anything is deleted.
+        let provider = router
+            .get_provider(&name)
+            .ok_or_else(|| rpc_error(format!("unknown provider '{name}'")))?;
+        let discovered = provider.list_models().await.map_err(|e| {
+            let err_str = e.to_string();
+            let scrubbed = if let Some(ref k) = stored_key {
+                warsha_providers::scrub_key(&err_str, k)
+            } else {
+                err_str
+            };
+            let sanitized = warsha_core::mask_secrets(&scrubbed);
+            rpc_error(sanitized)
+        })?;
+        // `current_catalog` is only the local half of the wire diff's counts: new
+        // versus retained. The catalog the caller stores and shows is the live list.
+        let mut diff =
+            warsha_providers::reconcile_model_catalog(&name, &current_catalog, discovered.clone());
+        diff.updated_catalog = discovered.clone();
+        diff.total_count = discovered.len();
+        self.persist_discovered_catalog(&name, &discovered).await?;
+        Ok(diff)
     }
 
     async fn provider_quota(

@@ -48,6 +48,79 @@ impl WarshaRpc {
         Self { state, start_time }
     }
 
+    /// Replace one provider's custom-model rows with a successful live discovery.
+    ///
+    /// `discovered` is what the provider just returned, not the merged diff (that
+    /// diff keeps ids the local store already had). An id already stored for this
+    /// provider is left as the owner saved it (label, window, enabled). An id the
+    /// live list does not contain is deleted, and only for this provider. A new id
+    /// is inserted enabled, with no display name of its own. An empty discovery
+    /// writes nothing and deletes nothing — a probe that came back blank must not
+    /// wipe the store. Nothing here reads or stores an API key.
+    pub(crate) async fn persist_discovered_catalog(
+        &self,
+        provider: &str,
+        discovered_models: &[warsha_providers::ModelInfo],
+    ) -> RpcResult<()> {
+        if discovered_models.is_empty() {
+            return Ok(());
+        }
+        let discovered: Vec<&str> = discovered_models
+            .iter()
+            .map(|model| model.id.trim())
+            .filter(|id| !id.is_empty())
+            .collect();
+        if discovered.is_empty() {
+            return Ok(());
+        }
+        let existing = self
+            .state
+            .settings
+            .list_custom_models()
+            .await
+            .map_err(rpc_error)?;
+        for row in existing
+            .iter()
+            .filter(|row| row.provider.eq_ignore_ascii_case(provider))
+        {
+            if discovered.iter().any(|id| *id == row.model_id) {
+                continue;
+            }
+            // The row's own provider string: delete matches it exactly, and a
+            // discovery may name the same provider with different casing.
+            self.state
+                .settings
+                .delete_custom_model(&row.provider, &row.model_id)
+                .await
+                .map_err(rpc_error)?;
+        }
+        for model in discovered_models {
+            let id = model.id.trim();
+            if id.is_empty() {
+                continue;
+            }
+            let already = existing
+                .iter()
+                .any(|row| row.provider.eq_ignore_ascii_case(provider) && row.model_id == id);
+            if already {
+                continue;
+            }
+            let record = CustomModelRecord {
+                provider: provider.to_string(),
+                model_id: id.to_string(),
+                display_name: None,
+                context_window: (model.context_window > 0).then_some(model.context_window),
+                enabled: true,
+            };
+            self.state
+                .settings
+                .save_custom_model(&wave2::custom_model_row(&record))
+                .await
+                .map_err(rpc_error)?;
+        }
+        Ok(())
+    }
+
     /// Resolve the Secretary's daily spend cap in cents:
     /// 1. Explicit `daily_spend_cap_cents` on `Role::Secretary` routing config when set.
     /// 2. Otherwise the smallest existing per-run default (`solo-bench` = 100 cents),

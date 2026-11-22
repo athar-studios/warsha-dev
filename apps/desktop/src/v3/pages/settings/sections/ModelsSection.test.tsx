@@ -1,5 +1,5 @@
 // apps/desktop/src/v3/pages/settings/sections/ModelsSection.test.tsx
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type {
   CustomModelRecord,
   ModelCatalogDiff,
@@ -415,6 +415,109 @@ describe('ModelsSection - Model Discovery & Live List Diff', () => {
         sanitizeSecretError('Failed with Bearer eyJhbGciOiJIUzI1NiJ9 and sk-1234567890abcdef')
       ).toBe('Failed with Bearer [redacted] and [redacted]');
     });
+  });
+
+  function optionValues(testId: string): string[] {
+    const select = screen.getByTestId(testId).querySelector('select');
+    expect(select).not.toBeNull();
+    return [...(select?.querySelectorAll('option') ?? [])].map((option) => option.value);
+  }
+
+  it('role dropdown lists every id from a successful fetch, and a remount drops the stale id', async () => {
+    const stale = 'retired-model';
+    const fetched = [
+      makeModelInfo('gpt-4o', 'GPT-4o'),
+      makeModelInfo('gpt-4o-mini'),
+      makeModelInfo('o1-preview'),
+      makeModelInfo('o3-mini'),
+      makeModelInfo('gpt-4.1'),
+      makeModelInfo('gpt-4.1-mini'),
+    ];
+    const persisted: CustomModelRecord[] = fetched.map((model) => ({
+      provider: 'mock-provider',
+      modelId: model.id,
+      displayName: model.id === 'gpt-4o' ? 'GPT-4o' : null,
+      contextWindow: 128000,
+      enabled: true,
+    }));
+    const listCustomModels = vi
+      .fn()
+      .mockResolvedValueOnce([
+        ...DEFAULT_MODELS,
+        {
+          provider: 'mock-provider',
+          modelId: stale,
+          displayName: null,
+          contextWindow: null,
+          enabled: true,
+        },
+      ])
+      .mockResolvedValue(persisted);
+    const client = createClient({
+      listCustomModels,
+      checkProviderModels: vi.fn().mockResolvedValue(makeDiff('mock-provider', fetched, fetched.slice(1), 1)),
+    });
+    renderSection(client);
+
+    await waitFor(() => {
+      expect(optionValues('role-route-select-coder')).toContain(`mock-provider::${stale}`);
+    });
+    expect(optionValues('role-route-select-coder')).not.toContain('mock-provider::o3-mini');
+
+    const mockRow = screen.getByTestId('provider-row-mock-provider');
+    fireEvent.click(within(mockRow).getByText('Fetch models'));
+
+    await waitFor(() => {
+      const values = optionValues('role-route-select-coder');
+      expect(values).not.toContain(`mock-provider::${stale}`);
+      for (const id of ['gpt-4o-mini', 'o1-preview', 'o3-mini', 'gpt-4.1', 'gpt-4.1-mini']) {
+        expect(values).toContain(`mock-provider::${id}`);
+      }
+    });
+
+    // What a remount reads is the catalog the daemon stored, with fetchedModels empty.
+    cleanup();
+    listCustomModels.mockResolvedValue(persisted);
+    renderSection(client);
+    await waitFor(() => {
+      const values = optionValues('role-route-select-coder');
+      expect(values).not.toContain(`mock-provider::${stale}`);
+      for (const id of ['gpt-4o', 'gpt-4o-mini', 'o1-preview', 'o3-mini', 'gpt-4.1', 'gpt-4.1-mini']) {
+        expect(values).toContain(`mock-provider::${id}`);
+      }
+    });
+    expect(client.checkProviderModels).toHaveBeenCalledTimes(1);
+  });
+
+  it('role dropdown lists the persisted catalog on mount when fetch is not called', async () => {
+    const catalog: CustomModelRecord[] = [
+      'gpt-4o',
+      'gpt-4o-mini',
+      'o1-preview',
+      'o3-mini',
+      'gpt-4.1',
+      'gpt-4.1-mini',
+    ].map((modelId) => ({
+      provider: 'mock-provider',
+      modelId,
+      displayName: null,
+      contextWindow: 128000,
+      enabled: true,
+    }));
+    const client = createClient({
+      listCustomModels: vi.fn().mockResolvedValue(catalog),
+      listRoleRoutings: vi.fn().mockResolvedValue([]),
+      checkProviderModels: vi.fn(),
+    });
+    renderSection(client);
+
+    await waitFor(() => {
+      const values = optionValues('role-route-select-coder');
+      for (const id of ['gpt-4o', 'gpt-4o-mini', 'o1-preview', 'o3-mini', 'gpt-4.1', 'gpt-4.1-mini']) {
+        expect(values).toContain(`mock-provider::${id}`);
+      }
+    });
+    expect(client.checkProviderModels).not.toHaveBeenCalled();
   });
 
   it('resets save button loading state on failure when adding a provider', async () => {

@@ -1,5 +1,14 @@
 # PROGRESS.md — Warsha Build Log
 
+## Run 2026-11-23 — Role dropdowns list the fetched provider catalog (D-CATALOG-1)
+- **Scope**: `swarm-catalog` worktree from `f0aba2c`. Local-only: no push, no merge, main untouched.
+- **Change**: `WarshaRpc::persist_discovered_catalog` (`crates/warshad/src/rpc/mod.rs`) runs after a successful `providers.check_models` (`crates/warshad/src/lib.rs`, probe branch and router branch). It stores the live discovery, not the append-only merged diff: new ids are inserted, an id still in the live list keeps its label, window, and enabled flag, and an id this provider no longer returns is deleted with `delete_custom_model`. Other providers are untouched. An empty discovery deletes nothing. The wire `updated_catalog` on the router path is the live list. Settings reloads `listCustomModels` after a non-empty fetch and drops that provider's stale ids first.
+- **Gates**:
+  - `cargo fmt --all -- --check`: exit 0.
+  - `cargo test -p warshad --lib -- providers_check_models`: 4 passed, 0 failed (320 filtered out), including `providers_check_models_persists_full_catalog_for_models_list` (second fetch leaves exactly alpha, beta, gamma).
+  - `apps/desktop`: `vitest run src/v3/pages/settings/sections/ModelsSection.test.tsx`: 14 passed, 0 failed. The fetch test remounts and asserts the stale id is gone.
+- **Status**: COMPLETE for this defect. Practical UI drive not run (task forbade the desktop e2e/screenshot suite).
+
 ## Run 2026-11-22 — Practical UI drive proof for R9 (GAP-H3 + MISS-1) (D-R9-DRIVE-1)
 - **Scope**: Practical end-to-end UI drive on `r-next/integration` for merged tip `db29346` (lane `5764fe8` GAP-H3 + lane `db29346` MISS-1), per permanent owner rule OD-PRACTICAL-REVIEW-1. Local-only: no push, no tag, no publish, main untouched.
 - **Drive implementation**:

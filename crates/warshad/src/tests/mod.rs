@@ -2798,6 +2798,169 @@ async fn providers_check_models_diffs_against_local_catalog() {
     assert_eq!(diff.new_models.len(), 1);
     assert_eq!(diff.new_models[0].id, "llama3.2:3b");
     assert_eq!(diff.updated_catalog.len(), 2);
+
+    // The discovery is durable: models.list answers the full catalog, not only the
+    // row that was registered before the check.
+    let listed = rpc
+        .list_custom_models(&owner_ext(), Some("ollama_test".to_string()))
+        .await
+        .expect("models.list succeeds");
+    let mut ids: Vec<&str> = listed.iter().map(|row| row.model_id.as_str()).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec!["llama3.2:3b", "qwen2.5-coder:7b"]);
+    let kept = listed
+        .iter()
+        .find(|row| row.model_id == "qwen2.5-coder:7b")
+        .expect("the pre-existing row is still there");
+    assert_eq!(kept.display_name.as_deref(), Some("Local Qwen"));
+}
+
+#[tokio::test]
+async fn providers_check_models_persists_full_catalog_for_models_list() {
+    let temp = crate::test_util::fresh_tempdir();
+    let (state, _store) = test_state(temp.path()).await;
+    let rpc = WarshaRpc::new(state.clone());
+
+    // A hand-registered id the first live list returns, so its label and enabled
+    // flag must survive. A second id the first list returns and the second does
+    // not, so the later fetch removes it. Another provider is never touched.
+    state
+        .settings
+        .save_custom_model(&warsha_store::StoredCustomModel {
+            provider: "ollama_test".to_string(),
+            model_id: "alpha".to_string(),
+            display_name: Some("Hand kept".to_string()),
+            context_window: Some(4_096),
+            enabled: false,
+        })
+        .await
+        .expect("save hand-registered model");
+    state
+        .settings
+        .save_custom_model(&warsha_store::StoredCustomModel {
+            provider: "ollama_test".to_string(),
+            model_id: "stale-by-hand".to_string(),
+            display_name: Some("Will go".to_string()),
+            context_window: None,
+            enabled: true,
+        })
+        .await
+        .expect("save stale hand-registered model");
+    state
+        .settings
+        .save_custom_model(&warsha_store::StoredCustomModel {
+            provider: "other_provider".to_string(),
+            model_id: "other-model".to_string(),
+            display_name: None,
+            context_window: None,
+            enabled: true,
+        })
+        .await
+        .expect("save other provider model");
+
+    let discovered = ["alpha", "beta", "gamma", "delta", "epsilon"]
+        .into_iter()
+        .map(|id| warsha_providers::ModelInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            provider: "ollama_test".to_string(),
+            context_window: 8_192,
+            max_output: 2_048,
+            pricing: warsha_core::ModelPricing {
+                input_per_million_cents: 0,
+                output_per_million_cents: 0,
+            },
+        })
+        .collect::<Vec<_>>();
+
+    {
+        let mut router = state.providers.write().await;
+        router.register_provider(Box::new(
+            warsha_providers::MockProvider::new("ollama_test").with_models(discovered),
+        ));
+    }
+
+    let diff = rpc
+        .check_provider_models(&owner_ext(), "ollama_test".to_string(), None, None, None)
+        .await
+        .expect("check_provider_models succeeds");
+    assert!(
+        diff.updated_catalog.len() > 3,
+        "the proving catalog must be larger than the few models already in use"
+    );
+
+    let listed = rpc
+        .list_custom_models(&owner_ext(), Some("ollama_test".to_string()))
+        .await
+        .expect("models.list succeeds");
+    let mut ids: Vec<&str> = listed.iter().map(|row| row.model_id.as_str()).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec!["alpha", "beta", "delta", "epsilon", "gamma"]);
+    let kept = listed
+        .iter()
+        .find(|row| row.model_id == "alpha")
+        .expect("the id the live list returned is still there");
+    assert_eq!(kept.display_name.as_deref(), Some("Hand kept"));
+    assert!(!kept.enabled);
+    assert_eq!(kept.context_window, Some(4_096));
+
+    // A later fetch whose live list is only alpha, beta, gamma drops the rest
+    // of this provider. The hand-registered row that is still listed keeps its
+    // label and enabled flag.
+    {
+        let mut router = state.providers.write().await;
+        router.register_provider(Box::new(
+            warsha_providers::MockProvider::new("ollama_test").with_models(
+                ["alpha", "beta", "gamma"]
+                    .into_iter()
+                    .map(|id| warsha_providers::ModelInfo {
+                        id: id.to_string(),
+                        name: id.to_string(),
+                        provider: "ollama_test".to_string(),
+                        context_window: 8_192,
+                        max_output: 2_048,
+                        pricing: warsha_core::ModelPricing {
+                            input_per_million_cents: 0,
+                            output_per_million_cents: 0,
+                        },
+                    })
+                    .collect(),
+            ),
+        ));
+    }
+    let second = rpc
+        .check_provider_models(&owner_ext(), "ollama_test".to_string(), None, None, None)
+        .await
+        .expect("the second check_provider_models succeeds");
+    let mut second_ids: Vec<&str> = second
+        .updated_catalog
+        .iter()
+        .map(|model| model.id.as_str())
+        .collect();
+    second_ids.sort_unstable();
+    assert_eq!(second_ids, vec!["alpha", "beta", "gamma"]);
+
+    let listed = rpc
+        .list_custom_models(&owner_ext(), Some("ollama_test".to_string()))
+        .await
+        .expect("models.list after the second fetch");
+    let mut ids: Vec<&str> = listed.iter().map(|row| row.model_id.as_str()).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec!["alpha", "beta", "gamma"]);
+    let kept = listed
+        .iter()
+        .find(|row| row.model_id == "alpha")
+        .expect("alpha is still registered");
+    assert_eq!(kept.display_name.as_deref(), Some("Hand kept"));
+    assert!(!kept.enabled);
+    assert_eq!(kept.context_window, Some(4_096));
+
+    let others = rpc
+        .list_custom_models(&owner_ext(), Some("other_provider".to_string()))
+        .await
+        .expect("models.list for the other provider");
+    assert_eq!(others.len(), 1);
+    assert_eq!(others[0].model_id, "other-model");
 }
 
 #[tokio::test]

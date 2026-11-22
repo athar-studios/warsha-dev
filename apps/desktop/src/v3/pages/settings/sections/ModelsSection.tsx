@@ -308,6 +308,17 @@ export function ModelsSection(): React.ReactElement {
         const diff = await client.checkProviderModels(providerName);
         setCatalogDiffs((prev) => ({ ...prev, [providerName]: diff }));
         setFetchedModels((prev) => ({ ...prev, [providerName]: diff.updated_catalog }));
+        // The daemon replaced this provider's custom models with the live catalog.
+        // Drop the ids it no longer returns before the next read lands, so a remount
+        // that only has `listCustomModels` cannot put a stale id back in the select.
+        if (diff.updated_catalog.length > 0) {
+          const live = new Set(diff.updated_catalog.map((model) => model.id));
+          setCustomModels((prev) =>
+            prev.filter((model) => model.provider !== providerName || live.has(model.modelId)),
+          );
+          const stored = await client.listCustomModels();
+          setCustomModels(stored);
+        }
         setStatusMessage(
           t('settings.providers.models_fetched', { count: diff.updated_catalog.length })
         );
