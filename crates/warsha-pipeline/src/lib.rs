@@ -3,6 +3,7 @@
 use crate::settings::{SettingsProvider, SettingsStore};
 use chrono::Utc;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::RwLock;
@@ -20,6 +21,10 @@ pub mod agent_sessions;
 mod agent_tools;
 mod agent_workflow;
 mod backend_kit;
+pub mod coding_backend;
+pub use crate::coding_backend::{
+    BackendError, CodingBackend, CodingResult, CodingTask, FileAction, Sandbox, TaskFile,
+};
 mod build_cache;
 mod command_policy;
 mod evals;
@@ -29,6 +34,8 @@ mod guardrails;
 mod handoff;
 mod llm_cache;
 pub mod mcp;
+pub mod mcp_approval;
+pub mod mcp_observer;
 pub mod mcp_permission;
 pub mod worktree;
 pub use crate::agent_sessions::{AgentSessionError, RunAgentSessions};
@@ -36,17 +43,32 @@ pub use crate::gate_evidence::{
     collect_gate_evidence, GateEvidence, GateEvidenceError, TestRun, GATE_EVIDENCE_CAPTURE_BYTES,
     GATE_EVIDENCE_TIMEOUT,
 };
+pub use crate::mcp_approval::{
+    canonical_json, ApprovalError, ArgumentSummarizer, Grant, KeysOnlySummarizer, McpApprovals,
+    PendingApproval, PendingApprovalView, ResolvedApproval, TakeOutcome, MAX_PENDING_PER_RUN,
+    MCP_ONCE_GRANT_TTL, PENDING_TTL,
+};
+pub use crate::mcp_observer::{McpCallEvent, McpCallObserver, McpCallPhase};
 pub use crate::mcp_permission::{
     AskEverything, McpPermissionSource, McpPermissionStore, StaticPermissions, MCP_AGENT_ROLE,
 };
 pub use crate::worktree::{
-    create_run_worktree, remove_run_worktree, worktree_path, RunWorktree, WorktreeError,
+    commit_run_worktree, create_run_worktree, remove_run_worktree, worktree_path, RunWorktree,
+    WorktreeError,
 };
+/// The Streamable HTTP transport's client seam and its pure SSE parser (R-EXT-4):
+/// the daemon implements [`McpHttpClient`] and injects it, and the pipeline keeps
+/// no HTTP client of its own.
+pub mod mcp_http;
 /// The MCP connection layer (PLAN.md M20), public as a module because
 /// [`McpTransport`] and [`McpServerConfig`] already name the M12 registry types
 /// at this crate's root: the two would collide in a flat re-export, and renaming
 /// either would make the caller guess which one it got.
 pub mod mcp_transport;
+pub use crate::mcp_http::{
+    McpHttpClient, McpHttpError, McpHttpReply, McpHttpRequest, SseDecoder, SseEvent, HTTP_ACCEPT,
+    HTTP_PROTOCOL_VERSION,
+};
 mod observability;
 mod orchestrator;
 mod post_launch;
@@ -60,6 +82,9 @@ mod run_integrity;
 mod run_modes;
 mod scale_standards;
 mod scout;
+/// The Scout's MCP registry client (R-EXT-3): the `RegistryHttp` seam the daemon
+/// implements, and the paged mapper from registry rows to `ScoutProposal`s.
+pub mod scout_registry;
 pub mod settings;
 mod skills;
 #[cfg(test)]
@@ -132,7 +157,7 @@ pub use crate::preferences::{
 };
 pub use crate::process_spawn::{
     split_command, InMemoryProcessManager, LivePreview, LivePreviewManager, ManagedProcess,
-    ProcessError, ProcessManager, ProcessStatus, ProcessSummary,
+    ProcessError, ProcessManager, ProcessStatus, ProcessSummary, RunLiveness,
 };
 pub use crate::provider_setup::{ConnectionTestResult, OneClickProvider, ProviderSetupWizard};
 pub use crate::router_quality::{
@@ -162,6 +187,37 @@ pub use crate::work_protection::{
     MAX_UNDO_ENTRIES,
 };
 
+/// The one event a run's end appends (R-EXT-2 A2).
+///
+/// The payload is the status and nothing else — no reason, no summary, no counts —
+/// so the event says *that* the run ended without carrying anything a run's own
+/// records do not already hold. The stage is the stage the run was at when it ended,
+/// and the role is `None`: an ending belongs to the run, not to one agent.
+///
+/// `status` is the ending the caller already committed with its CAS — `completed`,
+/// `failed` or `cancelled`, the three terminal statuses. The caller passes the literal
+/// because it is writing the status in the same branch it read it: a paused or running
+/// run has no ending here, and there is no fourth value this could invent.
+fn run_finished_event(
+    run_id: RunId,
+    stage: Stage,
+    status: &'static str,
+    device_id: Option<DeviceId>,
+) -> Event {
+    Event {
+        id: Ulid::new(),
+        run_id,
+        stage,
+        role: None,
+        kind: EventKind::RunFinished,
+        payload: serde_json::json!({ "status": status }),
+        cost_cents: None,
+        tokens: None,
+        created_at: Utc::now(),
+        device_id,
+    }
+}
+
 // Helper to get stage as string
 fn stage_to_string(stage: Stage) -> &'static str {
     match stage {
@@ -180,6 +236,31 @@ fn stage_to_string(stage: Stage) -> &'static str {
         Stage::LaunchDrafts => "launch_drafts",
         Stage::Feedback => "feedback",
     }
+}
+
+/// The Code-stage artifact a coding CLI's run leaves behind: the files it changed
+/// and the diff git reports, both read from the run's repository after the CLI
+/// exited. The stage records the change that exists, not one the CLI claims.
+fn code_stage_report(backend: &str, result: &CodingResult) -> String {
+    let mut report = format!("# Code\n\nThe coding backend `{backend}` ran this stage.\n");
+    report.push_str(&format!("Duration: {} ms\n", result.duration_ms));
+    if result.files_changed.is_empty() {
+        report.push_str("\nFiles changed: none\n");
+    } else {
+        report.push_str("\nFiles changed:\n");
+        for path in &result.files_changed {
+            report.push_str(&format!("- {path}\n"));
+        }
+    }
+    match result.diff.as_deref() {
+        Some(diff) if !diff.trim().is_empty() => {
+            report.push_str("\n```diff\n");
+            report.push_str(diff.trim_end_matches('\n'));
+            report.push_str("\n```\n");
+        }
+        _ => report.push_str("\nNo diff was captured.\n"),
+    }
+    report
 }
 
 /// Scrub the API key out of a provider failure before it is recorded or logged.
@@ -223,6 +304,16 @@ pub enum PipelineError {
         /// The run's budget.
         budget_cents: u64,
         /// What it has already spent.
+        spent_cents: u64,
+    },
+    #[error(
+        "Project budget exhausted: spent {spent_cents} of {budget_cents} cents; raise the \
+         budget before starting another run"
+    )]
+    ProjectBudgetExhausted {
+        /// The budget the project carries.
+        budget_cents: u64,
+        /// What the project has already spent against it.
         spent_cents: u64,
     },
     #[error("Serialization error: {0}")]
@@ -278,6 +369,18 @@ pub(crate) fn producing_stage_for_gate(gate: Stage) -> Option<Stage> {
     }
 }
 
+/// What one stage produced, before it is committed as the stage's artifact.
+struct StageCompletion {
+    /// The artifact body.
+    content: String,
+    /// What the stage cost; a coding CLI runs on the owner's own subscription.
+    cost_cents: u64,
+    /// Provider token usage; `None` when no provider answered.
+    tokens: Option<TokenUsage>,
+    /// The coding backend that ran the stage, when one did.
+    backend: Option<String>,
+}
+
 /// Pipeline engine that drives the stage machine
 pub struct PipelineEngine<S: SettingsProvider> {
     store: Arc<Store>,
@@ -286,6 +389,8 @@ pub struct PipelineEngine<S: SettingsProvider> {
     orchestrator: Orchestrator,
     /// Settings store for accessing active harness, enabled skills, and plugins
     settings: Arc<S>,
+    /// The coding CLI the Code stage runs through, when the owner selected one.
+    coding_backend: Option<Arc<dyn CodingBackend>>,
     /// Per-run synchronization controls for execution serialization and real cancel
     run_controls: Arc<tokio::sync::Mutex<HashMap<RunId, Arc<RunControl>>>>,
 }
@@ -301,8 +406,29 @@ impl<S: SettingsProvider> PipelineEngine<S> {
             providers,
             orchestrator: Orchestrator::new(OrchestratorConfig::default()),
             settings,
+            coding_backend: None,
             run_controls: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Run the Code stage through this coding backend instead of the routed provider.
+    ///
+    /// The selection is explicit: without a backend the Code stage keeps executing
+    /// as it did before, through the provider router. The wiring side (the daemon)
+    /// reads `WARSHA_CODING_BACKEND` and hands the resolved backend in.
+    pub fn with_coding_backend(mut self, backend: Arc<dyn CodingBackend>) -> Self {
+        self.coding_backend = Some(backend);
+        self
+    }
+
+    /// The coding backend the Code stage runs through, when the run selected one.
+    ///
+    /// The backend is injected through [`PipelineEngine::with_coding_backend`]; the
+    /// pipeline itself never reads the environment or names a backend. The backend
+    /// is used even when its CLI is not installed, so the stage can report the
+    /// absent CLI instead of quietly falling back to a provider.
+    fn selected_coding_backend(&self) -> Option<Arc<dyn CodingBackend>> {
+        self.coding_backend.clone()
     }
 
     /// Obtain or create the [`RunControl`] for `run_id`.
@@ -330,9 +456,43 @@ impl<S: SettingsProvider> PipelineEngine<S> {
         PipelineEngine::new(store, providers, Arc::new(SettingsStore::new()))
     }
 
-    /// Start a new run for a project
+    /// The budget a project already carries, read the way the daemon's
+    /// `budget.show` (`show_budget` in `crates/warshad/src/lib.rs`) reads it: the
+    /// newest run's budget and spend.
+    ///
+    /// Budget data is per-run (`runs.budget_cents` / `runs.spent_cents`); there is
+    /// no project or global budget row and no default budget in settings, and the
+    /// RPC layer calls the newest run's row "the project's budget". A project with
+    /// no runs yet carries no budget.
+    async fn project_budget_state(&self, project_id: ProjectId) -> Result<(Option<u64>, u64)> {
+        let runs = self.store.list_runs(project_id).await?;
+        Ok(match runs.first() {
+            Some(newest) => (newest.budget_cents, newest.spent_cents),
+            None => (None, 0),
+        })
+    }
+
+    /// Start a new run for a project.
+    ///
+    /// A project that has already spent its whole budget cannot start another run:
+    /// the refusal is the same fail-closed `spent >= budget` floor `resume_run`
+    /// applies, and it happens before the run row exists, so a refused start leaves
+    /// no orphan run behind. The new run inherits the budget the project carries so
+    /// the ceiling the owner set is not dropped on the next run; a project with no
+    /// budget stays unbudgeted, which is allowed.
     pub async fn start_run(&self, project_id: ProjectId, idea: &str) -> Result<Run> {
         let _project = self.store.get_project(project_id).await?;
+
+        let (project_budget_cents, project_spent_cents) =
+            self.project_budget_state(project_id).await?;
+        if let Some(budget_cents) = project_budget_cents {
+            if project_spent_cents >= budget_cents {
+                return Err(PipelineError::ProjectBudgetExhausted {
+                    budget_cents,
+                    spent_cents: project_spent_cents,
+                });
+            }
+        }
 
         let mut run = Run {
             id: RunId::new(),
@@ -343,7 +503,7 @@ impl<S: SettingsProvider> PipelineEngine<S> {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             status: RunStatus::Running,
-            budget_cents: None,
+            budget_cents: project_budget_cents,
             spent_cents: 0,
         };
 
@@ -623,60 +783,105 @@ impl<S: SettingsProvider> PipelineEngine<S> {
             format!("{}{}", skill_preamble, base_prompt)
         };
 
-        // Render the prompt with context
-        let prompt = self.render_prompt(&prompt_template, &context);
+        // Render the prompt with context, in the language of the run's project
+        // (the project row decides; "en" when it has no language).
+        let language = self.project_language(run.project_id).await;
+        let prompt = self.render_prompt(&prompt_template, &context, &language);
 
-        // Call the provider while watching the live cancellation channel.
-        let providers = {
-            let router = self.providers.read().await;
-            (*router).clone()
-        };
-        let request = ChatRequest {
-            model: "default".to_string(), // Will be resolved by router
-            messages: vec![ChatMessage {
-                role: MessageRole::System,
-                content: prompt,
-            }],
-            temperature: Some(0.7),
-            max_tokens: Some(4000),
-            stream: false,
-        };
-
+        // Cancellation is observed before any stage work: a coding CLI's own timeout
+        // bounds its run, but a cancelled run does not start it at all.
         let mut cancel_rx = ctrl.cancel_tx.subscribe();
         if *cancel_rx.borrow() {
             return Err(PipelineError::Other(
                 "Run cancelled before stage execution".to_string(),
             ));
         }
-        let dispatch_project_id = run.project_id.0.to_string();
-        let response = tokio::select! {
-            biased;
-            _ = cancel_rx.changed() => {
-                return Err(PipelineError::Other(
-                    "Run cancelled during stage execution".to_string(),
-                ));
+
+        // The Code stage runs through a selected coding CLI when one is selected;
+        // the artifact is the change the CLI actually made in the run's repository.
+        let cli_completion = match self
+            .code_stage_completion(run, stage, &prompt, &language)
+            .await
+        {
+            Ok(completion) => completion,
+            Err(error) => {
+                return Err(self
+                    .record_stage_failure(run, *version, ctrl, stage, role, error)
+                    .await);
             }
-            res = Self::dispatch_chat(&providers, role, &dispatch_project_id, request) => {
-                match res {
-                    Ok(response) => response,
-                    Err(error) => {
-                        return Err(self
-                            .record_stage_failure(run, *version, ctrl, stage, role, error)
-                            .await);
+        };
+
+        let completion = match cli_completion {
+            Some(completion) => completion,
+            None => {
+                // Call the provider while watching the live cancellation channel.
+                let providers = {
+                    let router = self.providers.read().await;
+                    (*router).clone()
+                };
+                let request = ChatRequest {
+                    model: "default".to_string(), // Will be resolved by router
+                    messages: vec![ChatMessage {
+                        role: MessageRole::System,
+                        content: prompt,
+                    }],
+                    temperature: Some(0.7),
+                    max_tokens: Some(4000),
+                    stream: false,
+                };
+
+                let dispatch_project_id = run.project_id.0.to_string();
+                let response = tokio::select! {
+                    biased;
+                    _ = cancel_rx.changed() => {
+                        return Err(PipelineError::Other(
+                            "Run cancelled during stage execution".to_string(),
+                        ));
                     }
+                    res = Self::dispatch_chat(&providers, role, &dispatch_project_id, request) => {
+                        match res {
+                            Ok(response) => response,
+                            Err(error) => {
+                                return Err(self
+                                    .record_stage_failure(run, *version, ctrl, stage, role, error)
+                                    .await);
+                            }
+                        }
+                    }
+                };
+
+                let content = response
+                    .choices
+                    .first()
+                    .map(|c| c.message.content.clone())
+                    .unwrap_or_default();
+                let cost_cents = providers.cost_of(&response.model, &response.usage)?;
+                StageCompletion {
+                    content,
+                    cost_cents,
+                    tokens: Some(response.usage),
+                    backend: None,
                 }
             }
         };
 
-        // Re-check cancellation and commit under state_lock via CAS before writing any artifact.
-        let (
-            artifact_name,
-            artifact_content,
+        let StageCompletion {
+            content: artifact_body,
             cost_cents,
             tokens,
-            budget_exceeded_info,
-            budget_warn_info,
-        ) = {
+            backend,
+        } = completion;
+
+        if let Some(worktree_path) = run.worktree_path.as_ref() {
+            let _ = commit_run_worktree(
+                &PathBuf::from(worktree_path),
+                &format!("chore(run-{}): CLI code stage", run.id.0),
+            )
+            .await;
+        }
+
+        // Re-check cancellation and commit under state_lock via CAS before writing any artifact.
+        let (artifact_name, artifact_content, budget_exceeded_info, budget_warn_info) = {
             let _state_guard = ctrl.state_lock.lock().await;
             if *ctrl.cancel_tx.borrow() {
                 return Err(PipelineError::Other(
@@ -690,16 +895,7 @@ impl<S: SettingsProvider> PipelineEngine<S> {
                 ));
             }
 
-            // Parse the response
-            let artifact_content = response
-                .choices
-                .first()
-                .map(|c| c.message.content.clone())
-                .unwrap_or_default();
-
-            // Calculate cost
-            let cost_cents = providers.cost_of(&response.model, &response.usage)?;
-            let tokens = Some(response.usage.clone());
+            let artifact_content = artifact_body;
 
             let artifact_name = stage_to_string(stage).to_lowercase();
             let prev_version = run
@@ -738,8 +934,6 @@ impl<S: SettingsProvider> PipelineEngine<S> {
             (
                 artifact_name,
                 artifact_content,
-                cost_cents,
-                tokens,
                 budget_exceeded_info,
                 budget_warn_info,
             )
@@ -750,13 +944,19 @@ impl<S: SettingsProvider> PipelineEngine<S> {
             .write_artifact(run.project_id, &artifact_name, &artifact_content)
             .await?;
 
+        let payload = match &backend {
+            Some(backend) => {
+                serde_json::json!({ "role": role, "stage": stage, "backend": backend })
+            }
+            None => serde_json::json!({ "role": role, "stage": stage }),
+        };
         let event = Event {
             id: Ulid::new(),
             run_id: run.id,
             stage,
             role: Some(role),
             kind: EventKind::AgentStep,
-            payload: serde_json::json!({ "role": role, "stage": stage }),
+            payload,
             cost_cents: Some(cost_cents),
             tokens,
             created_at: Utc::now(),
@@ -803,6 +1003,118 @@ impl<S: SettingsProvider> PipelineEngine<S> {
         }
 
         Ok(())
+    }
+
+    /// Run the Code stage through a coding CLI, and describe the change it made.
+    ///
+    /// `Ok(None)` means no backend was selected, so the caller keeps the routed
+    /// provider. A selected backend that is not installed, a project with no
+    /// attached repository and a failed CLI are errors the caller records on the
+    /// run — never a silent success and never a fallback that hides the selection.
+    /// The CLI's own run is bounded by the backend's `CODING_CLI_TIMEOUT`.
+    async fn code_stage_completion(
+        &self,
+        run: &Run,
+        stage: Stage,
+        prompt: &str,
+        language: &str,
+    ) -> Result<Option<StageCompletion>> {
+        if stage != Stage::Code {
+            return Ok(None);
+        }
+        let Some(backend) = self.selected_coding_backend() else {
+            return Ok(None);
+        };
+        let backend_name = backend.name().to_string();
+        if !backend.is_available() {
+            return Err(PipelineError::Other(format!(
+                "the selected coding backend `{backend_name}` is not installed"
+            )));
+        }
+
+        let project = self.store.get_project(run.project_id).await?;
+        let repo_path = project
+            .repo_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .ok_or_else(|| {
+                PipelineError::Other(format!(
+                    "the selected coding backend `{backend_name}` needs an attached repository; \
+                     project `{}` has none",
+                    project.name
+                ))
+            })?;
+
+        let timeout = self.get_coding_cli_timeout(run).await;
+
+        let task = CodingTask {
+            id: Ulid::new(),
+            run_id: run.id,
+            title: format!("{} — Code", project.name),
+            description: prompt.to_string(),
+            repo_path: PathBuf::from(repo_path),
+            worktree_path: run.worktree_path.as_ref().map(PathBuf::from),
+            branch_name: format!("warsha/run-{}", run.id.0),
+            base_branch: "HEAD".to_string(),
+            files: Vec::new(),
+            context: HashMap::from([
+                ("project".to_string(), project.name.clone()),
+                ("language".to_string(), language.to_string()),
+                ("run".to_string(), run.id.0.to_string()),
+                ("stage".to_string(), stage_to_string(stage).to_string()),
+                (
+                    "coding_cli_timeout_seconds".to_string(),
+                    timeout.to_string(),
+                ),
+            ]),
+        };
+        let sandbox_path = run
+            .worktree_path
+            .as_ref()
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                PipelineError::Other(format!("run `{}` has no assigned worktree", run.id.0))
+            })?;
+
+        let sandbox = Sandbox::new(sandbox_path);
+
+        let result = backend.execute(task, &sandbox).await.map_err(|error| {
+            PipelineError::Other(format!(
+                "the coding backend `{backend_name}` failed: {error}"
+            ))
+        })?;
+        if !result.success {
+            return Err(PipelineError::Other(format!(
+                "the coding backend `{backend_name}` reported failure: {}",
+                result.error.as_deref().unwrap_or("no detail")
+            )));
+        }
+
+        Ok(Some(StageCompletion {
+            content: code_stage_report(&backend_name, &result),
+            cost_cents: 0,
+            tokens: None,
+            backend: Some(backend_name),
+        }))
+    }
+
+    async fn get_coding_cli_timeout(&self, run: &Run) -> u64 {
+        let project = self.store.get_project(run.project_id).await.ok();
+        let harness = project
+            .as_ref()
+            .and_then(|p| p.harness_id.as_ref())
+            .and_then(|id| self.settings.get_harness(id).await.ok().flatten());
+
+        harness
+            .and_then(|h| {
+                serde_json::from_str::<HarnessDefinition>(&h.data_json)
+                    .ok()
+                    .map(|d| d.rules)
+            })
+            .and_then(|r| r.coding_cli_timeout_seconds)
+            .map(|t| t.min(4 * 3600))
+            .unwrap_or(30 * 60)
     }
 
     /// Take one stage/follow-up request to the provider that should answer it.
@@ -881,6 +1193,12 @@ impl<S: SettingsProvider> PipelineEngine<S> {
         }
 
         let is_unrouted = matches!(error, PipelineError::NoProviderRouted(_));
+        // A run that was already over is not transitioned again, so it gets no second
+        // ending (R-EXT-2 T6).
+        let was_terminal = matches!(
+            run.status,
+            RunStatus::Completed | RunStatus::Failed | RunStatus::Cancelled
+        );
         if is_unrouted {
             run.status = RunStatus::Paused;
         } else {
@@ -892,6 +1210,16 @@ impl<S: SettingsProvider> PipelineEngine<S> {
                 "the failed-run write for run {} did not land: {store_error}",
                 run.id.0
             );
+        } else if !is_unrouted && !was_terminal {
+            // The run's end, written in the same guard as the status that ends it: a
+            // lost CAS writes neither. A paused run is not over and says nothing.
+            let finished = run_finished_event(run.id, stage, "failed", None);
+            if let Err(store_error) = self.store.append_event(&finished).await {
+                warn!(
+                    "the run_finished event for run {} did not land: {store_error}",
+                    run.id.0
+                );
+            }
         }
 
         let action = if is_unrouted {
@@ -974,6 +1302,11 @@ impl<S: SettingsProvider> PipelineEngine<S> {
                     latest.status = RunStatus::Completed;
                     latest.updated_at = Utc::now();
                     self.store.update_run_cas(&latest, latest_v).await?;
+                    // One ending, inside the same guard as the status that ends the
+                    // run: a second advance finds `Completed` and writes none (T6).
+                    let finished =
+                        run_finished_event(run_id, latest.current_stage, "completed", None);
+                    self.store.append_event(&finished).await?;
                 }
                 return Ok(latest);
             }
@@ -1018,17 +1351,36 @@ impl<S: SettingsProvider> PipelineEngine<S> {
     /// so cancel is never lost), and appends an [`EventKind::Error`] event with
     /// `"action": "run_cancelled"`.
     pub async fn cancel_run(&self, run_id: RunId, reason: Option<String>) -> Result<Run> {
+        self.cancel_run_with_device(run_id, reason, None).await
+    }
+
+    /// Cancel a run, recording which authenticated device asked for it.
+    ///
+    /// The `device_id` lands on the run's `run_finished` event and nowhere else: a
+    /// system cancel (a failed worktree, an integrity sweep) passes `None`, and the
+    /// caller cannot name itself — the daemon hands over the device its session
+    /// authenticated.
+    pub async fn cancel_run_with_device(
+        &self,
+        run_id: RunId,
+        reason: Option<String>,
+        device_id: Option<DeviceId>,
+    ) -> Result<Run> {
         let ctrl = self.control_for(run_id).await;
         let _ = ctrl.cancel_tx.send(true);
 
         let _state_guard = ctrl.state_lock.lock().await;
         let mut attempts = 0;
-        let run = loop {
+        let (run, was_terminal) = loop {
             let (mut run, version) = self.store.get_run_versioned(run_id).await?;
+            let was_terminal = matches!(
+                run.status,
+                RunStatus::Completed | RunStatus::Failed | RunStatus::Cancelled
+            );
             run.status = RunStatus::Cancelled;
             run.updated_at = Utc::now();
             match self.store.update_run_cas(&run, version).await {
-                Ok(_) => break run,
+                Ok(_) => break (run, was_terminal),
                 Err(warsha_store::StoreError::VersionConflict { .. }) if attempts < 8 => {
                     attempts += 1;
                 }
@@ -1049,6 +1401,13 @@ impl<S: SettingsProvider> PipelineEngine<S> {
             device_id: None,
         };
         self.store.append_event(&event).await?;
+
+        // The run's end, once: a run that was already over has had its ending
+        // written by whoever ended it, and a repeated `runs.cancel` adds none (T6).
+        if !was_terminal {
+            let finished = run_finished_event(run_id, run.current_stage, "cancelled", device_id);
+            self.store.append_event(&finished).await?;
+        }
 
         info!("Run {} cancelled: {:?}", run_id.0, reason);
         Ok(run)
@@ -1429,8 +1788,32 @@ impl<S: SettingsProvider> PipelineEngine<S> {
         self.build_context_with_feedback(run, None)
     }
 
+    /// The language this run's prompts are rendered in: its project row's `language`.
+    ///
+    /// Read at render time, not cached on the engine, because a resumed run
+    /// (`resume_run` after a restart) rebuilds its state from the store and must
+    /// render exactly like the process that started it.
+    ///
+    /// This is presentation, not a correctness gate: a project row that cannot be
+    /// read, or one whose `language` is empty or blank, falls back to `"en"` rather
+    /// than failing the stage.
+    async fn project_language(&self, project_id: ProjectId) -> String {
+        const DEFAULT_LANGUAGE: &str = "en";
+        match self.store.get_project(project_id).await {
+            Ok(project) => {
+                let language = project.language.trim();
+                if language.is_empty() {
+                    DEFAULT_LANGUAGE.to_string()
+                } else {
+                    language.to_string()
+                }
+            }
+            Err(_) => DEFAULT_LANGUAGE.to_string(),
+        }
+    }
+
     /// Simple template rendering - replace {{key}} with values
-    fn render_prompt(&self, template: &str, context: &serde_json::Value) -> String {
+    fn render_prompt(&self, template: &str, context: &serde_json::Value, language: &str) -> String {
         let mut result = template.to_string();
 
         // Replace {{idea}} with the original idea
@@ -1505,13 +1888,10 @@ impl<S: SettingsProvider> PipelineEngine<S> {
             result = result.replace("{{code}}", code);
         }
 
-        // Replace {{language}} with project language
-        let _ = context
-            .get("idea")
-            .and_then(|v| v.get("stage"))
-            .and_then(|v| v.as_str());
-        // This is a simplification - in reality we'd get language from project
-        result = result.replace("{{language}}", "en");
+        // Replace {{language}} with the run project's language. The caller resolves
+        // this from the project row ([`PipelineEngine::project_language`]) and falls
+        // back to "en" when that row is missing or its language is blank.
+        result = result.replace("{{language}}", language);
 
         // Inject change-request feedback if present
         if let Some(feedback) = context
@@ -2177,6 +2557,100 @@ mod tests {
             assert_eq!(run.current_stage, Stage::GateB);
         }
 
+        /// P-E1a: a project that already spent its whole budget cannot start a run,
+        /// and the refusal leaves no run row behind (no orphan rows).
+        #[tokio::test]
+        async fn a_project_that_spent_its_budget_refuses_a_new_run() {
+            let store = temp_store().await;
+            let engine =
+                PipelineEngine::new(store.clone(), setup_providers_with_mock(), setup_settings());
+            let project = project();
+            store.create_project(&project).await.unwrap();
+            let mut first = engine
+                .start_run(project.id, "Build a todo app")
+                .await
+                .unwrap();
+            first.budget_cents = Some(100);
+            first.spent_cents = 100;
+            store.update_run(&first).await.unwrap();
+
+            let error = engine
+                .start_run(project.id, "Build a second app")
+                .await
+                .expect_err("an exhausted project budget started another run");
+
+            assert!(
+                matches!(
+                    &error,
+                    PipelineError::ProjectBudgetExhausted {
+                        budget_cents: 100,
+                        spent_cents: 100
+                    }
+                ),
+                "{error:?}"
+            );
+            let message = error.to_string();
+            assert!(
+                message.contains("spent 100 of 100 cents"),
+                "the refusal must name the spent and the budget: {message}"
+            );
+
+            let runs = store.list_runs(project.id).await.unwrap();
+            assert_eq!(runs.len(), 1, "the refused start created a run row");
+            assert_eq!(runs[0].id, first.id);
+        }
+
+        /// P-E1a: a project under its budget still starts, and the new run inherits
+        /// the budget the project carries instead of dropping it to `None`.
+        #[tokio::test]
+        async fn a_project_under_budget_starts_a_run_carrying_the_budget() {
+            let store = temp_store().await;
+            let engine =
+                PipelineEngine::new(store.clone(), setup_providers_with_mock(), setup_settings());
+            let project = project();
+            store.create_project(&project).await.unwrap();
+            let mut first = engine
+                .start_run(project.id, "Build a todo app")
+                .await
+                .unwrap();
+            first.budget_cents = Some(100);
+            first.spent_cents = 40;
+            store.update_run(&first).await.unwrap();
+
+            let second = engine
+                .start_run(project.id, "Build a second app")
+                .await
+                .expect("99 of 100 starts, 40 of 100 certainly does");
+
+            assert_eq!(second.budget_cents, Some(100));
+            assert_eq!(second.spent_cents, 0);
+            let stored = store.get_run(second.id).await.unwrap();
+            assert_eq!(stored.budget_cents, Some(100));
+        }
+
+        /// P-E1a: unbudgeted stays unbudgeted — the refusal only fires over a budget
+        /// that exists.
+        #[tokio::test]
+        async fn a_project_without_a_budget_starts_an_unbudgeted_run() {
+            let store = temp_store().await;
+            let engine =
+                PipelineEngine::new(store.clone(), setup_providers_with_mock(), setup_settings());
+            let project = project();
+            store.create_project(&project).await.unwrap();
+            let first = engine
+                .start_run(project.id, "Build a todo app")
+                .await
+                .unwrap();
+            assert_eq!(first.budget_cents, None);
+
+            let second = engine
+                .start_run(project.id, "Build a second app")
+                .await
+                .expect("no budget is not a ceiling on starting");
+
+            assert_eq!(second.budget_cents, None);
+        }
+
         #[tokio::test]
         async fn a_run_without_a_budget_advances() {
             let store = temp_store().await;
@@ -2196,6 +2670,628 @@ mod tests {
                 .await
                 .expect("no budget is not a ceiling");
             assert_eq!(run.current_stage, Stage::GateB);
+        }
+    }
+
+    /// ENGINE E1 slice: the prompt is rendered in the *project's* language.
+    ///
+    /// The renderer used to hardcode `"en"` for `{{language}}`, so an Arabic
+    /// project still received English prompts. These tests pin the rendered value
+    /// to the project row and pin the safe `"en"` fallback.
+    mod e1_language {
+        use super::*;
+        use crate::settings::StoredHarness;
+        use warsha_providers::{
+            ChatChoice, ChatResponse, ChatStreamChunk, HealthCheck, ModelInfo, ProviderError,
+        };
+
+        /// A provider that records the system prompt the pipeline actually sent.
+        ///
+        /// `pub(super)` so the `e1_discovery` module below records the prompt it
+        /// sends instead of restating this provider.
+        pub(super) struct RecordingProvider {
+            pub(super) captured: Arc<std::sync::Mutex<Option<String>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl ChatProvider for RecordingProvider {
+            fn id(&self) -> &str {
+                "recording"
+            }
+
+            fn kind(&self) -> ProviderKind {
+                ProviderKind::CustomOpenAICompatible
+            }
+
+            async fn list_models(&self) -> std::result::Result<Vec<ModelInfo>, ProviderError> {
+                Ok(vec![ModelInfo {
+                    id: "recording-model".to_string(),
+                    name: "Recording Model".to_string(),
+                    provider: "recording".to_string(),
+                    context_window: 8192,
+                    max_output: 4096,
+                    pricing: ModelPricing {
+                        input_per_million_cents: 0,
+                        output_per_million_cents: 0,
+                    },
+                }])
+            }
+
+            async fn health(&self) -> std::result::Result<HealthCheck, ProviderError> {
+                Ok(HealthCheck {
+                    healthy: true,
+                    latency_ms: Some(0),
+                    error: None,
+                })
+            }
+
+            async fn chat(
+                &self,
+                request: ChatRequest,
+            ) -> std::result::Result<ChatResponse, ProviderError> {
+                if let Some(message) = request.messages.first() {
+                    let mut guard = self
+                        .captured
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    *guard = Some(message.content.clone());
+                }
+                Ok(ChatResponse {
+                    id: "recording-response".to_string(),
+                    model: "recording-model".to_string(),
+                    choices: vec![ChatChoice {
+                        index: 0,
+                        message: ChatMessage {
+                            role: MessageRole::Assistant,
+                            content: "# Research Report\n\nRecorded content.".to_string(),
+                        },
+                        finish_reason: Some("stop".to_string()),
+                    }],
+                    usage: TokenUsage {
+                        input: 10,
+                        output: 5,
+                        total: 15,
+                    },
+                })
+            }
+
+            async fn chat_stream(
+                &self,
+                _request: ChatRequest,
+            ) -> std::result::Result<
+                Box<
+                    dyn futures::Stream<Item = std::result::Result<ChatStreamChunk, ProviderError>>
+                        + Send
+                        + Unpin,
+                >,
+                ProviderError,
+            > {
+                Err(ProviderError::Other(
+                    "streaming is not part of this test".to_string(),
+                ))
+            }
+
+            fn cost_of(
+                &self,
+                _model: &str,
+                _usage: &TokenUsage,
+            ) -> std::result::Result<u64, ProviderError> {
+                Ok(1)
+            }
+        }
+
+        /// A project whose language the test names, stored in `store`.
+        pub(super) async fn project_in(store: &Arc<Store>, language: &str) -> Project {
+            let project = Project {
+                id: ProjectId::new(),
+                name: "Language Project".to_string(),
+                description: "A project whose language decides how prompts render".to_string(),
+                language: language.to_string(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                repo_path: None,
+                repo_url: None,
+            };
+            store.create_project(&project).await.expect("a project");
+            project
+        }
+
+        /// Settings whose active harness puts `{{language}}` in the Researcher prompt,
+        /// the one stage a test reaches with two advances and one gate approval.
+        async fn settings_with_language_template(project_id: ProjectId) -> Arc<SettingsStore> {
+            let settings = SettingsStore::new();
+            let definition = HarnessDefinition {
+                id: "language-harness".to_string(),
+                version: "1.0.0".to_string(),
+                name: "Language Harness".to_string(),
+                description: "Renders the problem statement in the project's language".to_string(),
+                stages: vec![HarnessStage {
+                    id: "research".to_string(),
+                    role: Role::Researcher,
+                    name: "Research".to_string(),
+                    prompt_template: Some(
+                        "---\nrole: researcher\nstage: research\n---\n\n\
+                         Research the idea and answer in Language: `{{language}}`."
+                            .to_string(),
+                    ),
+                    gate: None,
+                    auto_advance: true,
+                }],
+                rules: HarnessRules {
+                    max_repair_iterations: 1,
+                    budget_cap_cents: None,
+                    allow_parallel_subagents: false,
+                    require_verification_receipt: false,
+                },
+                preset: false,
+                active: false,
+                created_at: Utc::now(),
+            };
+            settings
+                .save_harness(&StoredHarness {
+                    id: "language-harness".to_string(),
+                    version: "1.0.0".to_string(),
+                    name: "Language Harness".to_string(),
+                    description: "Renders prompts in the project's language".to_string(),
+                    data_json: serde_json::to_string(&definition).expect("a harness definition"),
+                    is_preset: false,
+                    created_at: 1_735_689_600,
+                })
+                .await
+                .expect("the harness is stored");
+            settings
+                .set_active_harness(&project_id.0.to_string(), "language-harness")
+                .await
+                .expect("the harness is active");
+            Arc::new(settings)
+        }
+
+        /// The system prompt the pipeline sent for the run's first executed stage.
+        ///
+        /// The run executes the Researcher stage, whose harness template carries
+        /// `{{language}}`, so the captured prompt shows what the project's language
+        /// resolved to.
+        async fn first_executed_prompt(store: &Arc<Store>, language: &str) -> String {
+            let project = project_in(store, language).await;
+
+            let captured = Arc::new(std::sync::Mutex::new(None::<String>));
+            let mut router = ProviderRouter::new();
+            router.register_provider(Box::new(RecordingProvider {
+                captured: captured.clone(),
+            }));
+            router.set_role_routing(RoleRouting {
+                role: Role::Researcher,
+                targets: vec![RoutingTarget {
+                    provider_id: "recording".to_string(),
+                    model_id: "recording-model".to_string(),
+                    weight: 100,
+                }],
+                fallback_enabled: false,
+                budget_cents_per_run: None,
+            });
+            let engine = PipelineEngine::new(
+                store.clone(),
+                Arc::new(RwLock::new(router)),
+                settings_with_language_template(project.id).await,
+            );
+            let run = engine
+                .start_run(project.id, "Build a todo app")
+                .await
+                .expect("a run starts");
+            let at_gate = engine
+                .advance_stage(run.id)
+                .await
+                .expect("advance to Gate A");
+            assert_eq!(at_gate.current_stage, Stage::GateA);
+            engine
+                .approve_gate(run.id, Stage::GateA, DeviceId::new())
+                .await
+                .expect("Gate A approves");
+            let executed = engine
+                .advance_stage(run.id)
+                .await
+                .expect("the research stage executes");
+            assert_eq!(executed.current_stage, Stage::Research);
+
+            let prompt = captured
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+                .expect("the provider received a prompt");
+            prompt
+        }
+
+        #[tokio::test]
+        async fn a_run_prompt_uses_the_project_language_not_english() {
+            let store = temp_store().await;
+            let prompt = first_executed_prompt(&store, "ar").await;
+
+            assert!(
+                prompt.contains("Language: `ar`"),
+                "the project's language never reached the template: {prompt}"
+            );
+            assert!(
+                !prompt.contains("Language: `en`"),
+                "the prompt still hardcoded English: {prompt}"
+            );
+            assert!(
+                !prompt.contains("{{language}}"),
+                "the placeholder was left unrendered: {prompt}"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_run_prompt_falls_back_to_english_when_the_project_language_is_missing() {
+            // A blank language row: no panic, English.
+            let store = temp_store().await;
+            let prompt = first_executed_prompt(&store, "").await;
+            assert!(
+                prompt.contains("Language: `en`"),
+                "a blank language did not fall back to English: {prompt}"
+            );
+
+            // A project row that is not there at all: same fallback, still no panic.
+            let engine = PipelineEngine::new(
+                store.clone(),
+                setup_providers_with_mock(),
+                settings_with_language_template(ProjectId::new()).await,
+            );
+            assert_eq!(
+                engine.project_language(ProjectId::new()).await,
+                "en",
+                "a missing project row must render English, not fail"
+            );
+        }
+    }
+
+    /// ENGINE E1 slice: the run's prompts come from the *harness's* stored data,
+    /// not from a canned map.
+    ///
+    /// What is real data today, pinned below:
+    ///
+    /// * the active harness per project (`settings.get_active_harness`), its stored
+    ///   definition (`settings.get_harness` → `data_json`) and the `prompt_template`
+    ///   its stage for the run's role carries — a harness template is the text the
+    ///   provider receives;
+    /// * the enabled skills (`settings.list_skills`), prepended to that text.
+    ///
+    /// What is still static, pinned as such rather than redesigned:
+    ///
+    /// * the walk is `Stage::all()`/`Stage::next()`, and the stage → role map is
+    ///   `prompts::role_for_stage`; the harness is consulted *by role* for the
+    ///   current stage, so its `stages` vector is a lookup table and not the run's
+    ///   itinerary, and its `gate`/`auto_advance`/`rules` fields never reach the walk;
+    /// * a harness with no template for the run's role falls back to the built-in
+    ///   prompt (`prompts::get_prompt`), and `"autonomous-factory"` is the harness
+    ///   the pipeline falls back to when no harness is active. That fallback is a
+    ///   built-in *template*, not a fabricated answer: the role still has to be
+    ///   routed, and an unrouted role fails with `NoProviderRouted` below.
+    mod e1_discovery {
+        use super::e1_language::{project_in, RecordingProvider};
+        use super::*;
+        use crate::prompts::get_prompt;
+        use crate::settings::StoredHarness;
+        use std::sync::Mutex;
+
+        /// Text only the harness template stored by these tests carries. The canned
+        /// Researcher prompt cannot produce it, so a prompt carrying it proves the
+        /// harness row was read.
+        const HARNESS_BRIEF: &str =
+            "HARNESS-DISCOVERY-BRIEF: research exactly what this harness asks for.";
+
+        /// Text only the built-in `prompts/researcher.md` carries.
+        const CANNED_BRIEF: &str = "You are the **Researcher Agent** for Warsha";
+
+        /// Which harness the run's project points at.
+        enum ActiveHarness {
+            /// No active harness: the pipeline's `"autonomous-factory"` fallback decides.
+            Unset,
+            /// The active harness id whose row this is.
+            Stored(StoredHarness),
+            /// An active harness id with no row behind it.
+            MissingRow(&'static str),
+        }
+
+        fn harness_stage(role: Role, template: Option<String>) -> HarnessStage {
+            HarnessStage {
+                id: format!("{:?}", role).to_lowercase(),
+                role,
+                name: format!("{:?}", role),
+                prompt_template: template,
+                gate: None,
+                auto_advance: true,
+            }
+        }
+
+        fn harness_row(id: &str, stages: Vec<HarnessStage>) -> StoredHarness {
+            let definition = HarnessDefinition {
+                id: id.to_string(),
+                version: "1.0.0".to_string(),
+                name: "Discovery Harness".to_string(),
+                description: "A harness whose own stages and templates the run must read"
+                    .to_string(),
+                stages,
+                rules: HarnessRules {
+                    max_repair_iterations: 1,
+                    budget_cap_cents: None,
+                    allow_parallel_subagents: false,
+                    require_verification_receipt: false,
+                },
+                preset: false,
+                active: false,
+                created_at: Utc::now(),
+            };
+            StoredHarness {
+                id: id.to_string(),
+                version: "1.0.0".to_string(),
+                name: "Discovery Harness".to_string(),
+                description: "A harness whose own stages and templates the run must read"
+                    .to_string(),
+                data_json: serde_json::to_string(&definition).expect("a harness definition"),
+                is_preset: false,
+                created_at: 1_735_689_600,
+            }
+        }
+
+        /// The harness's own Researcher template: the role marker real templates
+        /// carry, then text no built-in prompt has.
+        fn research_template() -> String {
+            format!("---\nrole: researcher\nstage: research\n---\n\n{HARNESS_BRIEF}")
+        }
+
+        /// Start a run whose project points at `active`, drive it to the first
+        /// executed stage (`Research`, with Gate A approved on the way), and answer
+        /// with the system prompt the provider received.
+        async fn prompt_at_research(store: &Arc<Store>, active: ActiveHarness) -> String {
+            let project = project_in(store, "en").await;
+            let settings = SettingsStore::new();
+            match active {
+                ActiveHarness::Unset => {}
+                ActiveHarness::Stored(harness) => {
+                    settings
+                        .save_harness(&harness)
+                        .await
+                        .expect("the harness is stored");
+                    settings
+                        .set_active_harness(&project.id.0.to_string(), &harness.id)
+                        .await
+                        .expect("the harness is active");
+                }
+                ActiveHarness::MissingRow(id) => {
+                    settings
+                        .set_active_harness(&project.id.0.to_string(), id)
+                        .await
+                        .expect("the harness id is active");
+                }
+            }
+
+            let captured = Arc::new(Mutex::new(None::<String>));
+            let mut router = ProviderRouter::new();
+            router.register_provider(Box::new(RecordingProvider {
+                captured: captured.clone(),
+            }));
+            router.set_role_routing(RoleRouting {
+                role: Role::Researcher,
+                targets: vec![RoutingTarget {
+                    provider_id: "recording".to_string(),
+                    model_id: "recording-model".to_string(),
+                    weight: 100,
+                }],
+                fallback_enabled: false,
+                budget_cents_per_run: None,
+            });
+            let engine = PipelineEngine::new(
+                store.clone(),
+                Arc::new(RwLock::new(router)),
+                Arc::new(settings),
+            );
+
+            let run = engine
+                .start_run(project.id, "Build a todo app")
+                .await
+                .expect("a run starts");
+            let at_gate = engine
+                .advance_stage(run.id)
+                .await
+                .expect("advance to Gate A");
+            assert_eq!(at_gate.current_stage, Stage::GateA);
+            engine
+                .approve_gate(run.id, Stage::GateA, DeviceId::new())
+                .await
+                .expect("Gate A approves");
+            let executed = engine
+                .advance_stage(run.id)
+                .await
+                .expect("the research stage executes");
+            assert_eq!(executed.current_stage, Stage::Research);
+
+            let prompt = captured
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
+            prompt.expect("the provider received a prompt")
+        }
+
+        /// P-E1b: the harness's `prompt_template` for the run's stage is the text
+        /// the provider receives — not the built-in role prompt.
+        ///
+        /// The discrimination is structural: `HARNESS_BRIEF` exists only in the
+        /// harness row this test stores and `CANNED_BRIEF` only in
+        /// `prompts/researcher.md`, so a canned-map answer cannot pass both
+        /// assertions.
+        #[tokio::test]
+        async fn a_harness_prompt_template_drives_discovery_instead_of_the_canned_map() {
+            let store = temp_store().await;
+            let harness = harness_row(
+                "discovery-harness",
+                vec![harness_stage(Role::Researcher, Some(research_template()))],
+            );
+            let prompt = prompt_at_research(&store, ActiveHarness::Stored(harness)).await;
+
+            assert!(
+                prompt.contains(HARNESS_BRIEF),
+                "the harness's own template never reached the provider: {prompt}"
+            );
+            assert!(
+                !prompt.contains(CANNED_BRIEF),
+                "the canned role prompt was used although the harness has a template: {prompt}"
+            );
+            // Without this, the negative assertion above could pass vacuously.
+            assert!(
+                get_prompt(Role::Researcher).contains(CANNED_BRIEF),
+                "the built-in Researcher prompt moved; {CANNED_BRIEF} is no longer in it"
+            );
+        }
+
+        /// P-E1b: the K3 provider-truth posture on the discovery path. A harness
+        /// whose Researcher stage nothing can serve — the harness names the role,
+        /// the routing has no route for it — fails the advance with the explicit
+        /// [`PipelineError::NoProviderRouted`]; the run pauses with a
+        /// `provider_required` event and no research artifact is fabricated, so the
+        /// harness template is never answered by a built-in stub.
+        #[tokio::test]
+        async fn an_unroutable_role_fails_closed_in_discovery_with_no_provider_routed() {
+            let store = temp_store().await;
+            let project = project_in(&store, "en").await;
+            let harness = harness_row(
+                "discovery-harness",
+                vec![harness_stage(Role::Researcher, Some(research_template()))],
+            );
+            let settings = SettingsStore::new();
+            settings
+                .save_harness(&harness)
+                .await
+                .expect("the harness is stored");
+            settings
+                .set_active_harness(&project.id.0.to_string(), &harness.id)
+                .await
+                .expect("the harness is active");
+            let engine = PipelineEngine::new(
+                store.clone(),
+                Arc::new(RwLock::new(ProviderRouter::new())),
+                Arc::new(settings),
+            );
+
+            let run = engine
+                .start_run(project.id, "Build a todo app")
+                .await
+                .expect("a run starts");
+            engine
+                .advance_stage(run.id)
+                .await
+                .expect("advance to Gate A");
+            engine
+                .approve_gate(run.id, Stage::GateA, DeviceId::new())
+                .await
+                .expect("Gate A approves");
+
+            let error = engine
+                .advance_stage(run.id)
+                .await
+                .expect_err("an unrouted role was answered anyway");
+            assert!(
+                matches!(error, PipelineError::NoProviderRouted(Role::Researcher)),
+                "the unrouted role must fail with the explicit error, got: {error:?}"
+            );
+
+            let stored = store.get_run(run.id).await.expect("the run is readable");
+            assert_eq!(
+                stored.status,
+                RunStatus::Paused,
+                "an unrouted role must pause the run, not leave it running"
+            );
+            assert!(
+                !stored.artifacts.contains_key("research"),
+                "an unrouted stage fabricated a research artifact"
+            );
+            let events = store.get_events(run.id).await.expect("the run's events");
+            let required = events
+                .iter()
+                .find(|event| event.payload["action"] == "provider_required")
+                .expect("no provider_required event was recorded");
+            assert_eq!(required.payload["role"], "researcher");
+        }
+
+        /// P-E1b boundary: the harness's `stages` vector is a lookup table keyed by
+        /// role, not the run's itinerary. A harness naming only a role this run
+        /// never resolves (`Role::QA`; the walk maps `ReviewQaSecurity` to
+        /// `Role::Reviewer`) leaves the run on the built-in prompt: the harness data
+        /// is real, but it neither adds nor skips a stage.
+        #[tokio::test]
+        async fn a_harness_stage_the_walk_never_uses_does_not_hijack_discovery() {
+            let store = temp_store().await;
+            let harness = harness_row(
+                "discovery-harness",
+                vec![harness_stage(
+                    Role::QA,
+                    Some("HARNESS-QA-ONLY: emit the verification receipt.".to_string()),
+                )],
+            );
+            let prompt = prompt_at_research(&store, ActiveHarness::Stored(harness)).await;
+
+            assert!(
+                prompt.contains(CANNED_BRIEF),
+                "the run left the built-in prompt although the harness has no Researcher \
+                 stage: {prompt}"
+            );
+            assert!(
+                !prompt.contains("HARNESS-QA-ONLY"),
+                "a harness stage for another role reached this stage's prompt: {prompt}"
+            );
+            assert_eq!(
+                crate::prompts::role_for_stage(Stage::Research),
+                Some(Role::Researcher),
+                "the stage this run executes is no longer mapped to Researcher"
+            );
+        }
+
+        /// P-E1b: the `"autonomous-factory"` fallback and the missing-data fallback
+        /// render the built-in role prompt, and that is distinguishable from the
+        /// harness path — which never renders `CANNED_BRIEF`.
+        #[tokio::test]
+        async fn the_autonomous_factory_fallback_renders_the_built_in_prompt_in_discovery() {
+            // (a) No active harness: the pipeline's `"autonomous-factory"` fallback
+            // decides, and that harness's Researcher stage carries no template.
+            let store = temp_store().await;
+            let prompt = prompt_at_research(&store, ActiveHarness::Unset).await;
+            assert!(
+                prompt.contains(CANNED_BRIEF),
+                "the fallback harness never rendered the built-in prompt: {prompt}"
+            );
+            assert!(
+                !prompt.contains(HARNESS_BRIEF),
+                "a harness template appeared with no harness active: {prompt}"
+            );
+
+            // (b) An active harness id with no row behind it: same built-in prompt,
+            // and the run still executes instead of failing.
+            let store = temp_store().await;
+            let prompt =
+                prompt_at_research(&store, ActiveHarness::MissingRow("no-such-harness")).await;
+            assert!(
+                prompt.contains(CANNED_BRIEF),
+                "a missing harness row did not fall back to the built-in prompt: {prompt}"
+            );
+
+            // (c) A row whose `data_json` does not parse: the stage lookup finds
+            // nothing and the run stays on the built-in prompt. The catalog keeps
+            // such a row visible as a stageless harness (`wave2::harness_definition`),
+            // so this is that documented degradation, not a role-resolution error.
+            let mut damaged = harness_row(
+                "discovery-harness",
+                vec![harness_stage(Role::Researcher, Some(research_template()))],
+            );
+            damaged.data_json = "{ not a harness definition".to_string();
+            let store = temp_store().await;
+            let prompt = prompt_at_research(&store, ActiveHarness::Stored(damaged)).await;
+            assert!(
+                prompt.contains(CANNED_BRIEF),
+                "an unreadable harness row did not fall back to the built-in prompt: {prompt}"
+            );
+            assert!(
+                !prompt.contains(HARNESS_BRIEF),
+                "a template was read out of an unreadable harness row: {prompt}"
+            );
         }
     }
 }

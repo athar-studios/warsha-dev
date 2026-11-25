@@ -1,0 +1,32 @@
+Binary file apps/desktop/e2e/screens.visual.spec.ts-snapshots/backend-kit-768x1024-ar-dark-desktop-linux.png matches
+Binary file apps/desktop/e2e/screens.visual.spec.ts-snapshots/budgets-390x844-en-dark-desktop-linux.png matches
+Binary file apps/desktop/e2e/screens.visual.spec.ts-snapshots/providers-768x1024-ar-light-desktop-linux.png matches
+Binary file apps/desktop/e2e/screens.visual.spec.ts-snapshots/roles-390x844-ar-light-desktop-linux.png matches
+Binary file apps/desktop/e2e/screens.visual.spec.ts-snapshots/simple-1024x768-ar-light-desktop-linux.png matches
+Binary file apps/desktop/e2e/states.spec.ts-snapshots/budgets-no-ceiling-390x844-en-dark-desktop-linux.png matches
+Binary file apps/desktop/e2e/states.spec.ts-snapshots/crash-reports-screen-loading-1440x900-ar-light-desktop-linux.png matches
+Binary file apps/desktop/e2e/states.spec.ts-snapshots/projects-empty-1440x900-ar-dark-desktop-win32.png matches
+Binary file apps/desktop/e2e/states.spec.ts-snapshots/projects-empty-1440x900-en-dark-desktop-linux.png matches
+Binary file apps/desktop/e2e/states.spec.ts-snapshots/projects-no-ceiling-320x568-ar-dark-desktop-linux.png matches
+Binary file apps/desktop/e2e/states.spec.ts-snapshots/roles-error-390x844-en-dark-desktop-linux.png matches
+Binary file apps/desktop/e2e/states.spec.ts-snapshots/simple-dense-390x844-ar-dark-desktop-linux.png matches
+Binary file apps/desktop/e2e/states.spec.ts-snapshots/simple-offline-1440x900-en-dark-desktop-linux.png matches
+Binary file apps/desktop/e2e/states.spec.ts-snapshots/store-reviews-error-320x568-ar-dark-desktop-linux.png matches
+Binary file apps/desktop/e2e/states.spec.ts-snapshots/store-reviews-screen-loading-320x568-ar-dark-desktop-linux.png matches
+Binary file apps/desktop/e2e/v3/bench.spec.ts-snapshots/bench-artifacts-1280x800-en-dark-desktop-linux.png matches
+Binary file apps/desktop/e2e/v3/bench.spec.ts-snapshots/bench-plan-390x844-ar-light-desktop-linux.png matches
+Binary file apps/desktop/e2e/v3/bench.spec.ts-snapshots/bench-preview-1280x800-en-dark-desktop-linux.png matches
+Binary file apps/desktop/e2e/v3/frame.spec.ts-snapshots/frame-ready-390x844-en-dark-desktop-linux.png matches
+Binary file apps/desktop/e2e/v3/home.spec.ts-snapshots/home-no-provider-390x844-en-dark-desktop-linux.png matches
+Binary file apps/desktop/e2e/v3/home.spec.ts-snapshots/home-ready-390x844-en-dark-desktop-linux.png matches
+Binary file apps/desktop/e2e/v3/project.spec.ts-snapshots/project-failed-1280x800-en-light-desktop-linux.png matches
+Binary file apps/desktop/e2e/v3/settings.spec.ts-snapshots/settings-general-error-1280x800-ar-light-desktop-linux.png matches
+Binary file apps/desktop/e2e/v3/settings.spec.ts-snapshots/settings-general-error-390x844-en-light-desktop-linux.png matches
+Binary file apps/desktop/e2e/v3/settings.spec.ts-snapshots/settings-general-ready-390x844-en-light-desktop-linux.png matches
+apps/desktop/src/screens/AdvancedMode.tsx:1767:                        // TODO(M20 wiring): the delivery checks run in CI and the daemon has no preflight RPC
+apps/desktop/src/screens/AdvancedMode.tsx:1776:                        // TODO(M20 wiring): the deploy RPC is not wired; the button reports intent only.
+apps/desktop/src/screens/ArtifactViewer.tsx:63: * TODO(M20 wiring): this legacy v2 screen still reads a fixture; the daemon now has a `runs.artifacts` RPC
+apps/desktop/src/screens/RunView.tsx:227:    // TODO(M20 wiring): legacy v2 screen; the daemon's `preview.start` RPC exists (crates/warshad/src/api.rs) and v3 supersedes 
+apps/desktop/src/screens/RunView.tsx:232:    // TODO(M20 wiring): legacy v2 screen; the daemon's `preview.stop` RPC exists (crates/warshad/src/api.rs) and v3 supersedes t
+apps/desktop/src/screens/RunView.tsx:237:    // TODO(M20 wiring): hand `elementMention(selector)` to the composer once RunView has one.
+apps/desktop/src/screens/SettingsScreen.tsx:60:  // TODO(M20 wiring): eco mode lives in `warsha-pipeline`'s `EcoMode`; the daemon has no settings RPC for

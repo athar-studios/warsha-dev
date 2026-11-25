@@ -285,6 +285,52 @@
   border-block-end: var(--w-border-width) solid var(--w-line);
 }
 
+/*
+ * Connections (R-EXT-1): a padded stack for the section's notes and banners, the full-width block one
+ * server's tools sit in under its row, and the plate the add form's fields live on. Every value is a
+ * token and every direction is logical, so the same rules hold in Arabic and English.
+ */
+.v3-settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--w-space-2);
+  padding-block: var(--w-space-2);
+  padding-inline: var(--w-space-4);
+  box-sizing: border-box;
+}
+
+.v3-settings-row-detail {
+  flex: 1 1 100%;
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--w-space-2);
+  padding-block-start: var(--w-space-2);
+  border-block-start: var(--w-border-width) solid var(--w-line);
+  box-sizing: border-box;
+}
+
+.v3-settings-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--w-space-2);
+  padding-block: var(--w-space-4);
+  padding-inline: var(--w-space-4);
+  border-block-start: var(--w-border-width) solid var(--w-line);
+  box-sizing: border-box;
+}
+
+.v3-settings-add-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--w-space-3);
+}
+
+.v3-settings-add-fields > * {
+  flex: 1 1 var(--w-space-10);
+  min-inline-size: 0;
+}
 
 /* A provider URL or model id: machine text that wraps inside the plate instead of widening it. */
 .v3-settings-uri {
@@ -305,43 +351,45 @@
  * holding 264px, the content stops holding a 300px floor, and a row's actions take a line of their own.
  * Together with `.w-field__input { min-width: 0 }` this keeps the models section and its URLs inside a
  * 390px phone in Arabic.
+ *
+ * `data-narrow` comes from `useNarrowViewport` — the same hook the Workbench uses — because a media
+ * query cannot read the breakpoint token and a literal width in a query is a length literal the
+ * design-system check forbids (R-UI-1 item 7).
  */
-@media (max-width: 767px) {
-  .v3-settings-root {
-    flex-direction: column;
-    gap: var(--w-space-5);
-    padding-inline: var(--w-space-3);
-  }
+.v3-settings-root[data-narrow='true'] {
+  flex-direction: column;
+  gap: var(--w-space-5);
+  padding-inline: var(--w-space-3);
+}
 
-  .v3-settings-nav {
-    flex: 0 0 auto;
-    inline-size: 100%;
-  }
+.v3-settings-root[data-narrow='true'] .v3-settings-nav {
+  flex: 0 0 auto;
+  inline-size: 100%;
+}
 
-  .v3-settings-content {
-    min-width: 0;
-    inline-size: 100%;
-  }
+.v3-settings-root[data-narrow='true'] .v3-settings-content {
+  min-inline-size: 0;
+  inline-size: 100%;
+}
 
-  .v3-settings-row {
-    padding-inline: var(--w-space-3);
-  }
+.v3-settings-root[data-narrow='true'] .v3-settings-row {
+  padding-inline: var(--w-space-3);
+}
 
-  .v3-settings-row-main {
-    flex-basis: 100%;
-  }
+.v3-settings-root[data-narrow='true'] .v3-settings-row-main {
+  flex-basis: 100%;
+}
 
-  .v3-settings-row-meta {
-    flex-wrap: wrap;
-  }
+.v3-settings-root[data-narrow='true'] .v3-settings-row-meta {
+  flex-wrap: wrap;
+}
 
-  .v3-settings-row-actions {
-    flex: 1 1 100%;
-    min-inline-size: 0;
-    flex-wrap: wrap;
-  }
+.v3-settings-root[data-narrow='true'] .v3-settings-row-actions {
+  flex: 1 1 100%;
+  min-inline-size: 0;
+  flex-wrap: wrap;
+}
 
-  .v3-settings-budget-field {
-    flex: 1 1 100%;
-  }
+.v3-settings-root[data-narrow='true'] .v3-settings-budget-field {
+  flex: 1 1 100%;
 }

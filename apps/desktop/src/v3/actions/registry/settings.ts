@@ -9,6 +9,10 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: 'settings.language.set', labelKey: 'settings.general.language', effect: 'state' },
   { id: 'settings.theme.set', labelKey: 'settings.general.theme', effect: 'state' },
   { id: 'settings.mode-default.set', labelKey: 'settings.general.mode', effect: 'state' },
+  // R-UI-3 D2-b: the sound-cue switch. `state` because it writes device storage — no RPC (W11).
+  { id: 'settings.sound-cues.set', labelKey: 'settings.general.sound', effect: 'state' },
+  // X9a: the WebMCP switch (R-EXT-5). `state` for the same reason: device storage, no daemon flag, no RPC.
+  { id: 'settings.webmcp.set', labelKey: 'settings.general.webmcp', effect: 'state' },
   {
     id: 'settings.budget-default.save',
     labelKey: 'settings.general.budget.save',
@@ -76,6 +80,58 @@ export const ACTIONS: readonly ActionDef[] = [
     labelKey: 'settings.common.confirm_revoke',
     effect: 'rpc',
     rpc: ['devices.revoke'],
+  },
+
+  // MCP permissions section — revoking a granted tool restores the fail-closed
+  // default through `mcp.permissions.set` (B3a, `crates/warshad/src/lib.rs:3398`).
+  {
+    id: 'settings.mcp.revoke',
+    labelKey: 'settings.mcp.revoke',
+    effect: 'rpc',
+    rpc: ['mcp.permissions.set'],
+  },
+
+  // Connections section (R-EXT-1). All three daemon methods already existed; the section adds the
+  // rows that drive them, and the disconnect pair is the open→confirm pattern a stop needs. The
+  // per-tool permission writes through `mcp.permissions.set` for the daemon's own agent role.
+  {
+    id: 'settings.connections.refresh',
+    labelKey: 'settings.connections.refresh',
+    effect: 'rpc',
+    rpc: ['mcp.list'],
+  },
+  {
+    id: 'settings.connections.add',
+    labelKey: 'settings.connections.add.save',
+    effect: 'rpc',
+    rpc: ['mcp.connect'],
+  },
+  {
+    id: 'settings.connections.disconnect.open',
+    labelKey: 'settings.connections.disconnect',
+    effect: 'state',
+  },
+  {
+    id: 'settings.connections.disconnect.confirm',
+    labelKey: 'settings.common.confirm_disconnect',
+    effect: 'rpc',
+    rpc: ['mcp.disconnect'],
+  },
+  {
+    id: 'settings.connections.tool.permission',
+    labelKey: 'settings.connections.tool.permission',
+    effect: 'rpc',
+    rpc: ['mcp.permissions.set'],
+  },
+  {
+    id: 'settings.connections.tools.toggle',
+    labelKey: 'settings.connections.tools.toggle',
+    effect: 'state',
+  },
+  {
+    id: 'settings.connections.transport.pick',
+    labelKey: 'settings.connections.add.title',
+    effect: 'state',
   },
 
   // About section

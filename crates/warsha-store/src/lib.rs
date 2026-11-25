@@ -4,19 +4,21 @@
 //! stores identifiers as their text/byte encodings described in
 //! `migrations/001_initial.sql`.
 //!
-//! The M20 settings-shaped rows (taste preferences, backend kits, run modes and
-//! phone pairings) live in the `persistence` module instead: one synchronous
-//! `rusqlite` connection in WAL mode, with its own idempotent migration. Both
-//! halves write the same SQLite file format; they differ in the API the caller
-//! wants, not in the database.
+//! The M20 settings-shaped rows (taste preferences, backend kits, run modes,
+//! phone pairings and the rest of the Wave 2 records) live in the `settings`
+//! module: [`SettingsRepo`], the same `sqlx` pool, and migration
+//! `006_settings.sql`. One file, one SQLite API, one native stack — the rules
+//! both halves used to need (WAL, a busy timeout, one migration owner) are the
+//! store's rules now.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::migrate::MigrateDatabase;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::broadcast;
 use tracing::info;
@@ -27,10 +29,10 @@ use warsha_core::{
     RunStatus, Stage, TokenUsage,
 };
 
-mod persistence;
+mod settings;
 
-pub use persistence::{
-    SqliteStore, StoredBackendKit, StoredCustomModel, StoredHarness, StoredIntegration,
+pub use settings::{
+    SettingsRepo, StoredBackendKit, StoredCustomModel, StoredHarness, StoredIntegration,
     StoredPairing, StoredPlugin, StoredPreference, StoredProvider, StoredRunMode, StoredSkill,
 };
 
@@ -82,10 +84,7 @@ pub enum StoreError {
     /// A stored column had an unexpected SQL type.
     #[error("unexpected column type for {0}")]
     UnexpectedType(&'static str),
-    /// Underlying SQLite failure from the synchronous [`SqliteStore`].
-    #[error("sqlite error: {0}")]
-    Sqlite(#[from] rusqlite::Error),
-    /// The path handed to [`SqliteStore::open`] is unusable.
+    /// The path handed to [`SettingsRepo::open`] is unusable.
     #[error("invalid database path: {0}")]
     InvalidPath(String),
     /// The database did not end up in WAL mode, so the store refused it.
@@ -215,10 +214,17 @@ impl Store {
         }
         // Foreign keys are enforced per connection; without this the
         // `ON DELETE CASCADE` clauses in the migrations never fire.
+        //
+        // WAL and the five-second busy timeout are the settings repository's
+        // promises too (`SettingsRepo::open`): one file, read by the daemon's
+        // settings calls and written by its run handlers, so a reader must not
+        // block the writer and a short lock must wait rather than fail the call.
         let options = SqliteConnectOptions::new()
             .filename(&db_path)
             .create_if_missing(true)
-            .foreign_keys(true);
+            .foreign_keys(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .busy_timeout(Duration::from_secs(5));
         let pool = SqlitePoolOptions::new().connect_with(options).await?;
         Self::run_migrations(&pool).await?;
         // The bus outlives every subscriber: the receiver here is deliberately
@@ -233,21 +239,18 @@ impl Store {
     }
 
     async fn run_migrations(pool: &SqlitePool) -> Result<()> {
-        let mut migrator = sqlx::migrate!("./migrations");
-        // Version 5 (`005_pairing_expiry.sql`) is the settings schema's migration:
-        // `pairing_devices`, the table it alters, is created and owned by
-        // `persistence::SqliteStore`, not by these migrations. Applying it here would
-        // fail on a fresh database (no table) and on a daemon database where the
-        // settings store already added the column (duplicate column), so this
-        // migrator deliberately leaves it to `SqliteStore::migrate`.
-        migrator
-            .migrations
-            .to_mut()
-            .retain(|migration| migration.version != 5);
-        migrator
+        // Every migration in `migrations/` is applied here, in version order.
+        // The pairing-expiry column used to be a separate step (005) that this
+        // migrator had to skip, because the table it altered was created by the
+        // synchronous settings store; 006 creates that table with the column in
+        // it, so there is one owner and nothing to skip.
+        migration_migrator()
             .run(pool)
             .await
             .map_err(|e| StoreError::Migration(e.to_string()))?;
+        let mut transaction = pool.begin().await?;
+        repair_settings_expiry(&mut transaction).await?;
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -293,6 +296,15 @@ impl Store {
     /// Borrow the underlying pool.
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    /// The settings repository over this store's pool.
+    ///
+    /// One pool per process, one file: the settings rows and the projects, runs
+    /// and events they configure are served by the same connections, so there is
+    /// no second connection story to keep in step.
+    pub fn settings(&self) -> SettingsRepo {
+        SettingsRepo::from_pool(self.pool.clone())
     }
 
     /// Path of the database file backing this store.
@@ -378,8 +390,9 @@ impl Store {
     pub async fn create_run(&self, run: &Run) -> Result<()> {
         sqlx::query(
             "INSERT INTO runs (id, project_id, current_stage, gate_states, artifacts, \
-             created_at, updated_at, status, budget_cents, spent_cents, version) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+             created_at, updated_at, status, budget_cents, spent_cents, version, \
+             worktree_path, worktree_branch) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
         )
         .bind(run.id.0.to_string())
         .bind(run.project_id.0.as_bytes().to_vec())
@@ -391,6 +404,8 @@ impl Store {
         .bind(serde_json::to_string(&run.status)?)
         .bind(run.budget_cents.map(|v| v as i64))
         .bind(run.spent_cents as i64)
+        .bind(&run.worktree_path)
+        .bind(&run.worktree_branch)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -406,7 +421,8 @@ impl Store {
     pub async fn get_run_versioned(&self, id: RunId) -> Result<(Run, u64)> {
         let row = sqlx::query(
             "SELECT id, project_id, current_stage, gate_states, artifacts, created_at, \
-             updated_at, status, budget_cents, spent_cents, version FROM runs WHERE id = ?",
+             updated_at, status, budget_cents, spent_cents, version, worktree_path, \
+             worktree_branch FROM runs WHERE id = ?",
         )
         .bind(id.0.to_string())
         .fetch_optional(&self.pool)
@@ -431,7 +447,8 @@ impl Store {
     pub async fn update_run(&self, run: &Run) -> Result<()> {
         let outcome = sqlx::query(
             "UPDATE runs SET current_stage = ?, gate_states = ?, artifacts = ?, updated_at = ?, \
-             status = ?, budget_cents = ?, spent_cents = ?, version = version + 1 WHERE id = ?",
+             status = ?, budget_cents = ?, spent_cents = ?, version = version + 1, \
+             worktree_path = ?, worktree_branch = ? WHERE id = ?",
         )
         .bind(serde_json::to_string(&run.current_stage)?)
         .bind(serde_json::to_string(&run.gate_states)?)
@@ -440,6 +457,8 @@ impl Store {
         .bind(serde_json::to_string(&run.status)?)
         .bind(run.budget_cents.map(|v| v as i64))
         .bind(run.spent_cents as i64)
+        .bind(&run.worktree_path)
+        .bind(&run.worktree_branch)
         .bind(run.id.0.to_string())
         .execute(&self.pool)
         .await?;
@@ -457,7 +476,8 @@ impl Store {
     pub async fn update_run_cas(&self, run: &Run, expected_version: u64) -> Result<u64> {
         let outcome = sqlx::query(
             "UPDATE runs SET current_stage = ?, gate_states = ?, artifacts = ?, updated_at = ?, \
-             status = ?, budget_cents = ?, spent_cents = ?, version = version + 1 \
+             status = ?, budget_cents = ?, spent_cents = ?, version = version + 1, \
+             worktree_path = ?, worktree_branch = ? \
              WHERE id = ? AND version = ?",
         )
         .bind(serde_json::to_string(&run.current_stage)?)
@@ -467,6 +487,8 @@ impl Store {
         .bind(serde_json::to_string(&run.status)?)
         .bind(run.budget_cents.map(|v| v as i64))
         .bind(run.spent_cents as i64)
+        .bind(&run.worktree_path)
+        .bind(&run.worktree_branch)
         .bind(run.id.0.to_string())
         .bind(expected_version as i64)
         .execute(&self.pool)
@@ -488,7 +510,8 @@ impl Store {
     pub async fn list_runs(&self, project_id: ProjectId) -> Result<Vec<Run>> {
         let rows = sqlx::query(
             "SELECT id, project_id, current_stage, gate_states, artifacts, created_at, \
-             updated_at, status, budget_cents, spent_cents, version FROM runs \
+             updated_at, status, budget_cents, spent_cents, version, worktree_path, \
+             worktree_branch FROM runs \
              WHERE project_id = ? ORDER BY created_at DESC",
         )
         .bind(project_id.0.as_bytes().to_vec())
@@ -501,7 +524,8 @@ impl Store {
     pub async fn list_all_runs(&self) -> Result<Vec<Run>> {
         let rows = sqlx::query(
             "SELECT id, project_id, current_stage, gate_states, artifacts, created_at, \
-             updated_at, status, budget_cents, spent_cents, version FROM runs \
+             updated_at, status, budget_cents, spent_cents, version, worktree_path, \
+             worktree_branch FROM runs \
              ORDER BY created_at DESC",
         )
         .fetch_all(&self.pool)
@@ -515,7 +539,8 @@ impl Store {
     pub async fn recover_interrupted_runs(&self) -> Result<Vec<Run>> {
         let rows = sqlx::query(
             "SELECT id, project_id, current_stage, gate_states, artifacts, created_at, \
-             updated_at, status, budget_cents, spent_cents, version FROM runs \
+             updated_at, status, budget_cents, spent_cents, version, worktree_path, \
+             worktree_branch FROM runs \
              WHERE status = '\"running\"'",
         )
         .fetch_all(&self.pool)
@@ -817,6 +842,52 @@ impl Store {
     }
 }
 
+// ---------------------------------------------------------------- migrations
+
+/// The migrations this binary ships, embedded at build time.
+///
+/// One place, so the store and its tests can never disagree about which
+/// versions exist.
+fn migration_migrator() -> sqlx::migrate::Migrator {
+    sqlx::migrate!("./migrations")
+}
+
+// ------------------------------------------------------------ settings schema
+
+/// Repair the one settings table shape `006_settings.sql` cannot migrate.
+///
+/// `CREATE TABLE IF NOT EXISTS` leaves an existing table alone, so a database a
+/// pre-audit-H1 daemon wrote keeps its four-column `pairing_devices`, and SQLite
+/// has no `ALTER TABLE … ADD COLUMN IF NOT EXISTS` to bring it forward inside
+/// the migration. This is that guarded step: while the column is missing it is
+/// added, and the rows the older daemon paired are grandfathered with the same
+/// 10-minute grace window 005 applied, so an owner upgrading can still use a
+/// phone that was paired under the old code and no secret outlives that window.
+///
+/// It is deliberately conditional on the column's absence: a pairing row with a
+/// `NULL` deadline written after the column existed means "revocation only", and
+/// a repair that ran unconditionally would silently give it one.
+async fn repair_settings_expiry(connection: &mut sqlx::SqliteConnection) -> Result<()> {
+    let has_expiry: Option<String> =
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('pairing_devices') WHERE name = ?")
+            .bind("expires_at")
+            .fetch_optional(&mut *connection)
+            .await?;
+    if has_expiry.is_none() {
+        sqlx::query("ALTER TABLE pairing_devices ADD COLUMN expires_at INTEGER")
+            .execute(&mut *connection)
+            .await?;
+        sqlx::query(
+            "UPDATE pairing_devices \
+                SET expires_at = CAST(strftime('%s', 'now') AS INTEGER) + 600 \
+              WHERE expires_at IS NULL",
+        )
+        .execute(&mut *connection)
+        .await?;
+    }
+    Ok(())
+}
+
 // --------------------------------------------------------------- row mapping
 
 fn column_text(row: &sqlx::sqlite::SqliteRow, column: &'static str) -> Result<String> {
@@ -908,6 +979,8 @@ fn run_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Run> {
         budget_cents: column_opt_int(row, "budget_cents")?.map(|v| v.unsigned_abs()),
         spent_cents: column_opt_int(row, "spent_cents")?
             .map_or(0, |v| u64::from_ne_bytes(i64::to_ne_bytes(v))),
+        worktree_path: column_opt_text(row, "worktree_path")?,
+        worktree_branch: column_opt_text(row, "worktree_branch")?,
     })
 }
 
@@ -1084,8 +1157,8 @@ mod tests {
                 &include_bytes!("../migrations/003_run_version.sql")[..],
             ),
             (
-                "005_pairing_expiry.sql",
-                &include_bytes!("../migrations/005_pairing_expiry.sql")[..],
+                "006_settings.sql",
+                &include_bytes!("../migrations/006_settings.sql")[..],
             ),
         ] {
             assert!(
@@ -1097,15 +1170,16 @@ mod tests {
     }
 
     /// Checksum-stability proxy: the compile-time embedded migrator must
-    /// expose exactly versions 1, 2, 3, 4 and 5, with no CR in any embedded SQL.
+    /// expose exactly versions 1, 2, 3, 4 and 6, with no CR in any embedded SQL.
     ///
-    /// 5 is embedded (its checksum is pinned) but not applied by this store: see
-    /// `settings_owned_migration_is_left_to_the_settings_schema`.
+    /// 5 is deliberately absent: the pairing-expiry column it added is part of
+    /// 006 now (P-E7), and no database can have recorded it, because the
+    /// migrator skipped it from the release that introduced it.
     #[test]
     fn embedded_migrator_versions_are_lf_only() {
-        let migrator = sqlx::migrate!("./migrations");
+        let migrator = migration_migrator();
         let versions: Vec<i64> = migrator.iter().map(|m| m.version).collect();
-        assert_eq!(versions, vec![1, 2, 3, 4, 5]);
+        assert_eq!(versions, vec![1, 2, 3, 4, 6]);
         for migration in migrator.iter() {
             assert!(
                 !migration.sql.contains('\r'),
@@ -1115,27 +1189,63 @@ mod tests {
         }
     }
 
-    /// The async store does not own `pairing_devices`: it applies 001–004 only, and
-    /// version 5 is the settings schema's (see `run_migrations`). A future change
-    /// that stops filtering would fail here instead of at a daemon start.
+    /// The async migrator owns the settings schema (006), and there is no
+    /// skipped version left: the ledger is exactly what the migrator runs. The
+    /// two tables that would collide are both present and distinct: `providers`
+    /// is 001's, `configured_providers` is 006's — the same-file trap
+    /// DECISIONS.md records.
     #[tokio::test]
-    async fn settings_owned_migration_is_left_to_the_settings_schema() {
+    async fn settings_schema_is_created_by_the_async_migrator() {
         let store = temp_store().await;
         let applied: Vec<i64> =
             sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
                 .fetch_all(store.pool())
                 .await
                 .expect("the migration ledger is readable");
-        assert_eq!(applied, vec![1, 2, 3, 4]);
-        let pairing_table: Option<String> =
-            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE name = 'pairing_devices'")
-                .fetch_optional(store.pool())
-                .await
-                .expect("the schema is readable");
+        assert_eq!(applied, vec![1, 2, 3, 4, 6]);
+
+        let tables: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master \
+             WHERE type = 'table' AND name IN ('pairing_devices', 'providers', 'configured_providers') \
+             ORDER BY name ASC",
+        )
+        .fetch_all(store.pool())
+        .await
+        .expect("the schema is readable");
         assert_eq!(
-            pairing_table, None,
-            "the async migrator created a table the settings schema owns"
+            tables,
+            vec![
+                "configured_providers".to_string(),
+                "pairing_devices".to_string(),
+                "providers".to_string(),
+            ],
+            "the settings tables and the async schema's `providers` share one file"
         );
+    }
+
+    /// [`Store::settings`] is the same pool, not a second connection story: a row
+    /// written through the repository is visible to a query on the store's own
+    /// pool, and the store's migrations created the table it writes to.
+    #[tokio::test]
+    async fn settings_write_through_the_stores_own_pool() {
+        let store = temp_store().await;
+        let settings = store.settings();
+        settings
+            .save_provider(&StoredProvider {
+                name: "open_router".to_string(),
+                kind: "open_router".to_string(),
+                api_base: None,
+                enabled: true,
+                created_at: 1_700_000_000,
+            })
+            .await
+            .expect("the settings write lands");
+
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM configured_providers")
+            .fetch_one(store.pool())
+            .await
+            .expect("the store pool reads the settings table");
+        assert_eq!(rows, 1);
     }
 
     #[tokio::test]

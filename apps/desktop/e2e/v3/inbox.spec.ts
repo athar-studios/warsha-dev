@@ -10,6 +10,30 @@ import {
 
 import { act, expectRpc, openV3, rpcCalls, auditViewportFit, describeViewportFit, viewportFitIsClean } from './support';
 
+/**
+ * `health` answering what `warshad` answers once its store carries the K2 run-version column.
+ *
+ * This is the daemon-true path to the run-ending controls (R-UI-2 D4): the screen reads one
+ * capability out of `health`, so a case that wants the controls turns them on by having the
+ * daemon say so — there is no `window` flag left to flip.
+ */
+const RUN_CONTROLS_HEALTH = {
+  result: {
+    status: 'ok',
+    version: '0.2.0',
+    capabilities: { daemon: true, providers: true, keychain: true, run_controls: true },
+  },
+};
+
+/** The same daemon with `run_controls: false`, for the cases that assert the controls are absent. */
+const NO_RUN_CONTROLS_HEALTH = {
+  result: {
+    status: 'ok',
+    version: '0.2.0',
+    capabilities: { daemon: true, providers: true, keychain: true, run_controls: false },
+  },
+};
+
 const LOCALES = ['ar', 'en'] as const;
 const THEMES = ['light', 'dark'] as const;
 const VIEWPORTS = [
@@ -61,11 +85,22 @@ test.describe('Inbox journeys', () => {
 
     await expect(page.locator('[data-testid="inbox-ready"]')).toBeVisible();
 
-    // proj-ui (run-code at 'code') does NOT match any pending gate;
-    // proj-store (run-gate-a at 'gate_a') matches gate_a only.
-    const rows = page.locator('[data-testid^="inbox-row-"]');
-    await expect(rows).toHaveCount(1);
-    await expect(rows.first()).toContainText('Warsha Store');
+    // Four pending rows in the table are four facts, not four requests. Only a run standing on a
+    // gate stage turns its pending row into an ask: run-gate-a (gate_a) and run-gate-c (gate_c)
+    // each own exactly one. The non-gate stages (code, research, review_qa_security) match none,
+    // however many gates `gates.list` reports, so run-code, run-research and run-review never
+    // appear — run-gate-c is the case a count-only assertion used to miss.
+    await expect(
+      page.locator('[data-testid="inbox-row-proj-store-run-gate-a-gate_a"]')
+    ).toContainText('Warsha Store');
+    await expect(page.locator('[data-testid="inbox-row-proj-ui-run-gate-c-gate_c"]')).toContainText(
+      'متجر ورشة للأثاث المكتبي'
+    );
+    await expect(page.locator('[data-testid^="inbox-row-"]')).toHaveCount(2);
+
+    for (const runId of ['run-code', 'run-research', 'run-review']) {
+      await expect(page.locator(`[data-testid*="${runId}"]`)).toHaveCount(0);
+    }
   });
 
   test('approves gate via inbox.gate.approve (gates.approve then runs.advance in that order)', async ({
@@ -157,13 +192,10 @@ test.describe('Inbox action ids', () => {
     await expect(page).toHaveURL(/#\/p\/proj-store$/);
   });
 
-  test('inbox.gate.changes.send sends requested changes when capability enabled', async ({
+  test('inbox.gate.changes.send sends requested changes when the daemon advertises run controls', async ({
     page,
   }) => {
-    await page.addInitScript(() => {
-      (window as unknown as Record<string, unknown>).__WARSHA_RUN_ENDING_ENABLED__ = true;
-    });
-    await openV3(page, '/inbox', { lang: 'en' });
+    await openV3(page, '/inbox', { lang: 'en', fixtures: { health: RUN_CONTROLS_HEALTH } });
     await act(page, 'inbox.decision.open');
     await page.locator('[data-testid="inbox-changes-textarea"] textarea').fill('Revise brief');
     await act(page, 'inbox.gate.changes.send');
@@ -174,11 +206,10 @@ test.describe('Inbox action ids', () => {
     });
   });
 
-  test('inbox.gate.reject.confirm rejects gate when capability enabled', async ({ page }) => {
-    await page.addInitScript(() => {
-      (window as unknown as Record<string, unknown>).__WARSHA_RUN_ENDING_ENABLED__ = true;
-    });
-    await openV3(page, '/inbox', { lang: 'en' });
+  test('inbox.gate.reject.confirm rejects gate when the daemon advertises run controls', async ({
+    page,
+  }) => {
+    await openV3(page, '/inbox', { lang: 'en', fixtures: { health: RUN_CONTROLS_HEALTH } });
     await act(page, 'inbox.decision.open');
     await page.locator('[data-testid="inbox-reject-reason"] textarea').fill('Rejected scope');
     await act(page, 'inbox.gate.reject.confirm');
@@ -187,6 +218,18 @@ test.describe('Inbox action ids', () => {
       stage: 'gate_a',
       reason: 'Rejected scope',
     });
+  });
+
+  test('hides the run-ending controls when the daemon answers run_controls: false', async ({
+    page,
+  }) => {
+    await openV3(page, '/inbox', { lang: 'en', fixtures: { health: NO_RUN_CONTROLS_HEALTH } });
+    await act(page, 'inbox.decision.open');
+
+    await expect(page.locator('[data-testid="inbox-decision-sheet"]')).toBeVisible();
+    await expect(page.locator('[data-action="inbox.gate.approve"]').first()).toBeVisible();
+    await expect(page.locator('[data-action="inbox.gate.changes.send"]')).toHaveCount(0);
+    await expect(page.locator('[data-action="inbox.gate.reject.confirm"]')).toHaveCount(0);
   });
 
   test('inbox.retry re-dials projects.list', async ({ page }) => {
@@ -198,6 +241,161 @@ test.describe('Inbox action ids', () => {
     await act(page, 'inbox.retry');
     const call = await expectRpc(page, 'projects.list');
     expect(call.method).toBe('projects.list');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MCP approvals and permissions (R-BRIDGE-B3b)
+// ---------------------------------------------------------------------------
+
+const MCP_APPROVAL_FIXTURE = {
+  id: 'mcp-approval-1',
+  run_id: 'run-gate-a',
+  server: 'github',
+  tool: 'create_issue',
+  role: 'agent',
+  summary: '{title: "Bug", body: [120 chars]}',
+  requested_at: '2026-10-05T07:05:00.000Z',
+} as const;
+
+/**
+ * A stub that remembers the one question it was asked.
+ *
+ * The reads answer from the closure, and `allow_once` empties it: that is what the daemon does
+ * (B3a resolves the pending entry when the owner answers), and it is the only way the case can
+ * assert the row *left* instead of a fixture that keeps re-serving the question.
+ */
+function mcpApprovalCase(): {
+  fixtures: {
+    'gates.list': { result: unknown[] };
+    'mcp.approvals.list': { result: () => unknown };
+    'mcp.approvals.allow_once': { result: (params: unknown) => unknown };
+  };
+} {
+  let pending: readonly unknown[] = [MCP_APPROVAL_FIXTURE];
+  return {
+    fixtures: {
+      // No waiting gate either: the MCP ask is the whole queue, so the end state is the empty
+      // state and it is reached only by answering the question.
+      'gates.list': { result: [] },
+      'mcp.approvals.list': { result: () => pending },
+      'mcp.approvals.allow_once': {
+        result: (params: unknown) => {
+          pending = [];
+          const id = (params as { id?: string } | undefined)?.id ?? '';
+          return {
+            id,
+            run_id: 'run-gate-a',
+            server: 'github',
+            tool: 'create_issue',
+            role: 'agent',
+            granted_by: 'dev-laptop',
+            expires_at: '2026-10-05T07:25:00.000Z',
+          };
+        },
+      },
+    },
+  };
+}
+
+test.describe('Inbox MCP approvals', () => {
+  test('renders a pending MCP ask and collects it through mcp.approvals.allow_once', async ({
+    page,
+  }) => {
+    const { fixtures } = mcpApprovalCase();
+    await openV3(page, '/inbox', { lang: 'en', mode: 'simple', fixtures });
+
+    const row = page.locator('[data-testid="inbox-row-mcp-approval-1"]');
+    await expect(row).toBeVisible();
+    await expect(row).toContainText('github');
+    await expect(row).toContainText('create_issue');
+    await expect(row).toContainText('Role: agent');
+    // The summary is shown under the literal label, never as the call's arguments.
+    await expect(row).toContainText('redacted preview');
+    await expect(page.locator('[data-testid="inbox-mcp-summary-mcp-approval-1"]')).toContainText(
+      'body: [120 chars]'
+    );
+
+    await act(page, 'inbox.mcp.allow-once');
+    await expectRpc(page, 'mcp.approvals.allow_once', { id: 'mcp-approval-1' });
+
+    // Answered questions leave the list because the daemon answered, not because the screen hid it.
+    await expect(page.locator('[data-testid="inbox-row-mcp-approval-1"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="inbox-empty"]')).toBeVisible();
+  });
+
+  test('MCP ask row is axe AA clean and keyboard complete in en light @a11y', async ({ page }) => {
+    const { fixtures } = mcpApprovalCase();
+    await openV3(page, '/inbox', { lang: 'en', theme: 'light', mode: 'simple', fixtures });
+
+    const axe = await runAxe(page);
+    expect(axe.violations, `axe found WCAG AA violations:\n${describeAxe(axe)}`).toEqual([]);
+
+    const seenActions = new Set<string>();
+    for (let i = 0; i < 20; i += 1) {
+      await page.keyboard.press('Tab');
+      const action = await page.evaluate(
+        () => document.activeElement?.getAttribute('data-action') ?? ''
+      );
+      if (action) seenActions.add(action);
+    }
+    expect(seenActions.has('inbox.mcp.allow-once')).toBe(true);
+    expect(seenActions.has('inbox.mcp.allow-always')).toBe(true);
+    expect(seenActions.has('inbox.mcp.deny')).toBe(true);
+
+    const focus = await auditFocusWalk(page);
+    expect(focusIsClean(focus), `focus walk issues:\n${describeFocus(focus)}`).toBe(true);
+  });
+});
+
+test.describe('Settings MCP permissions', () => {
+  test('revoking a stored permission writes the fail-closed default and changes the table', async ({
+    page,
+  }) => {
+    let permission: 'allow' | 'ask' = 'allow';
+    await openV3(page, '/settings/mcp', {
+      lang: 'en',
+      mode: 'advanced',
+      fixtures: {
+        'mcp.permissions.list': {
+          result: () => ({
+            rows: [{ server: 'github', tool: 'create_issue', role: 'agent', permission }],
+            agent_role: 'agent',
+            default_permission: 'ask',
+          }),
+        },
+        'mcp.permissions.set': {
+          result: (params: unknown) => {
+            const next = params as Record<string, string>;
+            permission = next['permission'] === 'allow' ? 'allow' : 'ask';
+            return {
+              server: next['server'],
+              tool: next['tool'],
+              role: next['role'],
+              permission: next['permission'],
+            };
+          },
+        },
+      },
+    });
+
+    const tableRow = page.locator(
+      '[data-testid="mcp-permission-row-github::create_issue::agent"]'
+    );
+    await expect(tableRow).toBeVisible();
+    await expect(tableRow).toContainText('Allowed');
+
+    await act(page, 'settings.mcp.revoke');
+    await expectRpc(page, 'mcp.permissions.set', {
+      server: 'github',
+      tool: 'create_issue',
+      role: 'agent',
+      permission: 'ask',
+    });
+
+    // The table changed: the pill now reads the fail-closed default, and nothing is left to revoke.
+    await expect(tableRow).toContainText('Asks first');
+    await expect(page.locator('[data-action="settings.mcp.revoke"]')).toHaveCount(0);
   });
 });
 

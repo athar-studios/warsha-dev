@@ -21,7 +21,7 @@ import type {
 // eslint-disable-next-line import/no-unresolved
 import { I18nProvider } from '@warsha/i18n/v3';
 import React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { CapabilitiesProvider } from '../../app/CapabilitiesContext';
 import { ClientProvider } from '../../app/ClientContext';
@@ -169,6 +169,18 @@ function createMockClient(overrides: Partial<WarshaClient> = {}): WarshaClient {
   } as unknown as WarshaClient;
 }
 
+/** The same mock client, with `health` advertising the run-ending controls the way `warshad` does. */
+function createRunEndingClient(overrides: Partial<Record<string, unknown>> = {}): WarshaClient {
+  return createMockClient({
+    health: vi.fn().mockResolvedValue({
+      status: 'ok',
+      version: '0.2.1',
+      capabilities: { runControls: true },
+    }),
+    ...overrides,
+  });
+}
+
 function renderWithProviders(ui: React.ReactElement, client?: WarshaClient, initialLocale: 'ar' | 'en' = 'ar') {
   const mockClient = client ?? createMockClient();
   return render(
@@ -185,10 +197,6 @@ function renderWithProviders(ui: React.ReactElement, client?: WarshaClient, init
 }
 
 describe('Advanced Workbench (U4)', () => {
-  beforeEach(() => {
-    delete (window as unknown as { __ENABLE_RESUME__?: boolean }).__ENABLE_RESUME__;
-  });
-
   it('BenchRail renders projects and runs and handles new project click', () => {
     const onNewProject = vi.fn();
     const onSelectRun = vi.fn();
@@ -341,7 +349,7 @@ describe('Advanced Workbench (U4)', () => {
     expect(onChange).toHaveBeenCalledWith('preview');
   });
 
-  it('BenchDecisionCard hides request-changes and reject by default (Amendment a)', () => {
+  it('BenchDecisionCard hides request-changes and reject unless the daemon advertises run controls', () => {
     renderWithProviders(
       <BenchDecisionCard
         question="هل نعتمد الفكرة؟"
@@ -354,10 +362,11 @@ describe('Advanced Workbench (U4)', () => {
     expect(approveBtn).toHaveAttribute('data-variant', 'primary');
     expect(screen.queryByTestId('bench-gate-changes-btn')).toBeNull();
     expect(screen.queryByTestId('bench-gate-reject-btn')).toBeNull();
+    expect(document.querySelector('[data-action="bench.gate.changes.send"]')).toBeNull();
+    expect(document.querySelector('[data-action="bench.gate.reject.confirm"]')).toBeNull();
   });
 
-  it('BenchDecisionCard shows request-changes and reject when capability flag is enabled', () => {
-    (window as unknown as { __ENABLE_RESUME__?: boolean }).__ENABLE_RESUME__ = true;
+  it('BenchDecisionCard shows request-changes and reject when the daemon advertises run controls', async () => {
     const onRequestChanges = vi.fn();
     const onReject = vi.fn();
 
@@ -368,8 +377,15 @@ describe('Advanced Workbench (U4)', () => {
         onApprove={vi.fn()}
         onRequestChanges={onRequestChanges}
         onReject={onReject}
-      />
+      />,
+      createRunEndingClient()
     );
+
+    // `health` is read asynchronously; the controls appear once the daemon's answer lands.
+    await waitFor(() => {
+      expect(document.querySelector('[data-action="bench.gate.changes.send"]')).not.toBeNull();
+      expect(document.querySelector('[data-action="bench.gate.reject.confirm"]')).not.toBeNull();
+    });
 
     fireEvent.click(screen.getByTestId('bench-gate-changes-btn'));
     const changesInput = screen.getByTestId('decision-changes-textarea').querySelector('textarea') as HTMLTextAreaElement;
@@ -750,10 +766,39 @@ describe('Advanced Workbench (U4)', () => {
       expect(screen.getByTestId('bench-container')).toBeInTheDocument();
     });
 
-    const main = container.querySelector('main');
-    expect(main?.getAttribute('data-ready')).toBe('true');
+    await waitFor(() => {
+      expect(container.querySelector('main')?.getAttribute('data-ready')).toBe('true');
+    });
     expect(screen.getByTestId('bench-stage-strip')).toBeInTheDocument();
     expect(screen.getByTestId('bench-tabs')).toBeInTheDocument();
+  });
+
+  it('proves approve-mode for run A sends A id and never B id', async () => {
+    const client = createMockClient({
+      getRun: vi.fn((id: string) => Promise.resolve({ ...SAMPLE_RUN, id: id as RunId })),
+    });
+
+    const { unmount } = render(<V3App client={client} initialRoute="/p/proj-1/r/run-a/assistant" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('bench-assistant-mode-agent-btn')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('bench-assistant-mode-agent-btn'));
+    expect(client.approveAgentMode).toHaveBeenCalledWith('run-a');
+    expect(client.approveAgentMode).not.toHaveBeenCalledWith('run-b');
+
+    unmount();
+
+    render(<V3App client={client} initialRoute="/p/proj-1/r/run-b/assistant" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('bench-assistant-mode-agent-btn')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('bench-assistant-mode-agent-btn'));
+    expect(client.approveAgentMode).toHaveBeenLastCalledWith('run-b');
+    expect(client.approveAgentMode).not.toHaveBeenLastCalledWith('run-a');
   });
 
   it('BenchPage displays error banner when getRun fails', async () => {
@@ -822,6 +867,7 @@ describe('Advanced Workbench (U4)', () => {
       <CapabilitiesProvider initialCapabilities={{
         daemon: true,
         provider: true,
+        runControls: false,
         devices: true,
         integrations: true,
         plugins: true,
@@ -909,5 +955,136 @@ describe('Advanced Workbench (U4)', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'إعادة المحاولة' }));
     expect(onReload).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * R-EXT-2: the Terminal tab renders the agent's MCP tool calls and the run's end from
+ * the events themselves — the server and tool as LTR tokens, the phase in the catalog,
+ * and an approval-pending call pointing at the Inbox.
+ */
+describe('TerminalTab — agent MCP call lines and the run\'s end (R-EXT-2)', () => {
+  const events: WarshaEvent[] = [
+    {
+      id: 'evt-mcp-1',
+      runId: 'run-1' as RunId,
+      stage: 'code',
+      role: null,
+      kind: 'tool_call',
+      payload: {
+        action: 'mcp_call',
+        phase: 'requested',
+        server: 'files',
+        tool: 'read_file',
+        role: 'agent',
+      },
+      costCents: null,
+      createdAt: '2026-10-05T07:16:00.000Z',
+      deviceId: null,
+    },
+    {
+      id: 'evt-mcp-2',
+      runId: 'run-1' as RunId,
+      stage: 'code',
+      role: null,
+      kind: 'tool_call',
+      payload: {
+        action: 'mcp_call',
+        phase: 'approval_required',
+        server: 'files',
+        tool: 'read_file',
+        role: 'agent',
+        question_id: 'mcp-approval-1',
+        // A tool argument is never in the payload; this one is only here to prove the
+        // tab renders nothing it does not decode.
+        path: 'SECRET-ARG',
+      },
+      costCents: null,
+      createdAt: '2026-10-05T07:16:30.000Z',
+      deviceId: null,
+    },
+    {
+      id: 'evt-mcp-3',
+      runId: 'run-1' as RunId,
+      stage: 'code',
+      role: null,
+      kind: 'tool_call',
+      payload: {
+        action: 'mcp_call',
+        phase: 'succeeded',
+        server: 'files',
+        tool: 'read_file',
+        role: 'agent',
+      },
+      costCents: null,
+      createdAt: '2026-10-05T07:17:00.000Z',
+      deviceId: null,
+    },
+    {
+      id: 'evt-finish',
+      runId: 'run-1' as RunId,
+      stage: 'feedback',
+      role: null,
+      kind: 'run_finished',
+      payload: { status: 'completed' },
+      costCents: null,
+      createdAt: '2026-10-05T07:18:00.000Z',
+      deviceId: null,
+    },
+  ];
+
+  it('renders one line per phase, in event order, with LTR server and tool tokens', () => {
+    renderWithProviders(<TerminalTab events={events} />, undefined, 'en');
+
+    const items = screen.getAllByTestId('bench-terminal-mcp-call');
+    expect(items.map((item) => item.getAttribute('data-phase'))).toEqual([
+      'requested',
+      'approval_required',
+      'succeeded',
+    ]);
+    expect(items[0].textContent).toContain('files');
+    expect(items[0].textContent).toContain('read_file');
+    expect(items[0].textContent).toContain('requested');
+
+    const tokens = items[0].querySelectorAll('[dir="ltr"]');
+    expect(Array.from(tokens).map((token) => token.textContent)).toEqual(['files', 'read_file']);
+
+    // Only the asking phase points at the Inbox.
+    expect(screen.getAllByTestId('bench-terminal-mcp-answer-inbox')).toHaveLength(1);
+    expect(items[1].textContent).toContain('needs your approval');
+    expect(items[1].textContent).toContain('Answer it in the Inbox');
+  });
+
+  it('renders the run end as one status line and never the call\'s arguments', () => {
+    renderWithProviders(<TerminalTab events={events} />, undefined, 'en');
+
+    const finished = screen.getByTestId('bench-terminal-run-finished');
+    expect(finished).toHaveTextContent('Run finished: completed');
+    expect(finished).toHaveAttribute('data-status', 'completed');
+    expect(document.body.textContent).not.toContain('SECRET-ARG');
+  });
+
+  it('says the ending in Arabic too, and keeps the transcript empty when only calls exist', () => {
+    renderWithProviders(<TerminalTab events={[...events.slice(0, 1), events[3]]} />, undefined, 'ar');
+
+    expect(screen.getByTestId('bench-terminal-run-finished')).toHaveTextContent(
+      'انتهى التشغيل: مكتمل'
+    );
+    expect(screen.getByTestId('bench-terminal-mcp-calls')).toBeInTheDocument();
+    // A panel with calls but no transcript lines is not an empty panel.
+    expect(screen.queryByTestId('bench-terminal-empty')).toBeNull();
+  });
+
+  it('renders a failed run end and an unknown status as no ending at all', () => {
+    const failed: WarshaEvent = { ...events[3], payload: { status: 'failed' } };
+    renderWithProviders(
+      <TerminalTab events={[failed, { ...events[3], id: 'evt-unknown', payload: { status: 'skipped' } }]} />,
+      undefined,
+      'en'
+    );
+    expect(screen.getByTestId('bench-terminal-run-finished')).toHaveTextContent(
+      'Run finished: failed'
+    );
+    expect(screen.getAllByTestId('bench-terminal-run-finished')).toHaveLength(1);
   });
 });

@@ -17,6 +17,30 @@ import {
 
 import { act, expectRpc, openV3, auditViewportFit, describeViewportFit, viewportFitIsClean } from './support';
 
+/**
+ * `health` answering what `warshad` answers once its store carries the K2 run-version column.
+ *
+ * This is the daemon-true path to the run-ending controls (R-UI-2 D4): the screen reads one
+ * capability out of `health`, so a case that wants the controls turns them on by having the
+ * daemon say so — there is no `window` flag left to flip.
+ */
+const RUN_CONTROLS_HEALTH = {
+  result: {
+    status: 'ok',
+    version: '0.2.0',
+    capabilities: { daemon: true, providers: true, keychain: true, run_controls: true },
+  },
+};
+
+/** The same daemon with `run_controls: false`, for the cases that assert the controls are absent. */
+const NO_RUN_CONTROLS_HEALTH = {
+  result: {
+    status: 'ok',
+    version: '0.2.0',
+    capabilities: { daemon: true, providers: true, keychain: true, run_controls: false },
+  },
+};
+
 const BENCH_URL = '/p/proj-ui/r/run-code/overview';
 const GATE_WAITING_URL = '/p/proj-store/r/run-gate-a/overview';
 
@@ -120,22 +144,59 @@ test.describe('Workbench (U4) — Journeys & Amendments', () => {
 
     // Owner clicks Agent mode -> approves via agent.approve_mode
     await act(page, 'bench.assistant.mode.agent');
-    await expectRpc(page, 'agent.approve_mode');
+    await expectRpc(page, 'agent.approve_mode', { run_id: 'run-code' });
 
     // Owner switches back to Plan mode -> agent.plan_mode
     await act(page, 'bench.assistant.mode.plan');
-    await expectRpc(page, 'agent.plan_mode');
+    await expectRpc(page, 'agent.plan_mode', { run_id: 'run-code' });
 
-    // Owner sends real turn -> agent.turn and renders real daemon response
+    // Owner sends real turn -> agent.turn_run and renders real daemon response
     await page
       .getByTestId('bench-assistant-input')
       .locator('textarea')
       .fill('ما هي خطة التنفيذ؟');
     await act(page, 'bench.assistant.send');
-    await expectRpc(page, 'agent.turn', { input: 'ما هي خطة التنفيذ؟' });
+    await expectRpc(page, 'agent.turn_run', { run_id: 'run-code', input: 'ما هي خطة التنفيذ؟' });
     await expect(
       page.getByText('تم تجهيز الخطة، وهي بانتظار موافقتك للمتابعة.')
     ).toBeVisible();
+  });
+
+  test('EvidenceCard collects evidence through harness stub', async ({ page }) => {
+    // run-gate-c is the one fixture at Gate C, so the card is collectable there and nowhere else.
+    await openV3(page, '/p/proj-ui/r/run-gate-c/changes', { mode: 'advanced' });
+
+    await expect(page.getByTestId('bench-evidence-card')).toBeVisible();
+    await expect(page.getByTestId('bench-evidence-not-collected')).toBeVisible();
+
+    // The command field is a TextField: its test id sits on the wrapper, the input inside it.
+    await page.getByTestId('bench-evidence-command-input').locator('input').fill('pnpm test');
+    await act(page, 'bench.evidence.collect');
+
+    await expectRpc(page, 'gates.evidence', {
+      run_id: 'run-gate-c',
+      program: 'pnpm',
+      args: ['test'],
+    });
+
+    await expect(page.getByTestId('bench-evidence-collected')).toBeVisible();
+    await expect(page.getByTestId('bench-evidence-passing')).toBeVisible();
+  });
+
+  test('EvidenceCard file row opens the Files tab for the changed path', async ({ page }) => {
+    await openV3(page, '/p/proj-ui/r/run-gate-c/changes', { mode: 'advanced' });
+
+    await page.getByTestId('bench-evidence-command-input').locator('input').fill('pnpm test');
+    await act(page, 'bench.evidence.collect');
+    await expect(page.getByTestId('bench-evidence-collected')).toBeVisible();
+
+    // The harness `gates.evidence` result names two changed files, so the card lists one row per
+    // path; each row carries the action id and navigates to the Files tab of this run.
+    const fileRows = page.getByTestId('bench-evidence-file');
+    await expect(fileRows).toHaveCount(2);
+    await act(page, 'bench.evidence.file.open');
+
+    await expect(page).toHaveURL(/#\/p\/proj-ui\/r\/run-gate-c\/files/);
   });
 });
 
@@ -191,13 +252,13 @@ test.describe('Workbench (U4) — Action ID contracts', () => {
     await expectRpc(page, 'runs.advance', { run_id: 'run-gate-a' });
   });
 
-  test('action: bench.gate.changes.send calls gates.changes when capability is enabled', async ({
+  test('action: bench.gate.changes.send calls gates.changes when the daemon advertises run controls', async ({
     page,
   }) => {
-    await page.addInitScript(() => {
-      (window as unknown as { __ENABLE_RESUME__?: boolean }).__ENABLE_RESUME__ = true;
+    await openV3(page, GATE_WAITING_URL, {
+      mode: 'advanced',
+      fixtures: { health: RUN_CONTROLS_HEALTH },
     });
-    await openV3(page, GATE_WAITING_URL, { mode: 'advanced' });
     await act(page, 'bench.gate.changes.send');
     await page
       .getByTestId('decision-changes-textarea')
@@ -211,13 +272,13 @@ test.describe('Workbench (U4) — Action ID contracts', () => {
     });
   });
 
-  test('action: bench.gate.reject.confirm calls gates.reject when capability is enabled', async ({
+  test('action: bench.gate.reject.confirm calls gates.reject when the daemon advertises run controls', async ({
     page,
   }) => {
-    await page.addInitScript(() => {
-      (window as unknown as { __ENABLE_RESUME__?: boolean }).__ENABLE_RESUME__ = true;
+    await openV3(page, GATE_WAITING_URL, {
+      mode: 'advanced',
+      fixtures: { health: RUN_CONTROLS_HEALTH },
     });
-    await openV3(page, GATE_WAITING_URL, { mode: 'advanced' });
     await act(page, 'bench.gate.reject.confirm');
     await page
       .getByTestId('decision-reject-reason-input')
@@ -229,6 +290,19 @@ test.describe('Workbench (U4) — Action ID contracts', () => {
       stage: 'gate_a',
       reason: 'خارج النطاق',
     });
+  });
+
+  test('hides the run-ending controls when the daemon answers run_controls: false', async ({
+    page,
+  }) => {
+    await openV3(page, GATE_WAITING_URL, {
+      mode: 'advanced',
+      fixtures: { health: NO_RUN_CONTROLS_HEALTH },
+    });
+
+    await expect(page.locator('[data-action="bench.gate.approve"]')).toBeVisible();
+    await expect(page.locator('[data-action="bench.gate.changes.send"]')).toHaveCount(0);
+    await expect(page.locator('[data-action="bench.gate.reject.confirm"]')).toHaveCount(0);
   });
 
   test('action: bench.files.expand expands directory via files.tree', async ({ page }) => {
@@ -315,26 +389,26 @@ test.describe('Workbench (U4) — Action ID contracts', () => {
     await expectRpc(page, 'roles.set');
   });
 
-  test('action: bench.assistant.send calls agent.turn', async ({ page }) => {
+  test('action: bench.assistant.send calls agent.turn_run', async ({ page }) => {
     await openV3(page, '/p/proj-ui/r/run-code/assistant', { mode: 'advanced' });
     await page
       .getByTestId('bench-assistant-input')
       .locator('textarea')
       .fill('مرحبا');
     await act(page, 'bench.assistant.send');
-    await expectRpc(page, 'agent.turn', { input: 'مرحبا' });
+    await expectRpc(page, 'agent.turn_run', { run_id: 'run-code', input: 'مرحبا' });
   });
 
   test('action: bench.assistant.mode.plan calls agent.plan_mode', async ({ page }) => {
     await openV3(page, '/p/proj-ui/r/run-code/assistant', { mode: 'advanced' });
     await act(page, 'bench.assistant.mode.plan');
-    await expectRpc(page, 'agent.plan_mode');
+    await expectRpc(page, 'agent.plan_mode', { run_id: 'run-code' });
   });
 
   test('action: bench.assistant.mode.agent calls agent.approve_mode', async ({ page }) => {
     await openV3(page, '/p/proj-ui/r/run-code/assistant', { mode: 'advanced' });
     await act(page, 'bench.assistant.mode.agent');
-    await expectRpc(page, 'agent.approve_mode');
+    await expectRpc(page, 'agent.approve_mode', { run_id: 'run-code' });
   });
 
   test('action: bench.budget.save calls budget.set', async ({ page }) => {

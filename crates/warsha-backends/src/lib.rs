@@ -1,107 +1,11 @@
 //! Warsha Backends — Coding backends: builtin agent, OpenHands, Claude Code, Codex CLI, Gemini CLI, Cursor CLI
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
-use thiserror::Error;
-use ulid::Ulid;
-use warsha_core::*;
+pub use warsha_pipeline::coding_backend::{
+    BackendError, CodingBackend, CodingResult, CodingTask, FileAction, Result, Sandbox, TaskFile,
+};
 use which::which;
-
-#[derive(Error, Debug)]
-pub enum BackendError {
-    #[error("Backend not found: {0}")]
-    NotFound(String),
-    #[error("Backend not installed: {0}")]
-    NotInstalled(String),
-    #[error("Execution failed: {0}")]
-    ExecutionFailed(String),
-    #[error("Timeout: {0}")]
-    Timeout(String),
-    #[error("Sandbox error: {0}")]
-    Sandbox(String),
-    #[error("Other: {0}")]
-    Other(String),
-}
-
-pub type Result<T> = std::result::Result<T, BackendError>;
-
-/// Task for a coding backend
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CodingTask {
-    pub id: Ulid,
-    pub run_id: RunId,
-    pub title: String,
-    pub description: String,
-    pub repo_path: PathBuf,
-    pub branch_name: String,
-    pub base_branch: String,
-    pub files: Vec<TaskFile>,
-    pub context: HashMap<String, String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskFile {
-    pub path: String,
-    pub content: String,
-    pub action: FileAction,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FileAction {
-    Create,
-    Modify,
-    Delete,
-}
-
-/// Result of a coding task
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CodingResult {
-    pub task_id: Ulid,
-    pub success: bool,
-    pub diff: Option<String>,
-    pub files_changed: Vec<String>,
-    pub usage: Option<TokenUsage>,
-    pub error: Option<String>,
-    pub duration_ms: u64,
-}
-
-/// Trait for coding backends
-#[async_trait]
-pub trait CodingBackend: Send + Sync {
-    fn name(&self) -> &str;
-    fn is_available(&self) -> bool;
-    async fn execute(&self, task: CodingTask, sandbox: &Sandbox) -> Result<CodingResult>;
-}
-
-/// Sandbox for code execution
-pub struct Sandbox {
-    pub work_dir: PathBuf,
-    pub allow_network: bool,
-    pub env: HashMap<String, String>,
-}
-
-impl Sandbox {
-    pub fn new(work_dir: PathBuf) -> Self {
-        Self {
-            work_dir,
-            allow_network: true,
-            env: HashMap::new(),
-        }
-    }
-
-    pub fn with_network(mut self, allow: bool) -> Self {
-        self.allow_network = allow;
-        self
-    }
-
-    pub fn with_env(mut self, key: String, value: String) -> Self {
-        self.env.insert(key, value);
-        self
-    }
-}
 
 /// Built-in test backend (minimal implementation for testing)
 pub struct BuiltinBackend;
@@ -139,7 +43,7 @@ pub struct CliBackend {
 }
 
 /// The wall-clock bound a coding CLI gets before the backend gives up.
-pub const CODING_CLI_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+pub const DEFAULT_CODING_CLI_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 impl CliBackend {
     pub fn new(name: &str, command: &str, args: Vec<String>) -> Self {
@@ -212,13 +116,17 @@ impl CodingBackend for CliBackend {
             cmd.env(k, v);
         }
 
-        let output = tokio::time::timeout(CODING_CLI_TIMEOUT, cmd.output())
+        let timeout = task
+            .context
+            .get("coding_cli_timeout_seconds")
+            .and_then(|s| s.parse().ok())
+            .map(std::time::Duration::from_secs)
+            .unwrap_or(DEFAULT_CODING_CLI_TIMEOUT);
+
+        let output = tokio::time::timeout(timeout, cmd.output())
             .await
             .map_err(|_| {
-                BackendError::Timeout(format!(
-                    "{} did not finish within {CODING_CLI_TIMEOUT:?}",
-                    self.name
-                ))
+                BackendError::Timeout(format!("{} did not finish within {timeout:?}", self.name))
             })?
             .map_err(|e| BackendError::ExecutionFailed(e.to_string()))?;
 
@@ -337,7 +245,8 @@ impl BackendFactory {
         Box::new(CliBackend::new("openhands", "openhands", vec![]))
     }
 
-    pub fn all_available() -> Vec<Box<dyn CodingBackend>> {
+    /// Every backend the factory can build, in inventory order.
+    pub fn all() -> Vec<Box<dyn CodingBackend>> {
         vec![
             Self::builtin(),
             Self::claude_code(),
@@ -347,15 +256,53 @@ impl BackendFactory {
             Self::opencode(),
             Self::openhands(),
         ]
-        .into_iter()
-        .filter(|b| b.is_available())
-        .collect()
+    }
+
+    /// The backend a selection names, or `None` when no backend carries that name.
+    ///
+    /// The backend is returned even when it is not installed: the caller that
+    /// selected it has to report an absent CLI instead of silently falling back to
+    /// another way of running the stage.
+    pub fn named(name: &str) -> Option<Box<dyn CodingBackend>> {
+        let name = name.trim();
+        if name.is_empty() {
+            return None;
+        }
+        Self::all()
+            .into_iter()
+            .find(|backend| backend.name() == name)
+    }
+
+    /// The backend [`CODING_BACKEND_ENV`] names, when the variable is set.
+    ///
+    /// Unset — the default — leaves the Code stage on the routed provider. The
+    /// selection is a wiring-side concern: the pipeline receives the resolved
+    /// backend through its constructor and never reads the environment itself.
+    pub fn from_env() -> Option<Box<dyn CodingBackend>> {
+        let name = std::env::var(CODING_BACKEND_ENV).ok()?;
+        Self::named(&name)
+    }
+
+    pub fn all_available() -> Vec<Box<dyn CodingBackend>> {
+        Self::all()
+            .into_iter()
+            .filter(|b| b.is_available())
+            .collect()
     }
 }
+
+/// The environment variable that names the coding CLI the Code stage runs through.
+///
+/// Unset — the default — leaves the Code stage on the routed provider. A name is
+/// one [`BackendFactory`] knows, e.g. `claude-code` or `codex-cli`.
+pub const CODING_BACKEND_ENV: &str = "WARSHA_CODING_BACKEND";
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use ulid::Ulid;
+    use warsha_core::RunId;
 
     #[tokio::test]
     async fn test_builtin_backend() {
@@ -384,6 +331,40 @@ mod tests {
     fn test_cli_backend_check() {
         let backend = CliBackend::new("test", "nonexistent-command-xyz", vec![]);
         assert!(!backend.is_available());
+    }
+
+    #[test]
+    fn the_inventory_names_every_backend_and_availability_filters_it() {
+        let names: Vec<String> = BackendFactory::all()
+            .iter()
+            .map(|backend| backend.name().to_string())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "builtin",
+                "claude-code",
+                "codex-cli",
+                "gemini-cli",
+                "cursor-cli",
+                "opencode",
+                "openhands",
+            ]
+        );
+        assert!(
+            BackendFactory::all_available()
+                .iter()
+                .any(|backend| backend.name() == "builtin"),
+            "the always-available builtin backend is not in the available inventory"
+        );
+    }
+
+    #[test]
+    fn a_named_backend_is_returned_even_when_its_cli_is_absent() {
+        let backend = BackendFactory::named("claude-code").expect("the inventory names it");
+        assert_eq!(backend.name(), "claude-code");
+        assert!(BackendFactory::named("no-such-backend").is_none());
+        assert!(BackendFactory::named("  ").is_none());
     }
 
     /// ENGINE E4: the coding CLI really receives the task, and the result is the
@@ -517,6 +498,277 @@ mod tests {
                 .expect_err("the CLI is missing");
 
             assert!(matches!(error, BackendError::NotInstalled(_)), "{error:?}");
+        }
+    }
+
+    /// ENGINE E4: the Code stage executes through a selected coding CLI, and the
+    /// artifact it records is the change the CLI actually made.
+    mod e4_coding_cli {
+        use super::*;
+        use chrono::Utc;
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+        use warsha_core::{EventKind, Project, ProjectId, Role, Run, RunStatus, Stage};
+        use warsha_pipeline::settings::{SettingsProvider, SettingsStore};
+        use warsha_pipeline::{PipelineEngine, PipelineError};
+        use warsha_providers::{MockProvider, ProviderRouter};
+        use warsha_store::Store;
+
+        /// Serialises the tests that read or write [`crate::CODING_BACKEND_ENV`].
+        static ENV_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+        /// Puts the coding-backend variable back the way the test found it.
+        struct EnvRestore {
+            previous: Option<String>,
+        }
+
+        impl EnvRestore {
+            fn set(value: &str) -> Self {
+                let previous = std::env::var(crate::CODING_BACKEND_ENV).ok();
+                std::env::set_var(crate::CODING_BACKEND_ENV, value);
+                Self { previous }
+            }
+
+            fn remove() -> Self {
+                let previous = std::env::var(crate::CODING_BACKEND_ENV).ok();
+                std::env::remove_var(crate::CODING_BACKEND_ENV);
+                Self { previous }
+            }
+        }
+
+        impl Drop for EnvRestore {
+            fn drop(&mut self) {
+                match &self.previous {
+                    Some(value) => std::env::set_var(crate::CODING_BACKEND_ENV, value),
+                    None => std::env::remove_var(crate::CODING_BACKEND_ENV),
+                }
+            }
+        }
+
+        async fn temp_store() -> Arc<Store> {
+            let dir = tempfile::tempdir().expect("a temp dir");
+            let path = dir.path().join("test.db");
+            let store = Store::open_at(path).await.expect("the store opens");
+            std::mem::forget(dir);
+            Arc::new(store)
+        }
+
+        fn setup_providers_with_mock() -> Arc<RwLock<ProviderRouter>> {
+            let mut router = ProviderRouter::new();
+            let mock = MockProvider::new("test");
+            router.register_provider(Box::new(mock));
+            Arc::new(RwLock::new(router))
+        }
+
+        fn setup_settings() -> Arc<SettingsStore> {
+            Arc::new(SettingsStore::new())
+        }
+
+        fn coding_project(repo_path: Option<&std::path::Path>) -> Project {
+            Project {
+                id: ProjectId::new(),
+                name: "Coding Project".to_string(),
+                description: "A project with code to write".to_string(),
+                language: "en".to_string(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                repo_path: repo_path.map(|path| path.to_string_lossy().into_owned()),
+                repo_url: None,
+            }
+        }
+
+        /// A run sitting at [`Stage::PlanTasks`], so the next advance executes Code.
+        async fn run_before_code<S: SettingsProvider>(
+            store: &Arc<Store>,
+            engine: &PipelineEngine<S>,
+            project: &Project,
+        ) -> Run {
+            store.create_project(project).await.expect("a project");
+            let run = engine
+                .start_run(project.id, "Build a todo app")
+                .await
+                .expect("a run starts");
+            let mut run = store.get_run(run.id).await.expect("the run is readable");
+            run.current_stage = Stage::PlanTasks;
+            store
+                .update_run(&run)
+                .await
+                .expect("the run is at planning");
+            run
+        }
+
+        #[cfg(unix)]
+        fn fake_cli(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+            use std::os::unix::fs::PermissionsExt;
+            let path = dir.join("fake-coding-cli");
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("the fake CLI is written");
+            let mut permissions = std::fs::metadata(&path)
+                .expect("the script exists")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&path, permissions).expect("the script is executable");
+            path
+        }
+
+        #[cfg(unix)]
+        fn git_repo(dir: &std::path::Path) {
+            for args in [
+                vec!["init", "-q"],
+                vec!["config", "user.email", "test@example.com"],
+                vec!["config", "user.name", "Test"],
+                vec!["add", "."],
+                vec!["commit", "-qm", "base"],
+            ] {
+                let status = std::process::Command::new("git")
+                    .current_dir(dir)
+                    .args(&args)
+                    .status()
+                    .expect("git runs");
+                assert!(status.success(), "git {args:?} failed");
+            }
+        }
+
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn the_code_stage_runs_the_selected_cli_and_reports_its_changes() {
+            let _env_guard = ENV_GUARD.lock().await;
+            let _env = EnvRestore::remove();
+
+            let temp = tempfile::tempdir().expect("a temp dir");
+            let repo = temp.path().join("repo");
+            std::fs::create_dir(&repo).expect("the repository directory");
+            std::fs::write(repo.join("base.txt"), "base").expect("a base file");
+            let cli = fake_cli(
+                &repo,
+                "printf '%s' \"$*\" > prompt.txt\nprintf 'changed' > base.txt\nprintf 'made' > made.txt",
+            );
+            git_repo(&repo);
+
+            let store = temp_store().await;
+            let project = coding_project(Some(&repo));
+            let engine =
+                PipelineEngine::new(store.clone(), setup_providers_with_mock(), setup_settings())
+                    .with_coding_backend(Arc::new(CliBackend::new(
+                        "fake",
+                        cli.to_str().expect("a utf8 path"),
+                        vec![],
+                    )));
+            let run = run_before_code(&store, &engine, &project).await;
+
+            let run = engine
+                .advance_stage(run.id)
+                .await
+                .expect("the Code stage runs through the selected CLI");
+
+            assert_eq!(run.current_stage, Stage::Code);
+            let code = run.artifacts.get("code").expect("the Code artifact");
+            assert!(
+                code.content.contains("made.txt"),
+                "the artifact does not name a file the CLI made: {}",
+                code.content
+            );
+            assert!(
+                code.content.contains("base.txt"),
+                "the artifact does not name a file the CLI changed: {}",
+                code.content
+            );
+            assert!(
+                code.content.contains("```diff"),
+                "the artifact carries no diff: {}",
+                code.content
+            );
+            assert_eq!(
+                run.spent_cents, 0,
+                "a coding CLI run was charged as a provider call"
+            );
+
+            let prompt = std::fs::read_to_string(repo.join("prompt.txt"))
+                .expect("the CLI recorded its prompt");
+            assert!(
+                prompt.contains("Coding Project") && prompt.contains("role: coder"),
+                "the CLI did not receive the Code-stage prompt: {prompt}"
+            );
+
+            let events = store.get_events(run.id).await.expect("events are readable");
+            let step = events
+                .iter()
+                .find(|event| event.kind == EventKind::AgentStep && event.stage == Stage::Code)
+                .expect("the Code step is on the record");
+            assert_eq!(step.payload["backend"], "fake");
+        }
+
+        #[tokio::test]
+        async fn an_unavailable_coding_backend_fails_the_stage_cleanly() {
+            let _env_guard = ENV_GUARD.lock().await;
+            let _env = EnvRestore::remove();
+
+            let store = temp_store().await;
+            let project = coding_project(Some(std::path::Path::new("/nonexistent-repo")));
+            let engine =
+                PipelineEngine::new(store.clone(), setup_providers_with_mock(), setup_settings())
+                    .with_coding_backend(Arc::new(CliBackend::new(
+                        "missing",
+                        "warsha-no-such-coding-cli-xyz",
+                        vec![],
+                    )));
+            let run = run_before_code(&store, &engine, &project).await;
+
+            let error = engine
+                .advance_stage(run.id)
+                .await
+                .expect_err("a backend whose CLI is absent must fail, not run");
+
+            assert!(
+                error.to_string().contains("not installed"),
+                "the failure does not name the absent CLI: {error}"
+            );
+            let stored = store.get_run(run.id).await.expect("the run is readable");
+            assert_eq!(
+                stored.status,
+                RunStatus::Failed,
+                "the run was left running after the backend could not start"
+            );
+            let events = store.get_events(run.id).await.expect("events are readable");
+            assert!(
+                events.iter().any(|event| event.kind == EventKind::Error
+                    && event.payload["action"] == "stage_failed"),
+                "no error event explains the failed Code stage"
+            );
+        }
+
+        #[tokio::test]
+        async fn no_selection_leaves_the_code_stage_on_the_provider() {
+            let _env_guard = ENV_GUARD.lock().await;
+            let _env = EnvRestore::remove();
+
+            let store = temp_store().await;
+            let project = coding_project(None);
+            let engine =
+                PipelineEngine::new(store.clone(), setup_providers_with_mock(), setup_settings());
+            let run = run_before_code(&store, &engine, &project).await;
+
+            let error = engine
+                .advance_stage(run.id)
+                .await
+                .expect_err("an unrouted Coder has no provider");
+
+            assert!(
+                matches!(error, PipelineError::NoProviderRouted(Role::Coder)),
+                "{error:?}"
+            );
+            let stored = store.get_run(run.id).await.expect("the run is readable");
+            assert_eq!(stored.status, RunStatus::Paused);
+        }
+
+        #[tokio::test]
+        async fn the_environment_names_the_code_stage_backend() {
+            let _env_guard = ENV_GUARD.lock().await;
+            let _env = EnvRestore::set("claude-code");
+
+            // The wiring side (warshad) resolves the environment name and injects
+            // the backend; the pipeline itself never reads the variable.
+            let selected = BackendFactory::from_env().expect("the named backend resolves");
+            assert_eq!(selected.name(), "claude-code");
         }
     }
 }

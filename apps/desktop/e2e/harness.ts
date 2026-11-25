@@ -102,6 +102,7 @@ export const RPC_METHODS = [
   'agent.plan_mode',
   'agent.state',
   'agent.turn',
+  'agent.turn_run',
   'backend.export',
   'backend.get',
   'backend.set',
@@ -115,6 +116,7 @@ export const RPC_METHODS = [
   'files.tree',
   'gates.approve',
   'gates.changes',
+  'gates.evidence',
   'gates.list',
   'gates.reject',
   'handoff.apply',
@@ -129,6 +131,13 @@ export const RPC_METHODS = [
   'integrations.disconnect',
   'integrations.list',
   'integrations.test',
+  'mcp.approvals.allow_once',
+  'mcp.approvals.list',
+  'mcp.connect',
+  'mcp.disconnect',
+  'mcp.list',
+  'mcp.permissions.list',
+  'mcp.permissions.set',
   'models.add',
   'models.list',
   'models.remove',
@@ -578,6 +587,14 @@ const RUNS = [
     startedAt: RUN_STARTED,
     updatedAt: '2026-10-05T09:20:00.000Z',
   },
+  {
+    id: 'run-gate-c',
+    projectId: 'proj-ui',
+    stage: 'gate_c',
+    status: 'awaiting_gate',
+    startedAt: RUN_STARTED,
+    updatedAt: '2026-10-05T09:45:00.000Z',
+  },
 ];
 
 /** Two gates: one waiting for the owner, one already approved. */
@@ -803,6 +820,95 @@ const RUN_EVENTS: readonly EventFixture[] = RUN_LOGS.map((line, index) => ({
   device_id: 'dev-laptop',
 }));
 
+/**
+ * One agent MCP tool call and the run's end, as `runs.subscribe` answers (R-EXT-2).
+ *
+ * The Terminal tab draws from these rows and not from a summary string: one line per
+ * phase, the server and tool as LTR tokens, then the run's own ending. The payloads
+ * carry no argument and no result — that is the daemon's rule, not this fixture's —
+ * so a screen that renders them shows a call and never its content.
+ *
+ * A case passes it as `openV3(..., { fixtures: { 'runs.subscribe': { result: AGENT_TOOL_STREAM } } })`.
+ * The wire shape is the daemon's: snake_case fields and the same kind strings every
+ * other event carries, so no new method and no new field is introduced.
+ */
+export const AGENT_TOOL_STREAM = {
+  seq: 4,
+  gap_detected: false,
+  resync_required: false,
+  dropped_count: 0,
+  run: null,
+  events: [
+    {
+      id: 'evt-mcp-1',
+      run_id: 'run-code',
+      stage: 'code',
+      role: null,
+      kind: 'tool_call',
+      payload: {
+        action: 'mcp_call',
+        phase: 'requested',
+        server: 'files',
+        tool: 'read_file',
+        role: 'agent',
+      },
+      cost_cents: null,
+      created_at: '2026-10-05T07:16:00.000Z',
+      device_id: null,
+      seq: 1,
+    },
+    {
+      id: 'evt-mcp-2',
+      run_id: 'run-code',
+      stage: 'code',
+      role: null,
+      kind: 'tool_call',
+      payload: {
+        action: 'mcp_call',
+        phase: 'approval_required',
+        server: 'files',
+        tool: 'read_file',
+        role: 'agent',
+        question_id: 'mcp-approval-1',
+      },
+      cost_cents: null,
+      created_at: '2026-10-05T07:16:30.000Z',
+      device_id: null,
+      seq: 2,
+    },
+    {
+      id: 'evt-mcp-3',
+      run_id: 'run-code',
+      stage: 'code',
+      role: null,
+      kind: 'tool_call',
+      payload: {
+        action: 'mcp_call',
+        phase: 'succeeded',
+        server: 'files',
+        tool: 'read_file',
+        role: 'agent',
+      },
+      cost_cents: null,
+      created_at: '2026-10-05T07:17:00.000Z',
+      device_id: null,
+      seq: 3,
+    },
+    {
+      id: 'evt-mcp-end',
+      run_id: 'run-code',
+      stage: 'feedback',
+      role: null,
+      kind: 'run_finished',
+      payload: { status: 'completed' },
+      cost_cents: null,
+      created_at: '2026-10-05T07:18:00.000Z',
+      device_id: null,
+      seq: 4,
+    },
+  ],
+} as const;
+
 /** What the stubs observed, so a test can assert the app really talked to them. */
 export interface StubReport {
   /** JSON-RPC methods the app called, in order. */
@@ -836,6 +942,16 @@ export interface OpenScreenOptions {
   config?: Record<string, string>;
   /** Replace the default `?screen=…` query, e.g. `''` to let the shell choose its own screen. */
   search?: string;
+  /**
+   * Which UI the shell starts on, appended to the search as `ui=`.
+   *
+   * R-BRIDGE-B4a made v3 the default, and this harness drives the **v2** shell: `?screen=` is the
+   * v2 address. So the default here is `'v2'` — the address cannot be left unset, because the
+   * clean start now opens v3 and every case would time out waiting for a v2 selector (measured:
+   * 793/793 failed with no `ui=`). `'v3'` is available for a case that wants the new shell; the v3
+   * suite's own `openV3` opens `?ui=v3` itself and does not come through here.
+   */
+  ui?: 'v2' | 'v3';
   /** Absolute origin for a page that has no `baseURL` (a context the test made itself). */
   origin?: string;
   /** How far to drive the first-run wizard; overrides the case's own `drive`. */
@@ -1056,6 +1172,136 @@ function bindPairingData(source: Record<string, unknown>): StubOutcome {
 
 /** What the stub answers for one call: a result, or an error the screen is meant to show. */
 export type StubOutcome = { ok: true; result: unknown } | { ok: false; code: number; message: string };
+
+/** The programs that fetch a package (`PACKAGE_LAUNCHERS`, `crates/warshad/src/wave2.rs:754`). */
+const MCP_PACKAGE_LAUNCHERS = new Set(['npx', 'pnpm', 'yarn', 'bun', 'bunx', 'npm', 'uvx', 'pipx']);
+
+/** The launcher subcommands that stand between a launcher and its package (`…/wave2.rs:757`). */
+const MCP_LAUNCHER_SUBCOMMANDS = new Set(['dlx', 'exec', 'x', 'run', 'tool']);
+
+/** True for a package argument that names an exact release (`is_pinned_package`, `…/wave2.rs:830`). */
+function isPinnedPackage(spec: string): boolean {
+  const at = spec.lastIndexOf('@');
+  if (at <= 0) return false;
+  const version = spec.slice(at + 1);
+  return /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version);
+}
+
+/**
+ * The package a launcher's argument list names, or `null` when it names none.
+ *
+ * Read the way `wave2::require_pinned_launch` reads it (`crates/warshad/src/wave2.rs:765-830`): a
+ * launcher option is not a package, `--package=…`/`-p …` names one, `npm|pnpm|yarn run <script>`
+ * runs a local script rather than a fetched package, and every token after the package is a server
+ * argument.
+ */
+function launchedPackage(command: string, args: readonly string[]): string | null | undefined {
+  const base = command.trim().split(/[/\\]/).pop()?.trim().toLowerCase() ?? '';
+  const program = base.replace(/\.(cmd|exe)$/, '');
+  if (!MCP_PACKAGE_LAUNCHERS.has(program)) return undefined;
+  const tokens = args.map((arg) => arg.trim()).filter((arg) => arg.length > 0);
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index] ?? '';
+    if (MCP_LAUNCHER_SUBCOMMANDS.has(token)) {
+      if (token === 'run' && (program === 'npm' || program === 'pnpm' || program === 'yarn')) {
+        return undefined;
+      }
+      continue;
+    }
+    if (token.startsWith('--package=')) return token.slice('--package='.length);
+    if (token === '--package' || token === '-p') return tokens[index + 1] ?? null;
+    if (token.startsWith('-')) continue;
+    return token;
+  }
+  return null;
+}
+
+/**
+ * Bind a `mcp.connect` params object the way `warshad` binds it, or refuse it the way the daemon
+ * refuses it.
+ *
+ * `McpServerConfig` (`crates/warsha-pipeline/src/mcp_transport.rs:120-136`) is the whole bound
+ * argument, so every field below is serde's own requirement. On top of the binding,
+ * `connect_mcp` (`crates/warshad/src/lib.rs:1430-1457`) refuses a blank name
+ * (`McpTransportError::EmptyName`) and a launcher that would fetch an unpinned release
+ * (`wave2::require_pinned_launch`), and the words here are the daemon's own, because the screen
+ * renders them verbatim. The unpinned refusal is the packet's `-32602`-class refusal rather than
+ * the live `POLICY_REFUSED` (-32005, `crates/warshad/src/auth.rs:1434`): the client shows the
+ * message and never the code, and a stub that accepted the launch would let a screen photograph a
+ * server no daemon would start.
+ */
+function bindMcpServerConfig(raw: unknown): StubOutcome {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return {
+      ok: false,
+      code: -32602,
+      message: `invalid type: ${serdeUnexpected(raw)}, expected struct McpServerConfig`,
+    };
+  }
+  const config = raw as Record<string, unknown>;
+  for (const field of ['name', 'transport', 'args'] as const) {
+    if (!(field in config)) return missingField(field);
+  }
+  const name = config['name'];
+  if (typeof name !== 'string') {
+    return {
+      ok: false,
+      code: -32602,
+      message: `invalid type: ${serdeUnexpected(name)}, expected a string`,
+    };
+  }
+  if (name.trim().length === 0) {
+    return { ok: false, code: -32602, message: 'an MCP server needs a name' };
+  }
+  const transport = config['transport'];
+  if (typeof transport !== 'object' || transport === null || Array.isArray(transport)) {
+    return {
+      ok: false,
+      code: -32602,
+      message: `invalid type: ${serdeUnexpected(transport)}, expected internally tagged enum McpTransport`,
+    };
+  }
+  const kind = (transport as Record<string, unknown>)['kind'];
+  if (kind !== 'stdio' && kind !== 'http' && kind !== 'websocket') {
+    return {
+      ok: false,
+      code: -32602,
+      message: `unknown variant \`${String(kind)}\`, expected one of \`stdio\`, \`http\`, \`websocket\``,
+    };
+  }
+  const args = config['args'];
+  if (!Array.isArray(args)) {
+    return {
+      ok: false,
+      code: -32602,
+      message: `invalid type: ${serdeUnexpected(args)}, expected a sequence`,
+    };
+  }
+  if (kind !== 'stdio') return { ok: true, result: null };
+  const command = config['command'];
+  if (typeof command !== 'string' || command.trim().length === 0) {
+    // `connect_mcp` refuses a stdio server with no program before it reaches the manager.
+    return { ok: false, code: -32602, message: 'a stdio MCP server names no program to start' };
+  }
+  const launchArgs = args.map((arg) => String(arg));
+  const launched = launchedPackage(command, launchArgs);
+  if (launched === undefined) return { ok: true, result: null };
+  if (launched === null) {
+    return {
+      ok: false,
+      code: -32602,
+      message: `the pack launches \`${command}\` but names no package; there is nothing pinned to run`,
+    };
+  }
+  if (!isPinnedPackage(launched)) {
+    return {
+      ok: false,
+      code: -32602,
+      message: `the pack launches the unpinned package \`${launched}\`; name the release it was tested with as \`pkg@x.y.z\``,
+    };
+  }
+  return { ok: true, result: null };
+}
 
 /** The wire shape `warsha_core::HarnessDefinition` serialises (`harness.get`/`harness.import`). */
 function harnessRow(id: string): Record<string, unknown> {
@@ -1420,6 +1666,25 @@ export function rpcResult(method: RpcMethod, params: unknown, daemon: StubDaemon
     }
     case 'gates.list':
       return { ok: true, result: GATES };
+    case 'gates.evidence':
+      return {
+        ok: true,
+        result: {
+          diff: 'diff --git a/a b/a\nindex ...',
+          files_changed: ['a', 'b/c'],
+          tests: {
+            program: 'pnpm',
+            args: ['test'],
+            success: true,
+            exit_code: 0,
+            stdout: 'ok',
+            stderr: '',
+            duration_ms: 100,
+            truncated: false,
+          },
+          preview: null,
+        },
+      };
     case 'gates.approve':
     case 'gates.reject':
     case 'gates.changes':
@@ -1527,6 +1792,84 @@ export function rpcResult(method: RpcMethod, params: unknown, daemon: StubDaemon
     case 'integrations.list':
     case 'files.tree':
       return { ok: true, result: [] };
+    // MCP approvals and permissions (R-BRIDGE-B3b). The two reads answer "nothing pending, no
+    // stored rows" so a capture that does not override them keeps the baseline it had before the
+    // Inbox gained a second item kind; a case that needs a question or a row passes it through
+    // `fixtures`, the way the Wave 2 lists above are overridden. Every required argument is
+    // checked the way the daemon's serde binding checks it, so a call that would fail live with
+    // `-32602` fails here instead of passing.
+    case 'mcp.approvals.list':
+      return { ok: true, result: [] };
+    case 'mcp.approvals.allow_once': {
+      if (!paramEntry(params, 'id').found) return missingField('id');
+      // The daemon answers the granted row, including the device the session authenticated and
+      // the lapse time; the grantor is never a request parameter.
+      return {
+        ok: true,
+        result: {
+          id: paramValue(params, 'id') ?? '',
+          run_id: 'run-gate-a',
+          server: 'github',
+          tool: 'create_issue',
+          role: 'agent',
+          granted_by: 'dev-laptop',
+          expires_at: new Date(Date.now() + 600_000).toISOString(),
+        },
+      };
+    }
+    case 'mcp.permissions.list':
+      return {
+        ok: true,
+        result: { rows: [], agent_role: 'agent', default_permission: 'ask' },
+      };
+    case 'mcp.permissions.set': {
+      for (const name of ['server', 'tool', 'role', 'permission']) {
+        if (!paramEntry(params, name).found) return missingField(name);
+      }
+      const permission = paramValue(params, 'permission') ?? '';
+      if (permission !== 'allow' && permission !== 'ask' && permission !== 'deny') {
+        // `ToolPermission::parse_strict` (`crates/warsha-pipeline/src/mcp_permission.rs:53-62`)
+        // refuses anything else in these words; a stub that accepted it would let a screen show a
+        // row the daemon never stored.
+        return {
+          ok: false,
+          code: -32602,
+          message: `\`${permission}\` is not an MCP permission; use \`allow\`, \`ask\` or \`deny\``,
+        };
+      }
+      return {
+        ok: true,
+        result: {
+          server: paramValue(params, 'server') ?? '',
+          tool: paramValue(params, 'tool') ?? '',
+          role: paramValue(params, 'role') ?? '',
+          permission,
+        },
+      };
+    }
+    // MCP connections (R-EXT-1). `mcp.list` answers "no server configured" so a capture that does
+    // not override it keeps the baseline it had; a case that needs a connected, an `{error: …}` or
+    // a recorded-not-dialled http row passes it through `fixtures`, the way the Wave 2 lists above
+    // are overridden. `mcp.connect` binds the whole `config` struct and refuses a launch the daemon
+    // would refuse, so a screen that sends the wrong body fails here instead of passing.
+    case 'mcp.list':
+      return { ok: true, result: [] };
+    case 'mcp.connect': {
+      const config = paramEntry(params, 'config');
+      if (!config.found) return missingField('config');
+      return bindMcpServerConfig(config.value);
+    }
+    case 'mcp.disconnect': {
+      const name = paramEntry(params, 'name');
+      if (!name.found) return missingField('name');
+      if (paramValue(params, 'name') === null) {
+        return { ok: false, code: -32602, message: 'invalid type: map, expected a string' };
+      }
+      // `McpTransportError::NotFound` is the daemon's own refusal for a name it does not hold; the
+      // stub holds no server, so a disconnect that binds answers the daemon's `()` and the row
+      // disappears on the next `mcp.list` the case stubs.
+      return { ok: true, result: null };
+    }
     case 'agent.state':
       return {
         ok: true,
@@ -1544,6 +1887,12 @@ export function rpcResult(method: RpcMethod, params: unknown, daemon: StubDaemon
         },
       };
     case 'agent.turn':
+      return {
+        ok: false,
+        code: -32000,
+        message: 'agent.turn is retired: start a run and use agent.turn_run with its run id',
+      };
+    case 'agent.turn_run':
       return {
         ok: true,
         result: {
@@ -2037,6 +2386,18 @@ export async function installEventStub(
 }
 
 /**
+ * Add `ui=<ui>` to a `location.search` string, unless the case already names a UI.
+ *
+ * The search arrives as `?screen=…` or `''`, and the parameter is appended rather than rebuilt so a
+ * case's own query keeps its exact spelling and order.
+ */
+function withUiSearch(search: string, ui: 'v2' | 'v3'): string {
+  if (/(^|[?&])ui=/.test(search)) return search;
+  if (search === '') return `?ui=${ui}`;
+  return search.startsWith('?') ? `${search}&ui=${ui}` : `?${search}&ui=${ui}`;
+}
+
+/**
  * Open one screen in a deterministic browser state.
  *
  * @param page the page to drive
@@ -2075,7 +2436,10 @@ export async function openScreen(page: Page, options: OpenScreenOptions): Promis
   // which is what `auditUsedFonts` then proves. The app bundle carries no font bytes.
   await page.route(/fonts\.(googleapis|gstatic)\.com/, (route) => route.abort());
 
-  const search = options.search ?? screen.search ?? `?screen=${options.screen}`;
+  const search = withUiSearch(
+    options.search ?? screen.search ?? `?screen=${options.screen}`,
+    options.ui ?? 'v2'
+  );
   // The stubbed shell answers the three daemon keys like `src-tauri/src/lib.rs` does — the app
   // carries no defaults of its own — then the case's own preferences on top.
   const config = {

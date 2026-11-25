@@ -12,6 +12,14 @@
 //!   Traversal is judged by splitting the token on **both** `/` and `\`, so the
 //!   same command line is classified the same way on Windows and Unix instead of
 //!   depending on the host's [`std::path`] separator rules.
+//! - Judges the **arguments** of `git`, the one allow-listed tool that names a
+//!   second program through its own options: a `-c`/`--config` override whose
+//!   config key names a program or hook (`alias.*`, `core.pager`, `filter.*`,
+//!   …) is refused unless its value is empty — the empty value is the
+//!   neutralisation form (`git -c core.fsmonitor=`) the gate-evidence path
+//!   relies on — and `--exec-path` is refused outright. The allow-list bounds
+//!   which programs run; an allow-listed tool may still interpret its own
+//!   arguments, and this grammar narrows the one known program-naming surface.
 //! - Executes via `tokio::process::Command` with `kill_on_drop(true)`,
 //!   `env_clear()` plus a minimal fixed environment (never inheriting daemon or
 //!   provider secrets), a 120-second default timeout, and a 1 MiB output cap. The
@@ -71,6 +79,45 @@ pub const DEFAULT_ALLOWED_COMMANDS: &[&str] = &[
 
 /// Shell binaries refused by default unless explicitly present in the configured allow-list.
 pub const SHELL_COMMANDS: &[&str] = &["sh", "bash", "cmd", "powershell", "pwsh"];
+
+/// `git` config keys whose value git turns into a program it runs.
+///
+/// A config override is a second way to name a program: `-c alias.<name>=!<cmd>`
+/// makes git hand `<cmd>` to a shell, and every key here names an editor, a
+/// pager, a diff/filter driver, a credential helper or a hook git launches, so
+/// the allow-list would otherwise be bypassed through an allow-listed tool's
+/// arguments (KEEL checkpoint finding M3). The set is the known program-naming
+/// keys, not an exhaustive one, and it only matters when the value is non-empty:
+/// an empty value disables the hook instead of naming a program.
+const GIT_PROGRAM_CONFIG_KEYS: &[&str] = &[
+    "core.pager",
+    "core.editor",
+    "editor",
+    "sequence.editor",
+    "interactive.difffilter",
+    "core.fsmonitor",
+    "core.fsmonitorhook",
+    "diff.external",
+    "credential.helper",
+    "core.hookspath",
+    "core.attributesfile",
+];
+
+/// `git` config sections where every key names a program (`alias.*`, `filter.*`).
+const GIT_PROGRAM_CONFIG_PREFIXES: &[&str] = &["alias.", "filter."];
+
+/// Why a `git` config override that names a program is refused.
+///
+/// The refusal is [`CommandPolicyError::InvalidCommand`], whose `reason` reaches
+/// the agent verbatim as `ToolError::CommandRefused`; a dedicated variant would
+/// need an arm in every exhaustive match over the enum, including the one in
+/// `agent_tools`, which this repair does not own.
+const GIT_CONFIG_PROGRAM_REASON: &str =
+    "names a program or hook git would run; the allow-list bounds which programs run, and a config override is not a way around it";
+
+/// Why `git --exec-path` is refused: it names a directory of git's executables.
+const GIT_EXEC_PATH_REASON: &str =
+    "points git at a directory of its own executables, which the allow-list does not admit";
 
 /// Shell metacharacters forbidden inside a program token.
 const COMMAND_METACHARACTERS: &[char] = &[';', '|', '&', '`', '$', '\n', '\r', '>', '<'];
@@ -137,16 +184,17 @@ pub enum CommandPolicyError {
     /// The command string was empty or whitespace-only.
     #[error("the command is blank")]
     BlankCommand,
-    /// The command string failed tokenization (e.g. an unclosed quote).
+    /// The command line is not admitted: it failed tokenization (e.g. an unclosed
+    /// quote) or an argument is refused by an allow-listed tool's grammar.
     #[error("invalid command `{command}`: {reason}")]
     InvalidCommand {
-        /// The raw command input.
+        /// The raw command input, or the rejected argument.
         command: String,
-        /// Why tokenization failed.
+        /// Why it was refused.
         reason: String,
     },
     /// The program token contains shell metacharacters.
-    #[error("`{command}` names shell syntax rather than a program; only a program and its arguments may run")]
+    #[error("`{command}` names shell syntax rather than a program; the daemon runs a program directly with no shell, so shell syntax is refused, and the allow-list bounds which programs run — not what an allow-listed program does with its own arguments")]
     ShellSyntax {
         /// The offending program token.
         command: String,
@@ -311,14 +359,38 @@ impl CommandPolicy {
 
     /// Judge the FIRST `split_command` token of `command_line` against this policy.
     ///
-    /// Returns the extracted first token when allowed.
+    /// Returns the extracted first token when allowed. The remaining tokens are
+    /// judged by the same argument grammar [`CommandPolicy::execute`] applies, so
+    /// a pre-flight check and the execution that follows agree.
     pub fn check_command(&self, command_line: &str) -> Result<String, CommandPolicyError> {
-        let (first, _) = parse_command_line(command_line)?;
-        self.check_program(&first)?;
+        let (first, rest) = parse_command_line(command_line)?;
+        self.check_invocation(&first, &rest)?;
         Ok(first)
     }
 
+    /// Judge a program token and its argument list together.
+    ///
+    /// This is the whole judgement [`CommandPolicy::execute`] makes before it
+    /// spawns, exposed so a caller that re-launches a stored command — the
+    /// process manager's restart — applies the identical check instead of the
+    /// program token alone.
+    pub fn check_invocation(
+        &self,
+        program_token: &str,
+        args: &[String],
+    ) -> Result<(), CommandPolicyError> {
+        self.check_program(program_token)?;
+        check_arguments(program_token, args)
+    }
+
     /// Judge a single program token against this policy.
+    ///
+    /// The allow-list match is on the token's **basename**, so `git`,
+    /// `/usr/local/bin/git` and `./git` are one program and `/tmp/whatever/npm`
+    /// is admitted with them. [`program_name`] states that rule, why it is
+    /// acceptable, and what would make it unacceptable (KEEL checkpoint
+    /// finding L10); the behaviour here is pinned by
+    /// `allowed_commands_and_paths_pass_policy_check`.
     pub fn check_program(&self, program_token: &str) -> Result<(), CommandPolicyError> {
         let trimmed = program_token.trim();
         if trimmed.is_empty() {
@@ -381,7 +453,7 @@ impl CommandPolicy {
             Err(err) => return (None, Err(err)),
         };
 
-        if let Err(err) = self.check_program(&program) {
+        if let Err(err) = self.check_invocation(&program, &effective_args) {
             return (None, Err(err));
         }
 
@@ -527,6 +599,90 @@ fn resolve_program_and_args(
     Ok((first, combined))
 }
 
+/// Judge the arguments of a program for a second program named through them.
+///
+/// The allow-list bounds which **programs** run; it cannot bound what an
+/// allow-listed tool does with its own arguments (`node -e`, `npm run`, `cargo
+/// test` all run project code by design). `git` is the one allow-listed tool
+/// whose plain options name another program — a config override, or the
+/// directory of git's own executables — so its grammar is narrowed here: an
+/// override whose key names a program or hook is refused unless its value is
+/// empty, and `--exec-path` is refused outright (KEEL checkpoint finding M3).
+fn check_arguments(program: &str, args: &[String]) -> Result<(), CommandPolicyError> {
+    if program_name(program) != "git" {
+        return Ok(());
+    }
+    let mut index = 0;
+    while index < args.len() {
+        let argument = args[index].trim();
+        let lowered = argument.to_ascii_lowercase();
+        if lowered == "--exec-path" || lowered.starts_with("--exec-path=") {
+            return Err(CommandPolicyError::InvalidCommand {
+                command: argument.to_string(),
+                reason: GIT_EXEC_PATH_REASON.to_string(),
+            });
+        }
+        if argument == "-c" || lowered == "--config" {
+            if let Some(value) = args.get(index + 1) {
+                check_git_config_override(value)?;
+                index += 2;
+                continue;
+            }
+        } else if let Some(value) = git_config_override_value(argument) {
+            check_git_config_override(value)?;
+        }
+        index += 1;
+    }
+    Ok(())
+}
+
+/// The `key=value` an attached `-c…`, `--config=…` or `--config-env=…` token carries.
+///
+/// The separate-token forms (`-c key=value`) are read by the caller, so a token
+/// that starts with `-c` here is the attached form.
+fn git_config_override_value(argument: &str) -> Option<&str> {
+    if let Some(rest) = argument.strip_prefix("-c") {
+        return Some(rest);
+    }
+    let lowered = argument.to_ascii_lowercase();
+    for prefix in ["--config=", "--config-env="] {
+        if lowered.starts_with(prefix) {
+            return Some(&argument[prefix.len()..]);
+        }
+    }
+    None
+}
+
+/// Refuse a `git` config override whose key names a program and whose value is set.
+///
+/// An **empty** value names no program — it disables the hook — which is the
+/// neutralisation the gate-evidence path relies on (`git -c core.fsmonitor=
+/// diff --no-ext-diff`), so that form stays allowed.
+fn check_git_config_override(value: &str) -> Result<(), CommandPolicyError> {
+    let Some((key, config_value)) = value.split_once('=') else {
+        // Without a `=` there is no value, so git itself refuses the override.
+        return Ok(());
+    };
+    if config_value.is_empty() {
+        return Ok(());
+    }
+    let key = key.trim();
+    let normalized = key.to_ascii_lowercase();
+    let names_program = GIT_PROGRAM_CONFIG_KEYS
+        .iter()
+        .any(|denied| *denied == normalized)
+        || GIT_PROGRAM_CONFIG_PREFIXES
+            .iter()
+            .any(|prefix| normalized.starts_with(prefix));
+    if names_program {
+        return Err(CommandPolicyError::InvalidCommand {
+            command: value.to_string(),
+            reason: format!("git config key `{key}` {GIT_CONFIG_PROGRAM_REASON}"),
+        });
+    }
+    Ok(())
+}
+
 /// Whether the program token climbs with `..` under either separator convention.
 ///
 /// [`Path::components`](std::path::Path::components) is host-dependent: on Unix a
@@ -543,6 +699,42 @@ fn has_parent_traversal(program_token: &str) -> bool {
 
 /// Normalize a program token to its lowercase base binary name without Windows
 /// executable suffixes (`.exe`, `.cmd`, `.bat`), matching `warshad::auth`.
+///
+/// **The allow-list matches on this basename, and that is deliberate** (KEEL
+/// checkpoint finding L10). `check_program` admits a token when its basename is
+/// an allow-list entry, so `git`, `/usr/local/bin/git` and `./git` are one
+/// program, and `/tmp/whatever/npm` is admitted for the same reason: the
+/// allow-listed toolchains are resolved out of the owner's `PATH`, and the
+/// directory a `PATH` lookup lands in is not the daemon's to name. The pin for
+/// the rule is `allowed_commands_and_paths_pass_policy_check`, which asserts a
+/// quoted absolute path and `./git` both pass; changing the rule means changing
+/// that test first, on purpose.
+///
+/// Why the rule is acceptable as written:
+///
+/// - The allow-list bounds **which programs** run, not what an allow-listed
+///   program does with its own arguments: `node -e`, `npm run` and `cargo test`
+///   execute code the agent wrote by design (see `check_arguments`), so spelling
+///   one of those as a path grants nothing a bare name does not.
+/// - The executor's only write tool writes content inside its working directory
+///   and cannot set an executable bit (`agent_tools.rs`, `write_file`: the path
+///   goes through the same screen that refuses absolute paths and `..`, then a
+///   plain `std::fs::write`). A path-spelled allow-listed name is therefore a
+///   program that was already there where the owner put it, not one the agent
+///   authored. Overwriting a *pre-existing* executable whose basename matches an
+///   entry is the one way to put agent-authored code behind an allowed name, and
+///   it grants nothing the allow-list does not already grant for the reason
+///   above.
+/// - A `..` in the token is refused before this comparison
+///   (`has_parent_traversal`), so a basename match cannot climb out of the
+///   directory the token names.
+///
+/// What would make it unacceptable, and must be re-reviewed before it happens:
+/// a tool that can create an executable bit (a `chmod`, a copy of an existing
+/// binary, a downloaded artifact) — the agent could then author
+/// `/tmp/whatever/npm` itself; or an allow-list entry that is not a general
+/// code-executing toolchain, where substituting a different program for the named
+/// one would not be equivalent to what the entry already permits.
 pub(crate) fn program_name(command: &str) -> String {
     let trimmed = command.trim().trim_matches('"').trim_matches('\'');
     let name = trimmed
@@ -557,8 +749,13 @@ pub(crate) fn program_name(command: &str) -> String {
         .to_string()
 }
 
-/// Read up to `cap` bytes from a child stream; if any additional byte arrives,
-/// record `truncated = true` and close the stream.
+/// Read up to `cap` bytes from a child stream, then drain the rest.
+///
+/// Reaching the cap does not close the pipe: the remaining bytes are read and
+/// discarded until EOF, so `truncated = true` reports the cut without killing
+/// the producer (`SIGPIPE` would make a passing command look failed). Draining
+/// only reads, so the wait is still bounded by the child's own exit or the
+/// caller's timeout.
 async fn read_stream_capped<R: tokio::io::AsyncRead + Unpin>(
     pipe: Option<R>,
     cap: usize,
@@ -568,16 +765,24 @@ async fn read_stream_capped<R: tokio::io::AsyncRead + Unpin>(
     };
     let mut buf = Vec::new();
     let mut chunk = [0u8; 8192];
+    let mut truncated = false;
     loop {
-        if buf.len() >= cap {
-            let mut probe = [0u8; 1];
-            let extra = matches!(reader.read(&mut probe).await, Ok(n) if n > 0);
-            return (buf, extra);
-        }
-        let max_read = (cap - buf.len()).min(chunk.len());
+        let max_read = if buf.len() >= cap {
+            chunk.len()
+        } else {
+            (cap - buf.len()).min(chunk.len())
+        };
         match reader.read(&mut chunk[..max_read]).await {
-            Ok(0) | Err(_) => return (buf, false),
-            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Ok(0) | Err(_) => return (buf, truncated),
+            Ok(n) => {
+                if buf.len() >= cap {
+                    truncated = true;
+                } else {
+                    let keep = (cap - buf.len()).min(n);
+                    buf.extend_from_slice(&chunk[..keep]);
+                    truncated |= keep < n;
+                }
+            }
         }
     }
 }
@@ -789,6 +994,212 @@ fn shell_metacharacters_and_parent_traversal_are_refused() {
             "expected ParentTraversal for `{traversal}`, got {err:?}"
         );
     }
+}
+
+/// The refused argument and the policy's reason for it.
+///
+/// A `git` refusal travels as [`CommandPolicyError::InvalidCommand`], the variant
+/// whose `reason` the agent-facing `ToolError` carries verbatim.
+#[cfg(test)]
+fn refused_argument(error: &CommandPolicyError) -> (&str, &str) {
+    match error {
+        CommandPolicyError::InvalidCommand { command, reason } => (command, reason),
+        other => panic!("expected a policy refusal, got {other:?}"),
+    }
+}
+
+/// KEEL checkpoint finding M3, the live form: `git -c 'alias.x=!echo escaped' x`
+/// makes git hand `echo escaped` to a shell, so an allow-listed tool reaches a
+/// program the allow-list never admitted. The refusal names the config key, the
+/// execution path refuses it too, and the empty value (which disables the alias
+/// instead of naming a program) still passes.
+#[cfg(test)]
+#[tokio::test]
+async fn a_git_alias_override_that_names_a_program_is_refused() {
+    let policy = CommandPolicy::from_config(&["git".to_string()]);
+    let temp = crate::test_util::fresh_tempdir();
+
+    let escape = "git -c 'alias.x=!echo escaped' x";
+    let err = policy
+        .check_command(escape)
+        .expect_err("an alias override that names a program must be refused");
+    let (rejected, reason) = refused_argument(&err);
+    assert!(
+        rejected.contains("alias.x"),
+        "the rejected argument is named: {rejected}"
+    );
+    assert!(
+        reason.contains("alias.x"),
+        "the refusal must name the config key: {reason}"
+    );
+    assert!(
+        err.to_string().contains("alias.x"),
+        "the rendered refusal must name the config key: {err}"
+    );
+
+    // The execution path applies the same grammar, so no process is started.
+    let err = policy
+        .execute(
+            "git",
+            &[
+                "-c".to_string(),
+                "alias.x=!echo escaped".to_string(),
+                "x".to_string(),
+            ],
+            temp.path(),
+        )
+        .await
+        .expect_err("the execution path must refuse the same argument list");
+    let (rejected, reason) = refused_argument(&err);
+    assert!(
+        rejected.contains("alias.x") && reason.contains("alias.x"),
+        "the execution path refuses the same key: {err:?}"
+    );
+
+    assert_eq!(
+        policy.check_command("git -c 'alias.x=' x").ok(),
+        Some("git".to_string()),
+        "an empty value disables the alias instead of naming a program"
+    );
+}
+
+/// The gate-evidence composition, as `gate_evidence::git_capped` builds it:
+/// `-c core.fsmonitor=` is the **neutralisation** form — an empty value disables
+/// the hook git would otherwise run, so it names no program and must keep
+/// passing. The non-empty value is the form that names a program, and it is
+/// refused.
+#[cfg(test)]
+#[tokio::test]
+async fn the_neutralised_git_hook_form_passes_and_a_named_hook_does_not() {
+    let policy = CommandPolicy::from_config(&["git".to_string()]);
+    let temp = crate::test_util::fresh_tempdir();
+
+    assert_eq!(
+        policy
+            .check_command("git -c core.fsmonitor= diff --no-ext-diff")
+            .ok(),
+        Some("git".to_string()),
+        "the neutralisation form must stay allowed"
+    );
+
+    // The same argument list through the execution path resolves and spawns:
+    // git runs in an empty directory and fails on the repository, not on policy.
+    let output = policy
+        .execute(
+            "git",
+            &[
+                "-c".to_string(),
+                "core.fsmonitor=".to_string(),
+                "-C".to_string(),
+                temp.path().to_string_lossy().into_owned(),
+                "diff".to_string(),
+                "--no-ext-diff".to_string(),
+            ],
+            temp.path(),
+        )
+        .await
+        .expect("the neutralised form reaches a process");
+    assert!(
+        output.exit_code.is_some(),
+        "git ran and reported an exit status: {output:?}"
+    );
+
+    let err = policy
+        .check_command("git -c core.fsmonitor=/tmp/hook diff")
+        .expect_err("a non-empty fsmonitor value names a program git runs");
+    let (_, reason) = refused_argument(&err);
+    assert!(
+        reason.contains("core.fsmonitor"),
+        "the refusal names the key it refused: {reason}"
+    );
+}
+
+/// A benign config override is still an ordinary argument, and the keys that
+/// name an editor, pager, filter driver, credential helper or hook are refused
+/// when their value is set. `git commit -c HEAD` shows the `-c` is only read as a
+/// config override when what follows is a `key=value`.
+#[cfg(test)]
+#[test]
+fn benign_git_config_overrides_pass_and_program_naming_keys_are_refused() {
+    let policy = CommandPolicy::from_config(&["git".to_string()]);
+
+    for allowed in [
+        "git -c user.name=Agent commit -m done",
+        "git -c core.autocrlf=false status",
+        "git commit -c HEAD",
+        "git diff --no-ext-diff",
+    ] {
+        assert!(
+            policy.check_command(allowed).is_ok(),
+            "`{allowed}` names no program and must pass"
+        );
+    }
+
+    for refused in [
+        "git -c core.pager='less -R' log",
+        "git -c core.editor=nano commit",
+        "git -c editor=nano commit",
+        "git -c sequence.editor=nano rebase -i HEAD~2",
+        "git -c interactive.diffFilter=/tmp/filter add -p",
+        "git -c core.fsmonitorHook=/tmp/hook status",
+        "git -c core.hooksPath=/tmp/hooks commit",
+        "git -c core.attributesfile=/tmp/attrs status",
+        "git -c diff.external=/tmp/diff diff",
+        "git -c credential.helper='!evil' push",
+        "git -c 'filter.x.clean=sh -c cat' status",
+        "git -c 'alias.k4probe=!echo shell-reached' k4probe",
+        "git -ccore.pager=less log",
+        "git --config-env=core.pager=LESS log",
+    ] {
+        let err = policy
+            .check_command(refused)
+            .expect_err("a config key that names a program must be refused");
+        let (_, reason) = refused_argument(&err);
+        assert!(
+            reason.contains("config key"),
+            "expected a config-key refusal for `{refused}`, got {err:?}"
+        );
+    }
+}
+
+/// `--exec-path` hands git a directory of its own executables, so the allow-list
+/// is bypassed without even naming a config key. The grammar is git's: another
+/// allow-listed program keeps its own arguments.
+#[cfg(test)]
+#[test]
+fn a_git_exec_path_argument_is_refused() {
+    let policy = CommandPolicy::from_config(&["git".to_string()]);
+
+    for refused in [
+        "git --exec-path",
+        "git --exec-path=/tmp/bin status",
+        "git --EXEC-PATH=/tmp/bin status",
+    ] {
+        let err = policy
+            .check_command(refused)
+            .expect_err("`--exec-path` must be refused");
+        let (rejected, reason) = refused_argument(&err);
+        assert!(
+            rejected.eq_ignore_ascii_case("--exec-path")
+                || rejected.to_ascii_lowercase().starts_with("--exec-path="),
+            "the refused argument is the flag itself: {rejected}"
+        );
+        assert!(
+            reason.contains("directory of its own executables"),
+            "the reason says why the flag is refused: {reason}"
+        );
+    }
+
+    assert!(
+        policy.check_command("git status --porcelain").is_ok(),
+        "an ordinary git invocation still passes"
+    );
+    assert!(
+        CommandPolicy::default()
+            .check_command("cargo test --exec-path")
+            .is_ok(),
+        "the argument grammar belongs to git, not to every program"
+    );
 }
 
 #[cfg(test)]
@@ -1041,6 +1452,54 @@ async fn defaults_and_output_cap_are_enforced() {
     assert!(output
         .format_text()
         .contains("[output truncated at 1 MiB cap]"));
+}
+
+/// The cap is a reporting bound, not a signal: a producer that writes past it
+/// must finish on its own account. Closing the pipe at the cap kills the writer
+/// with `SIGPIPE`, so a command that exits 0 would be recorded as a failure —
+/// this pins the drain-and-discard behaviour that replaced the early close.
+#[cfg(test)]
+#[cfg(unix)]
+#[tokio::test]
+async fn a_producer_past_the_cap_exits_zero_and_is_only_truncated() {
+    let temp = crate::test_util::fresh_tempdir();
+    let cap = 4096;
+    // 204 800 bytes is past both the cap and a pipe buffer, so a reader that
+    // closes at the cap is certain to break this producer's pipe. `dd` (unlike
+    // coreutils `head`) reports the broken pipe instead of exiting 0.
+    let policy = CommandPolicy::from_config(&["sh".to_string()]).with_output_cap(cap);
+
+    let output = policy
+        .execute(
+            "sh",
+            &[
+                "-c".to_string(),
+                "dd if=/dev/zero bs=8192 count=25 2>/dev/null".to_string(),
+            ],
+            temp.path(),
+        )
+        .await
+        .expect("allow-listed command should run");
+
+    assert_eq!(
+        output.exit_code,
+        Some(0),
+        "the producer was killed instead of drained to its own exit"
+    );
+    assert!(
+        output.success,
+        "output past the cap must not turn a passing command into a failure"
+    );
+    assert!(
+        output.truncated,
+        "output exceeding cap should be marked truncated"
+    );
+    assert_eq!(
+        output.stdout.len(),
+        cap,
+        "retained stdout should be exactly the cap"
+    );
+    assert!(output.stderr.is_empty());
 }
 
 /// The cap is a combined budget: a stream that is only stderr is still capped

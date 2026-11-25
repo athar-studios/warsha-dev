@@ -1,0 +1,20 @@
+as any on e5 branch:
+r-next/e5-e1-cleanup:apps/desktop/src/v3/pages/project/index.tsx:1092:                onChange={(e: React.ChangeEvent<HT
+r-next/e5-e1-cleanup:apps/desktop/src/v3/pages/project/index.tsx:1102:                onChange={(e: React.ChangeEvent<HT
+px in Gauge.css on e5:
+.gauge-container {
+  width: 100%;
+  height: var(--w-space-2);
+  background-color: var(--w-sunken);
+  border-radius: var(--w-space-1);
+  overflow: hidden;
+}
+
+interviewProjectId on e5:
+unused useState CodeViewer on e5:
+import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
+import { css } from '@codemirror/lang-css';
+import { html } from '@codemirror/lang-html';
+catalog on e5:
+inbox warn base:
+362:    return mergeInboxItems(gateDecisions, mcpItems);

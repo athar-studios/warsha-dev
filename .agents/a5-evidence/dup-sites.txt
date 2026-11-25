@@ -1,0 +1,15 @@
+== slotText
+apps/remote/src/chrome.tsx:22:function slotText(node: React.ReactNode): string {
+packages/ui/src/compounds/internal.ts:106:export function slotText(node: ReactNode): string {
+== readStoredLocale
+packages/i18n/src/index.tsx:2572:export function readStoredLocale(storage: LocaleStorage | null = safeLocaleStorage()): Locale {
+packages/i18n/src/v3/index.ts:79:export function readStoredLocale(storage?: LocaleStorage | null): Locale {
+== isLocale
+packages/i18n/src/index.tsx:2562:export function isLocale(value: string | null | undefined): value is Locale {
+packages/i18n/src/v3/index.ts:64:export function isLocale(value: unknown): value is Locale {
+== deriveProjectName
+apps/desktop/src/v3/pages/home/index.tsx:52:export function deriveProjectName(idea: string): string {
+apps/desktop/src/v3/pages/onboarding/index.tsx:99:export function deriveProjectName(idea: string): string {
+== carriesJoinedScript
+apps/remote/src/chrome.tsx:38:function carriesJoinedScript(node: React.ReactNode): boolean {
+packages/ui/src/compounds/internal.ts:124:export function carriesJoinedScript(node: ReactNode): boolean {
