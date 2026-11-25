@@ -1,5 +1,17 @@
 # PROGRESS.md — Warsha Build Log
 
+## Run 2026-11-25 — Lane B blockers (D-RN-CLEAN1-B)
+
+- **Worktree**: `.agents/worktrees/lane-b-blockers` on `r-next/lane-b-blockers`, base and tip `c7520f8`. Local-only: no merge, no push, `main` untouched.
+- **Decision**: D-RN-CLEAN1-B. Code is VERIFIED-NO-CHANGE. Docs only.
+- **B1** (current assertions, not the round-20 expected/actual pairs):
+  - `cargo test -p warsha-pipeline --test fake_e2e`: exit 0, 6 passed, 0 failed, harness 1.11s, wall 55.53s (includes compile).
+  - `cargo test -p warsha-pipeline --test real_llm_failure`: exit 0, 1 passed, 0 failed, harness 0.37s, wall 2.78s.
+  - `cargo test -p warshad --test events_ws_live`: exit 0, 2 passed, 0 failed, harness 1.26s, wall 70.02s (includes compile).
+- **B2**: `crates/warshad/src/lib.rs:1000-1006` spawns intake; `crates/warsha-pipeline/src/lib.rs:1837` returns `NoProviderRouted` before any model call; `crates/warsha-pipeline/src/lib.rs:1879-1897` pauses with `provider_required`; `crates/warsha-pipeline/src/lib.rs:2362-2374` returns that pause on resume. The bare `--exact` gate exited 0 and ran 0 tests (339 filtered). `cargo test -p warshad --lib tests::unrouted_agent_run_start_pauses_immediately_with_provider_required -- --exact`: exit 0, 1 passed, harness 0.59s, wall 0.78s.
+- **Other gates** (this tree): `cargo fmt --all -- --check` exit 0 (0.94s); `cargo clippy -p warsha-pipeline -p warshad --all-targets -- -D warnings` exit 0 (57.81s, rerun 0.21s); `node scripts/check-engineering-policy.mjs` exit 0 (`8 checks, 0 failures`, 0.19s).
+- **Status**: VERIFIED-NO-CHANGE for code. No brooks score (not run).
+
 ## Run 2026-11-25 — Round 21 Review-3 (SpecFile skip, stale hint, pause assertion)
 
 - **Worktree**: `.agents/worktrees/fix-r21-review3`, base `126103f`. Local-only: no commit, no merge, no push, `main` untouched. Left uncommitted.

@@ -1,6 +1,14 @@
 
 # DECISIONS.md — Architecture and Design Decisions
 
+## 2026-11-25 — D-RN-CLEAN1-B: Lane B blockers are already fixed at c7520f8
+
+Verified on `r-next/lane-b-blockers` at `c7520f8` (worktree `.agents/worktrees/lane-b-blockers`). No production change. This lane both read the path and ran the gates; that role merge is recorded here, not claimed as an independent review.
+
+- **B1**: the three integration tests already assert the round-21 contract, not the round-20 failures. `fake_e2e` expects 9 agent steps because `STAGE_ROLES` includes `Role::Intake`. `real_llm_failure` expects the refused walk to stop at `Stage::Idea` with `RunStatus::Failed`. `events_ws_live` expects `stage_started` (idea), then `agent_step` (idea), then `stage_started` (gate_a). All three passed. No assertion was weakened.
+- **B2**: an unrouted Agent `runs.start` does not call a model and does not wait on the 180s `DEFAULT_STAGE_TIMEOUT`. `start_run` (`crates/warshad/src/lib.rs:1000-1006`) spawns `advance_to_next_gate` and returns. `dispatch_chat` (`crates/warsha-pipeline/src/lib.rs:1798-1837`) returns `NoProviderRouted` when the role has no route, `WARSHA_LLM_API_KEY` is unset, and `WARSHA_LLM_PROVIDER` is not `fake` — before any `provider.chat`. `record_stage_failure` (`crates/warsha-pipeline/src/lib.rs:1872-1897`) sets `RunStatus::Paused` and appends `EventKind::Error` with `action: "provider_required"`. Resume (`crates/warsha-pipeline/src/lib.rs:2362-2374`) re-dispatches and returns that paused run; it does not insert a fabricated Done session.
+- **Filter hole, not a product bug**: `cargo test -p warshad --lib unrouted_agent_run_start_pauses_immediately_with_provider_required -- --exact` exits 0 and runs 0 tests, because `--exact` matches the full name `tests::unrouted_agent_run_start_pauses_immediately_with_provider_required`. The module-qualified command ran 1 test and it passed in 0.59s. No rename, no new test: the existing poll ceiling is 2s and the path never reaches a model call.
+
 ## 2026-11-25 — D-R21-REVIEW3: SpecFile resume keeps the owner brief, and a stale pause hint is not current
 
 Independent review of `e9c9b3d..126103f` was NOT CLEAR. The three prior findings stay closed.
