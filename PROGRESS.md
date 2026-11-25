@@ -6,7 +6,15 @@
 - **Decision**: D-RN-CLEAN1-D.
 - **Shipped**: `FIXED_SECRETARY_SYSTEM_PROMPT` served to chat and interview. Migration 019 `agent_provisioning`. `propose_staffing` writes a provisioning record for every rostered agent. Developers mode lists it via `secretary.provisioning.list` (ar + en).
 - **Out of scope, not done**: Playwright, UX report, FIXES COMPLETE, swarm, harness backends.
-- **Verification**: pending the lane gates.
+- **Verification** (this tree, commit `0428f58`):
+  - `cargo fmt --all -- --check`: exit 0.
+  - `cargo clippy -p warsha-store -p warshad -p warsha-core --all-targets -- -D warnings`: exit 0.
+  - `secretary_chat_tests::secretary_system_prompt_served_to_the_model_is_the_fixed_prompt`: 1 passed.
+  - `staffing::tests::staffing_proposal_records_every_rostered_agent_and_round_trips`: 1 passed.
+  - `secretary::tests::interview_serves_the_fixed_system_prompt`: 1 passed.
+  - `tests::provisioning_record_round_trips`: 1 passed.
+  - `node scripts/check-engineering-policy.mjs`: exit 0 (`8 checks, 0 failures`).
+  - Desktop typecheck (`tsc --noEmit` and `tsc --noEmit -p tsconfig.e2e.json`): exit 0, using a temporary symlink to `r-next-integration/node_modules` because this worktree has none and the main checkout lacks `@codemirror`. Symlinks removed after. Playwright not run.
 
 ## Run 2026-11-25 — Round 21 Review-3 (SpecFile skip, stale hint, pause assertion)
 
