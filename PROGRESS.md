@@ -1,5 +1,26 @@
 # PROGRESS.md — Warsha Build Log
 
+## Run 2026-11-26 — Onboarding rebuild: connection method, GitHub step, Settings Connection (D-RN-ONBOARDING-2)
+
+- **Branch & worktree**: `r-next/onb-ui` (base `171fb89`) in `.agents/worktrees/onb-ui`. Local commit only; no push, merge, tag, or `main` changes. `crates/`, `apps/desktop/src-tauri/` and `packages/client/` untouched (backend lane owns them).
+- **Changes**:
+  - `apps/desktop/src/v3/components/ConnectionMethodForm.tsx` + `.css` (new): shared Local/Server picker with `test_daemon_connection` before save, per-reason plain explanations, "Use this device instead", an honest browser-mode notice, and the config writers (`daemon_url` → `daemon_ws_url` → `daemon_token` → `connection_mode` last).
+  - `apps/desktop/src/v3/pages/onboarding/index.tsx`, `onboarding.css`: five steps `language → connection → provider → github → idea`, `readInitialStep` for the new steps, connection Continue gated on a passing test, provider "Skip for now" with a persistent warning on the idea step, and a skippable GitHub step (`connectIntegration` + `testIntegration`, "Connected as @login", token cleared after success).
+  - `apps/desktop/src/v3/pages/settings/sections/ConnectionSection.tsx` (new) + `settings/{types,index}.tsx`: registered section id `connection`, shows the stored mode/address and a masked "token set" state (never the token), same test-before-save rule, notes that saving reconnects.
+  - `apps/desktop/src/v3/actions/registry/{onboarding,settings}.ts`: `connection.mode.pick`, `connection.test`, `connection.use-local`, `onboarding.provider.skip`, `onboarding.github.connect`, `onboarding.github.skip`, `settings.connection.save`.
+  - `packages/i18n/src/v3/{en,ar}/{onboarding,settings}.ts`: `onboarding.connection.*`, `onboarding.provider.skip*`, `onboarding.github.*`, `settings.section.connection.*` in crisp EN and natural MSA, parity preserved.
+  - Tests: `apps/desktop/src/v3/pages/onboarding/Onboarding.test.tsx` (six new proving tests plus the updated five-step journeys and a stateful shell stub so the real `invoke` path runs), `apps/desktop/src/v3/pages/settings/sections/ConnectionSection.test.tsx` (new, 4 tests incl. the onboarding→Settings round-trip), `apps/desktop/src/v3/pages/settings/Settings.test.tsx` (nav counts 5→6 primary, 19→20 total), `apps/desktop/e2e/v3/{onboarding,settings}.spec.ts` (new step order, connection/GitHub/provider-skip journeys, connection save).
+  - `DECISIONS.md`: `D-RN-ONBOARDING-2`.
+- **Verification**:
+  - `pnpm --dir packages/i18n exec vitest run`: exit 0 (**2 files / 62 passed**).
+  - `pnpm --dir apps/desktop exec vitest run`: exit 0 (**93 files / 877 passed**, 0 failed).
+  - `pnpm --dir apps/desktop exec tsc --noEmit`: exit 0.
+  - `pnpm --dir apps/desktop exec eslint src --ext .ts,.tsx`: exit 0, 0 errors, 1 pre-existing warning at `apps/desktop/src/v3/pages/developers/index.tsx:291`.
+  - `pnpm --dir apps/desktop exec vite build`: exit 0.
+  - `node scripts/check-engineering-policy.mjs`: exit 0 (**8 checks, 0 failures**).
+  - `node scripts/ci/actions-gate.mjs`: **208 registered, 208 used, 11 violations** — identical to the base `171fb89` baseline (A1 `ProjectSourcePicker.tsx` ×6 and `SecretaryChat.tsx` ×4, A6 `factory.retry`); all 7 new action ids are registered, used, and covered by e2e.
+  - **Not run**: Playwright e2e (`apps/desktop/e2e/v3/*.spec.ts`) — no browsers or dev server in this environment; the specs were updated for the new step order but not executed here.
+
 ## Run 2026-11-26 — Project Source Options UI + Tauri folder picker (D-RN-PROJECT-SOURCE-2)
 
 - **Branch & worktree**: `r-next/pso-ui` (base `5857f62`) in `.agents/worktrees/pso-ui`. Local commit only; no push, merge, tag, or `main` changes.

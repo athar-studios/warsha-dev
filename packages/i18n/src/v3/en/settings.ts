@@ -65,6 +65,18 @@ export default {
   'settings.section.export': 'Export settings',
   'settings.section.export.desc':
     'Export preferences to a file or import them from another device.',
+  'settings.section.connection': 'Connection',
+  'settings.section.connection.desc': 'Where Warsha runs, and which server it talks to.',
+  'settings.section.connection.current_local': 'Warsha runs on this device',
+  'settings.section.connection.current_server': 'Connected to a Warsha server',
+  'settings.section.connection.address': 'Server address',
+  'settings.section.connection.token_set': 'A token is saved for this server',
+  'settings.section.connection.token_unset': 'No token saved yet',
+  'settings.section.connection.reconnect_note': 'Saving reconnects Warsha to the daemon.',
+  'settings.section.connection.save': 'Save connection',
+  'settings.section.connection.saved': 'Connection saved and reconnected.',
+  'settings.section.connection.load_failed': "Couldn't read the current connection.",
+  'settings.section.connection.browser_notice': 'Connection settings need the desktop app.',
 
   'settings.general.language': 'Language',
   'settings.general.language.ar': 'Arabic',

@@ -11,6 +11,7 @@ import { AboutSection } from './sections/AboutSection';
 import { BackendSection } from './sections/BackendSection';
 import { BudgetsSection } from './sections/BudgetsSection';
 import { CodingEnginesSection } from './sections/CodingEnginesSection';
+import { ConnectionSection } from './sections/ConnectionSection';
 import { ConnectionsSection } from './sections/ConnectionsSection';
 import { DevicesSection } from './sections/DevicesSection';
 import { GeneralSection } from './sections/GeneralSection';
@@ -62,6 +63,8 @@ export default function SettingsPage(): React.ReactElement {
     switch (activeSection) {
       case 'general':
         return <GeneralSection />;
+      case 'connection':
+        return <ConnectionSection />;
       case 'models':
         return <ModelsSection />;
       case 'devices':

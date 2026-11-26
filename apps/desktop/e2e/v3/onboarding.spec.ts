@@ -70,8 +70,16 @@ test.describe('Onboarding journeys', () => {
       'true'
     );
 
-    // Advance to Step 2
+    // Step 2: connection method — this device by default, so the journey just continues
     await act(page, 'onboarding.next');
+    await expect(page.locator('[data-testid="onboarding-step-connection"]')).toBeVisible();
+    await expect(page.locator('[data-testid="onboarding-connection-mode-local"]')).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    await act(page, 'onboarding.next');
+
+    // Step 3: provider
     await expect(page.locator('[data-testid="onboarding-step-provider"]')).toBeVisible();
 
     // Pick deep_seek provider
@@ -104,8 +112,10 @@ test.describe('Onboarding journeys', () => {
     const roleCall = await expectRpc(page, 'roles.set');
     expect(roleCall.method).toBe('roles.set');
 
-    // Advance to Step 3
+    // Advance through the GitHub step (skippable) to the idea step
     await act(page, 'onboarding.next');
+    await expect(page.locator('[data-testid="onboarding-step-github"]')).toBeVisible();
+    await act(page, 'onboarding.github.skip');
     await expect(page.locator('[data-testid="onboarding-step-idea"]')).toBeVisible();
 
     // Type idea into composer
@@ -174,8 +184,10 @@ test.describe('Onboarding journeys', () => {
 
     await expect(page.locator('[data-testid="onboarding-test-success"]')).toBeVisible();
 
-    // Advance to Step 3
+    // Advance through the GitHub step (skippable) to the idea step
     await act(page, 'onboarding.next');
+    await expect(page.locator('[data-testid="onboarding-step-github"]')).toBeVisible();
+    await act(page, 'onboarding.github.skip');
     await expect(page.locator('[data-testid="onboarding-step-idea"]')).toBeVisible();
 
     // Skip to home via later
@@ -306,7 +318,7 @@ test.describe('Onboarding action ids', () => {
     await expect(page.locator('[data-testid="onboarding-step-provider"]')).toBeVisible();
 
     await act(page, 'onboarding.back');
-    await expect(page.locator('[data-testid="onboarding-step-language"]')).toBeVisible();
+    await expect(page.locator('[data-testid="onboarding-step-connection"]')).toBeVisible();
   });
 
   test('onboarding.next advances to next step', async ({ page }) => {
@@ -314,7 +326,79 @@ test.describe('Onboarding action ids', () => {
     await expect(page.locator('[data-testid="onboarding-step-language"]')).toBeVisible();
 
     await act(page, 'onboarding.next');
+    await expect(page.locator('[data-testid="onboarding-step-connection"]')).toBeVisible();
+
+    await act(page, 'onboarding.next');
     await expect(page.locator('[data-testid="onboarding-step-provider"]')).toBeVisible();
+  });
+
+  test('connection.mode.pick chooses between this device and a server', async ({ page }) => {
+    await openV3(page, '/onboarding?step=connection');
+    await expect(page.locator('[data-testid="onboarding-connection-mode-local"]')).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+
+    await page.locator('[data-testid="onboarding-connection-mode-server"]').click();
+    await expect(page.locator('[data-testid="onboarding-connection-mode-server"]')).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    await expect(page.locator('[data-testid="onboarding-connection-url"] input')).toBeVisible();
+    // A server that was never tested cannot be continued past.
+    await expect(page.locator('[data-testid="onboarding-next-btn"]')).toBeDisabled();
+  });
+
+  test('connection.test reports a plain failure and connection.use-local goes back', async ({
+    page,
+  }) => {
+    await openV3(page, '/onboarding?step=connection');
+    await page.locator('[data-testid="onboarding-connection-mode-server"]').click();
+    await page
+      .locator('[data-testid="onboarding-connection-url"] input')
+      .fill('http://127.0.0.1:4599');
+
+    await act(page, 'connection.test');
+    await expect(page.locator('[data-testid="onboarding-connection-error"]')).toBeVisible();
+    await expect(page.locator('[data-testid="onboarding-next-btn"]')).toBeDisabled();
+
+    await act(page, 'connection.use-local');
+    await expect(page.locator('[data-testid="onboarding-connection-mode-local"]')).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    await expect(page.locator('[data-testid="onboarding-next-btn"]')).toBeEnabled();
+  });
+
+  test('onboarding.provider.skip warns instead of blocking', async ({ page }) => {
+    await openV3(page, '/onboarding?step=provider');
+    await act(page, 'onboarding.provider.skip');
+    await expect(page.locator('[data-testid="onboarding-provider-warning"]')).toBeVisible();
+  });
+
+  test('onboarding.github.connect reports the GitHub login', async ({ page }) => {
+    await openV3(page, '/onboarding?step=github', {
+      fixtures: {
+        'integrations.connect': { result: { id: 'github', connected: true } },
+        'integrations.test': {
+          result: { status: 'ok', message: 'authenticated', account: 'octo-mock' },
+        },
+      },
+    });
+
+    await page.locator('[data-testid="onboarding-github-token"] input').fill(ACCEPTED_KEY);
+    await act(page, 'onboarding.github.connect');
+    await expectRpc(page, 'integrations.connect');
+    await expectRpc(page, 'integrations.test');
+    await expect(page.locator('[data-testid="onboarding-github-connected"]')).toContainText(
+      '@octo-mock'
+    );
+  });
+
+  test('onboarding.github.skip continues to the idea step', async ({ page }) => {
+    await openV3(page, '/onboarding?step=github');
+    await act(page, 'onboarding.github.skip');
+    await expect(page.locator('[data-testid="onboarding-step-idea"]')).toBeVisible();
   });
 
   test('onboarding.start creates project, starts run, and navigates', async ({ page }) => {

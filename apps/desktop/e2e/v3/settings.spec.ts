@@ -594,6 +594,28 @@ test.describe('Settings v3', () => {
     await expect(page.locator('.w-banner--success')).toBeVisible();
   });
 
+  test('action: settings.connection.save writes connection_mode=local', async ({ page }) => {
+    await openV3(page, '/settings/connection', { lang: 'ar' });
+    await expect(page.locator('[data-testid="settings-section-connection"]')).toBeVisible();
+    await expect(page.locator('[data-testid="settings-connection-mode"]')).toBeVisible();
+
+    // This device is the default, so saving needs no server test first.
+    await act(page, 'settings.connection.save');
+    await expect(page.locator('[data-testid="settings-connection-saved"]')).toBeVisible();
+
+    const configWrites = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __WARSHA_STUB__?: { configWrites: { key: string; value: string }[] };
+          }
+        ).__WARSHA_STUB__?.configWrites ?? []
+    );
+    expect(
+      configWrites.some((w) => w.key === 'connection_mode' && w.value === 'local')
+    ).toBe(true);
+  });
+
   test('action: settings.provider.add.open', async ({ page }) => {
     await openV3(page, '/settings/models', { lang: 'ar' });
     await act(page, 'settings.provider.add.open');

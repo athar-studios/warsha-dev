@@ -39,6 +39,21 @@ export const ACTIONS: readonly ActionDef[] = [
     labelKey: 'onboarding.next',
     effect: 'state',
   },
+  // Step order: language → connection → provider → github → idea.
+  // The three `connection.*` ids live on the shared ConnectionMethodForm, so onboarding and
+  // Settings → Connection use the same literals. `connection.test` calls the shell command
+  // `test_daemon_connection`, not a daemon method, so it carries no rpc.
+  { id: 'connection.mode.pick', labelKey: 'onboarding.action_connection_pick', effect: 'state' },
+  { id: 'connection.test', labelKey: 'onboarding.action_connection_test', effect: 'state' },
+  { id: 'connection.use-local', labelKey: 'onboarding.action_connection_local', effect: 'state' },
+  { id: 'onboarding.provider.skip', labelKey: 'onboarding.provider_skip', effect: 'state' },
+  {
+    id: 'onboarding.github.connect',
+    labelKey: 'onboarding.action_github_connect',
+    effect: 'rpc',
+    rpc: ['integrations.connect', 'integrations.test'],
+  },
+  { id: 'onboarding.github.skip', labelKey: 'onboarding.action_skip', effect: 'state' },
   {
     id: 'onboarding.start',
     labelKey: 'onboarding.start_idea',

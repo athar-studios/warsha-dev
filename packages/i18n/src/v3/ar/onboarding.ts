@@ -61,4 +61,77 @@ export default {
   'onboarding.repo_path_label': 'مسار مستودع Git (اختياري)',
   'onboarding.repo_path_placeholder': 'مسار المجلد المحلي',
   'onboarding.repo_path_hint': 'مسار مستودع Git محلي موجود للعمل عليه.',
+
+  // طريقة الاتصال (مشتركة بين التهيئة والإعدادات ← الاتصال)
+  'onboarding.step_connection': 'الاتصال',
+  'onboarding.connection_title': 'كيف نُشغّل ورشة؟',
+  'onboarding.connection_desc':
+    'اعمل على هذا الجهاز، أو أرسل العمل إلى خادم ورشة يمكنك الوصول إليه.',
+  'onboarding.connection_mode_label': 'طريقة الاتصال',
+  'onboarding.connection_mode_local': 'هذا الجهاز',
+  'onboarding.connection_mode_local_desc':
+    'كل شيء يعمل هنا. ملفاتك ومفاتيحك تبقى على هذا الحاسوب.',
+  'onboarding.connection_mode_server': 'خادم',
+  'onboarding.connection_mode_server_desc':
+    'استخدم خادم ورشة على جهاز آخر أو على استضافة مشتركة.',
+  'onboarding.connection_url': 'عنوان الخادم',
+  'onboarding.connection_url_placeholder': 'https://warsha.example.com',
+  'onboarding.connection_url_hint': 'العنوان الذي سيتصل به تطبيق الحاسوب.',
+  'onboarding.connection_token': 'رمز الوصول',
+  'onboarding.connection_token_placeholder': 'الصق رمز الوصول الخاص بالخادم',
+  'onboarding.connection_token_hint':
+    'يُحفظ في مخزن مفاتيح النظام ولا يظهر مرة أخرى.',
+  'onboarding.connection_test': 'اختبر الاتصال',
+  'onboarding.connection_testing': 'جارٍ اختبار الاتصال…',
+  'onboarding.connection_success': 'استجاب الخادم',
+  'onboarding.connection_success_version': 'استجاب الخادم، الإصدار {version}',
+  'onboarding.connection_error_invalid_url':
+    'هذا ليس عنوان خادم. استخدم عنوانًا يبدأ بـ http:// أو https://.',
+  'onboarding.connection_error_unreachable':
+    'لم يستجب الخادم. تحقّق من العنوان ومن أن الخادم يعمل.',
+  'onboarding.connection_error_unauthorized':
+    'رفض الخادم الرمز. تحقّق من رمز الوصول وأعد المحاولة.',
+  'onboarding.connection_error_bad_response':
+    'أعاد الخادم ردًّا غير متوقّع لورشة. تأكّد من أن العنوان يشير إلى خادم ورشة.',
+  'onboarding.connection_error_generic': 'لم ينجح اختبار الاتصال.',
+  'onboarding.connection_error_title': 'تعذّر الوصول إلى ذلك الخادم',
+  'onboarding.connection_use_local': 'استخدم هذا الجهاز بدلًا منه',
+  'onboarding.connection_test_required': 'اختبر اتصال الخادم قبل المتابعة.',
+  'onboarding.connection_save_failed': 'تعذّر حفظ الاتصال. أعد المحاولة.',
+  'onboarding.connection_browser_notice':
+    'يمكن ضبط الاتصال بخادم من تطبيق الحاسوب. حاليًا تعمل ورشة على هذا الجهاز.',
+  'onboarding.connection_browser_test':
+    'اختبار الاتصال بخادم يتطلّب تطبيق الحاسوب.',
+  'onboarding.connection_switch_note': 'الحفظ يعيد اتصال ورشة.',
+
+  // خطوة المزوّد: تخطّي مزوّد النماذج
+  'onboarding.provider_skip': 'تخطٍّ الآن',
+  'onboarding.provider_skip_warning':
+    'لن تبدأ أي تشغيلة قبل ربط مزوّد نماذج. يمكنك ذلك لاحقًا من الإعدادات ← النماذج.',
+
+  // خطوة GitHub
+  'onboarding.step_github': 'GitHub',
+  'onboarding.github_title': 'اربط GitHub (اختياري)',
+  'onboarding.github_desc':
+    'ربط GitHub يتيح لورشة نسخ مستودعاتك الخاصة وإنشاء مستودعات جديدة لمشاريعك.',
+  'onboarding.github_token': 'رمز GitHub',
+  'onboarding.github_token_placeholder': 'الصق رمز وصول شخصيًا',
+  'onboarding.github_connect': 'اربط واختبر',
+  'onboarding.github_testing': 'جارٍ التحقق من GitHub…',
+  'onboarding.github_connected': 'متصل باسم @{login}',
+  'onboarding.github_connected_noname': 'GitHub متصل.',
+  'onboarding.github_failed_title': 'لم يقبل GitHub ذلك الرمز',
+  'onboarding.github_unconfigured': 'GitHub غير متصل بعد.',
+  'onboarding.github_token_required': 'الصق رمز GitHub أولًا.',
+  'onboarding.github_skip': 'تخطٍّ الآن',
+  'onboarding.github_privacy':
+    'يُحفظ الرمز في مخزن مفاتيح النظام ولا يظهر مرة أخرى.',
+  'onboarding.github_hint':
+    'أنشئ رمزًا من https://github.com/settings/tokens وامنحه صلاحية الوصول إلى المستودعات.',
+  'onboarding.github_open_tokens': 'افتح إعدادات رموز GitHub',
+  'onboarding.action_github_connect': 'ربط GitHub',
+  'onboarding.action_skip': 'تخطّي الخطوة',
+  'onboarding.action_connection_pick': 'اختيار طريقة الاتصال',
+  'onboarding.action_connection_test': 'اختبار الاتصال',
+  'onboarding.action_connection_local': 'استخدام هذا الجهاز',
 };

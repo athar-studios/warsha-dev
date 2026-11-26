@@ -1,0 +1,98 @@
+/* apps/desktop/src/v3/components/ConnectionMethodForm.css — Design System v3 shared connection form.
+ * Semantic tokens only, logical CSS properties only (no literal colors, no physical directions). */
+
+.v3-connection-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--w-space-4);
+  box-sizing: border-box;
+}
+
+.v3-connection-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--w-space-3);
+}
+
+.v3-connection-mode {
+  flex: 1 1 calc(50% - var(--w-space-3));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--w-space-1);
+  padding: var(--w-space-3);
+  border-radius: var(--w-radius-sm);
+  border: var(--w-border-width) solid var(--w-line);
+  background-color: var(--w-surface);
+  color: var(--w-text);
+  font-family: var(--w-font-sans);
+  cursor: pointer;
+  text-align: start;
+  box-sizing: border-box;
+  transition: border-color var(--w-dur-fast) var(--w-ease),
+    background-color var(--w-dur-fast) var(--w-ease);
+}
+
+.v3-connection-mode:hover:not(:disabled) {
+  background-color: var(--w-sunken);
+  border-color: var(--w-line-strong);
+}
+
+.v3-connection-mode[aria-checked='true'] {
+  border-color: var(--w-primary-text);
+  background-color: var(--w-primary-soft);
+  color: var(--w-primary-text);
+}
+
+.v3-connection-mode:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.v3-connection-mode-title {
+  font-size: var(--w-font-size-md);
+  font-weight: var(--w-font-weight-semibold);
+}
+
+.v3-connection-mode-desc {
+  font-size: var(--w-font-size-sm);
+  line-height: var(--w-line-height-sm);
+  color: var(--w-text-muted);
+}
+
+.v3-connection-server {
+  display: flex;
+  flex-direction: column;
+  gap: var(--w-space-3);
+  background-color: var(--w-sunken);
+  border-radius: var(--w-radius-md);
+  padding: var(--w-space-4);
+  box-sizing: border-box;
+}
+
+.v3-connection-test-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--w-space-2);
+}
+
+.v3-connection-note {
+  font-size: var(--w-font-size-sm);
+  color: var(--w-text-muted);
+}
+
+.v3-connection-detail {
+  display: block;
+  margin-block-start: var(--w-space-2);
+  font-size: var(--w-font-size-sm);
+  color: var(--w-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.v3-connection-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--w-space-2);
+  padding-block-start: var(--w-space-2);
+}
