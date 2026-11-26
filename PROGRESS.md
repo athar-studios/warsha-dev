@@ -9699,7 +9699,13 @@ Merged P9-redo (d53f8bd: S-M5 release.yml hashes from checksums + skip-if-missin
 - Prettier: `apps/desktop/src/v3/pages/factory/{Floor.tsx,state.ts,Floor.test.tsx}` are already not Prettier-clean at base `9916b74` (checked against the repo `.prettierrc` on the base blobs), and `AgentPanel.tsx` / `index.test.tsx` are dirty in the main checkout too. `prettier --write` was therefore reverted to the base text for every line this task does not change, so the diff carries the fix only. Both changed source files remain as unformatted as they were; no formatting gate is claimed.
 - One feature commit on `r-next/fix-floor-r4` (base `9916b74`). No push, tag, merge, publish, or model API call. No reviewer or verifier role was run separately from this session, so no independent acceptance is claimed.
 
-## Run 2026-11-26 — CLEAN-4 fix round (B-1, R5A-r1, U-1, U-2, copy/width cleanups; `D-RN-CLEAN4-1..5`)
+## FIXES COMPLETE — CLEAN-4 — 2026-11-26
+
+- **Code merge tip**: `2aef9ea` on `r-next/integration`, merging `r-next/clean4-fix` (`341e17c`) on top of `171fb89`. `main` (`rel-031`) untouched at `5f4b742`. Local only: nothing pushed, tagged, or published.
+- **Judge**: `JUDGE PASS — 100/100` (`/tmp/judge-clean4.md`, `attempt-57b36d43`) recorded against exact commit `341e17c`.
+- **Playwright AR+EN UX walk at `2aef9ea`** (`/home/moe/tools/playwright-ux/runs/2026-11-26-2aef9ea/report.md`, `notes.json`, 9 PNGs in `shots/`): **PASS — 13/13 checks, 0 console/page errors** in EN (`ltr`) and AR (`rtl`) at `1680x1050`. Proved via SVG bounding-box hit-testing that `intake` and `researcher` sit at `Planning` / `التخطيط` with `0` markers at `Your decisions` / `قراراتك` after `gate_a`, `reviewer` is seeded at `Review` / `المراجعة` on entering `review_qa_security`, `.v3-home-narrow` computes `1120px`, Developers durations render localized Arabic units (`69 مللي ثانية`, `2 د 0 ث`), and unreachable daemon renders localized Arabic banner (`تعذّر الوصول إلى خادم ورشة ...`).
+
+### Run 2026-11-26 — CLEAN-4 fix round (B-1, R5A-r1, U-1, U-2, copy/width cleanups; `D-RN-CLEAN4-1..5`)
 
 - Worktree `.agents/worktrees/clean4-fix`, branch `r-next/clean4-fix`, base `171fb89`. Local only; no push, tag, publish, or real model API calls. Temporary `node_modules` symlinks (root, `apps/desktop`, `packages/{i18n,ui,client,crypto}`) used for JS checks and removed before commit.
 - **B-1 + R5A-r1**: `apps/desktop/src/v3/pages/factory/state.ts` restores `stageOfRole(agent.role) ?? agent.stage` when non-owner agents exit a gate as `done` and seeds `reviewer` via `STAGE_SEED_ROLES` (`crates/warsha-pipeline/src/prompts.rs:64` mirror) when `review_qa_security` is announced with no existing owner marker; `Floor.tsx` `stationOf` skips `byStage` for `done` agents on gate stages. `state.test.tsx` updated for `pm → prd_spec` and expanded with B-1 (`idea → gate_a → research`) and R5A-r1 (`review_qa_security` seed + no-duplicate) tests.
