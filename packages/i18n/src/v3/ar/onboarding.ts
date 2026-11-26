@@ -1,6 +1,6 @@
 export default {
   'onboarding.title': 'لنبدأ',
-  'onboarding.subtitle': 'جهّز مساحة عملك في ثلاث خطوات بسيطة',
+  'onboarding.subtitle': 'جهّز مساحة عملك في بضع خطوات بسيطة',
   'onboarding.step_indicator': 'الخطوة {current} من {total}',
   'onboarding.step_language': 'اللغة',
   'onboarding.step_provider': 'اربط ذكاءً اصطناعيًا',

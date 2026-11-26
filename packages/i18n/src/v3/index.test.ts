@@ -96,6 +96,25 @@ describe('i18n v3', () => {
     expect(translate('ar', 'events.run_finished')).toBe('انتهى التشغيل');
   });
 
+  // D-RN-ONBOARDING-2: onboarding grew from three steps to five, and the
+  // subtitle said "three" for both. It must not claim a count at all, or it
+  // silently lies the next time the wizard gains or loses a step.
+  it('keeps the onboarding subtitle free of a step count that can drift', () => {
+    const englishCountWords = /\b(one|two|three|four|five|six|seven|eight|nine|ten)\b/i;
+    const arabicCountWords = /ثلاث|أربع|خمس|ستة|سبعة|ثماني|تسع|عشر|واحد|اثنت|خطوتين|مائة/;
+    for (const locale of ['en', 'ar'] as const) {
+      const subtitle = translate(locale, 'onboarding.subtitle');
+      expect(subtitle).not.toBe('onboarding.subtitle');
+      expect(/\d/.test(subtitle)).toBe(false);
+      expect(englishCountWords.test(subtitle)).toBe(false);
+      expect(arabicCountWords.test(subtitle)).toBe(false);
+    }
+    expect(translate('en', 'onboarding.subtitle')).toBe(
+      'Set up your workspace in a few simple steps'
+    );
+    expect(translate('ar', 'onboarding.subtitle')).toBe('جهّز مساحة عملك في بضع خطوات بسيطة');
+  });
+
   it('translates home.source.* keys cleanly in Arabic and English', () => {
     const sourceKeys = Object.keys(catalogs.en).filter((k) => k.startsWith('home.source.'));
     expect(sourceKeys.length).toBeGreaterThanOrEqual(20);

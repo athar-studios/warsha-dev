@@ -1,6 +1,6 @@
 export default {
   'onboarding.title': 'Get started',
-  'onboarding.subtitle': 'Set up your workspace in three simple steps',
+  'onboarding.subtitle': 'Set up your workspace in a few simple steps',
   'onboarding.step_indicator': 'Step {current} of {total}',
   'onboarding.step_language': 'Language',
   'onboarding.step_provider': 'Connect your AI',
