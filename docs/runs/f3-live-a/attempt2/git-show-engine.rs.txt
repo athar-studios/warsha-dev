@@ -1,0 +1,11 @@
+pub fn apply_fee(amount: i64, bps: u32) -> Option<i64> {
+    if bps > 10000 {
+        return None;
+    }
+    let fee = match (amount.unsigned_abs() as u128).checked_mul(u128::from(bps)) {
+        Some(product) => product / 10000,
+        None => return None,
+    };
+    let signed_fee = if amount < 0 { -(fee as i64) } else { fee as i64 };
+    amount.checked_add(signed_fee)
+}

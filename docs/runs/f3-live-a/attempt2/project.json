@@ -1,0 +1,17 @@
+{
+  "id": "c421a602-5881-4ec2-b402-d92aa31dbf72",
+  "name": "proofcalc-f3-live-a",
+  "description": "Real OpenCode four-lane proofcalc (F3 attempt A)",
+  "language": "en",
+  "created_at": "2026-11-26T02:57:18.555204598Z",
+  "updated_at": "2026-11-26T02:57:18.555208388Z",
+  "repo_path": "/home/moe/tools/f3-live-a/data/projects/c421a602-5881-4ec2-b402-d92aa31dbf72/repo",
+  "repo_url": null,
+  "confinement": "workspace_write",
+  "approval_mode": "never_ask",
+  "permissions": {
+    "confinement": "workspace_write",
+    "approval_mode": "never_ask",
+    "is_override": true
+  }
+}

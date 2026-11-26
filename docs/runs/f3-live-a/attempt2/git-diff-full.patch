@@ -1,0 +1,55 @@
+diff --git a/src/domain.rs b/src/domain.rs
+new file mode 100644
+index 0000000..6ec8926
+--- /dev/null
++++ b/src/domain.rs
+@@ -0,0 +1,10 @@
++pub struct Money {
++    pub cents: i64,
++}
++
++impl Money {
++    pub fn checked_add(self, other: Money) -> Option<Money> {
++        let total = self.cents.checked_add(other.cents)?;
++        Some(Money { cents: total })
++    }
++}
+diff --git a/src/engine.rs b/src/engine.rs
+new file mode 100644
+index 0000000..fb6c811
+--- /dev/null
++++ b/src/engine.rs
+@@ -0,0 +1,11 @@
++pub fn apply_fee(amount: i64, bps: u32) -> Option<i64> {
++    if bps > 10000 {
++        return None;
++    }
++    let fee = match (amount.unsigned_abs() as u128).checked_mul(u128::from(bps)) {
++        Some(product) => product / 10000,
++        None => return None,
++    };
++    let signed_fee = if amount < 0 { -(fee as i64) } else { fee as i64 };
++    amount.checked_add(signed_fee)
++}
+diff --git a/src/provider.rs b/src/provider.rs
+new file mode 100644
+index 0000000..acb7a16
+--- /dev/null
++++ b/src/provider.rs
+@@ -0,0 +1,3 @@
++pub trait RateSource {
++    fn rate_bps(&self) -> u32;
++}
+diff --git a/src/scaffold.rs b/src/scaffold.rs
+new file mode 100644
+index 0000000..45ac433
+--- /dev/null
++++ b/src/scaffold.rs
+@@ -0,0 +1,7 @@
++pub fn add(a: i64, b: i64) -> i64 {
++    match a.checked_add(b) {
++        Some(sum) => sum,
++        None if a > 0 && b > 0 => i64::MAX,
++        None => i64::MIN,
++    }
++}

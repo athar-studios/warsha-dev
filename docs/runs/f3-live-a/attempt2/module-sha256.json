@@ -1,0 +1,6 @@
+{
+  "src/scaffold.rs": "4cab5d424b4983f4a7466413e3eac6435ed029ee1240bf829cd3349889b342ab",
+  "src/domain.rs": "fa34146a1afddce1c85a8a84cbc66441ceaf0f918a1ac68ea8543ef172d40eea",
+  "src/engine.rs": "415dde023dff7c733e2d70b6d2174c7f754cb06e766a376c75306796d4c56454",
+  "src/provider.rs": "3ca8afaa43a997f68ed4f7606333d0db9198b434790e769156b388628bb1ce49"
+}

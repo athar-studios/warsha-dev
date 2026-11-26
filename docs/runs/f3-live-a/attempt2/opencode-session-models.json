@@ -1,0 +1,204 @@
+[
+  {
+    "session_id": "ses_dea369932ffe5kvcYxOgFCAVqY",
+    "title": "Rust stage fee engine",
+    "session_v2_model": null,
+    "directory": "/home/moe/tools/f3-live-a/data/worktrees/run-01M8AWJEG42HCPWQ4NKRFFQ6BT-subtask-01M8AWJJPMW9TPWXAA17HGM8GH",
+    "time_created": 1795661851907,
+    "time_updated": 1795662019181,
+    "assistant_messages": [
+      {
+        "id": "msg_215c99c98001p9EaftbdkcCE1r",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215cad64c001uH1dX6IT27OR6Y",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215cae9230012oPJJCXn8S2l7c",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215cba10f001x5l9ZWPu9ZCMW7",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215cbbb150018IfesFTJFOA8ey",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215cbcd11001LKMCiPePhCtkvW",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "stop"
+      }
+    ]
+  },
+  {
+    "session_id": "ses_dea369901ffeCWdh7T06NtVUaL",
+    "title": "Money checked_add overflow",
+    "session_v2_model": null,
+    "directory": "/home/moe/tools/f3-live-a/data/worktrees/run-01M8AWJEG42HCPWQ4NKRFFQ6BT-subtask-01M8AWJJPMRGTA0B49TQSZZ7FM",
+    "time_created": 1795661851879,
+    "time_updated": 1795661948599,
+    "assistant_messages": [
+      {
+        "id": "msg_215c9a027001IYH0mhlerLMbdq",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215c9e16e001G0XQRVDKTZ5NT1",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215c9ee55001cb1yNMrkWiK3aw",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215ca2f130015EPF26HBWHdmMY",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215ca46220016q2nVxgTGw9LCN",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215ca507e001qQw0FVCyMf7dGC",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215ca8f54001mtCLJfgJZi9NM5",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215cab31b001FFWStt09WRznGi",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215cac6ee00141EDEvhchDHeIl",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "stop"
+      }
+    ]
+  },
+  {
+    "session_id": "ses_dea36a440ffenkS5cRdZjxjj3r",
+    "title": "Rust checked_add saturation",
+    "session_v2_model": null,
+    "directory": "/home/moe/tools/f3-live-a/data/worktrees/run-01M8AWJEG42HCPWQ4NKRFFQ6BT-subtask-01M8AWJJPMZRQ35E99JEX3EGPA",
+    "time_created": 1795661850172,
+    "time_updated": 1795661934033,
+    "assistant_messages": [
+      {
+        "id": "msg_215c993e1001s7sUaQnoOUJqjr",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215ca2697001ZAigxtN0Ttba6k",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215ca341f001uTuU1jXf5n8Tlj",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215ca8257001yYoS68S4i4sTe5",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215ca8e4a001w7KnMvuYI1Ii7c",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215ca99c2001fBxx73NMD781Cg",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "stop"
+      }
+    ]
+  },
+  {
+    "session_id": "ses_dea36ad84ffeg27IArF07YZDYj",
+    "title": "RateSource provider trait",
+    "session_v2_model": null,
+    "directory": "/home/moe/tools/f3-live-a/data/worktrees/run-01M8AWJEG42HCPWQ4NKRFFQ6BT-subtask-01M8AWJJPM07CPMAE6Z9XXBCJ6",
+    "time_created": 1795661845585,
+    "time_updated": 1795661928731,
+    "assistant_messages": [
+      {
+        "id": "msg_215c98b3e0019d0REwRX0lV4Hj",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215c9d0c9001ZVRMA4Db0P6tx7",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215c9dae1001S42M55JTXt50K1",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215c9e412001cfWjnz7JL5FwH2",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215ca5174001nExC4gIx9Vdmd1",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "tool-calls"
+      },
+      {
+        "id": "msg_215ca620d001QqxF97l7RuPsdr",
+        "providerID": "opencode",
+        "modelID": "flint-40b-free",
+        "finish": "stop"
+      }
+    ]
+  }
+]

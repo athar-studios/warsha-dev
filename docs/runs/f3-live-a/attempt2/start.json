@@ -1,0 +1,48 @@
+{
+  "id": "01M8AWJEG42HCPWQ4NKRFFQ6BT",
+  "project_id": "c421a602-5881-4ec2-b402-d92aa31dbf72",
+  "current_stage": "idea",
+  "gate_states": {
+    "gate_d": {
+      "state": "pending"
+    },
+    "gate_c": {
+      "state": "pending"
+    },
+    "gate_b": {
+      "state": "pending"
+    },
+    "gate_a": {
+      "state": "pending"
+    }
+  },
+  "artifacts": {
+    "idea": {
+      "name": "idea",
+      "content": "Build proofcalc, the four disjoint pure Rust modules described by the task plan. Write only your assigned module. Do not stage or commit files. Cargo.toml, lib.rs and integration tests are sequential follow-ups supplied later.",
+      "stage": "idea",
+      "role": "intake",
+      "created_at": "2026-11-26T02:57:18.852105052Z",
+      "updated_at": "2026-11-26T02:57:18.852105310Z",
+      "version": 1
+    },
+    "brief": {
+      "name": "brief",
+      "content": "# Project Brief\n\n**Project ID:** c421a602-5881-4ec2-b402-d92aa31dbf72\n**Run ID:** 01M8AWJEG42HCPWQ4NKRFFQ6BT\n**Version:** 9\n**Created:** 2026-11-26T02:57:18.879230984+00:00\n**Updated:** 2026-11-26T02:57:18.879372968+00:00\n**Gate A Signed Off:** \u274c No\n\n\n---\n\n## Platforms\n\n**Which platforms should this project target?**\n> Web\n\n## Audience\n\n**Who is the target audience?**\n> To be determined\n\n## Languages\n\n**Which languages should the app support?**\n> Web\n\n## Monetization\n\n**What is the monetization model?**\n> Free\n\n## Branding\n\n**What is the project name?**\n> To be determined\n\n## Privacy\n\n**Is local-first/offline support required?**\n> No\n\n## Budget\n\n**Total project budget (USD)?**\n> 10000\n\n## Success Metric\n\n**How will you measure success?**\n> Free\n\n",
+      "stage": "idea",
+      "role": "intake",
+      "created_at": "2026-11-26T02:57:18.879618697Z",
+      "updated_at": "2026-11-26T02:57:18.879619353Z",
+      "version": 1
+    }
+  },
+  "created_at": "2026-11-26T02:57:18.852078087Z",
+  "updated_at": "2026-11-26T02:57:19.157416209Z",
+  "status": "running",
+  "budget_cents": 50000,
+  "spent_cents": 0,
+  "worktree_path": "/home/moe/tools/f3-live-a/data/worktrees/run-01M8AWJEG42HCPWQ4NKRFFQ6BT",
+  "worktree_branch": "warsha/run-01M8AWJEG42HCPWQ4NKRFFQ6BT",
+  "confinement": "workspace_write",
+  "run_mode": "agent"
+}
