@@ -2307,6 +2307,23 @@ describe('wave 2 client methods', () => {
       message: 'timeout',
     });
     expect(sentMethod(3)).toBe('integrations.test');
+
+    // A live GitHub test also names the authenticated login in `account`; an absent or null
+    // `account` stays omitted so callers do not see `{ account: undefined }`.
+    fetchMock.mockResolvedValueOnce(
+      okResponse({
+        status: 'ok',
+        message: 'GitHub accepted the token: it belongs to `octo-mock`',
+        account: 'octo-mock',
+      })
+    );
+    await expect(client.testIntegration('github')).resolves.toEqual({
+      status: 'ok',
+      message: 'GitHub accepted the token: it belongs to `octo-mock`',
+      account: 'octo-mock',
+    });
+    expect(sentMethod(4)).toBe('integrations.test');
+    expect(sentParams(4)).toEqual({ id: 'github' });
   });
 
   it('file methods dial files.* with project_id/path', async () => {

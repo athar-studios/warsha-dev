@@ -65,11 +65,20 @@ pub struct IntegrationConfig {
 /// The outcome of a live integration test ("check connection").
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IntegrationTestResult {
-    /// Coarse status: `ok`, `error`, `unconfigured`.
+    /// Coarse status: `ok`, `failed`, `unconfigured`.
     pub status: String,
     /// Human-readable message: what succeeded, or the first failure worth
     /// showing the owner.
     pub message: String,
+    /// The account the credential belongs to, when the service reported one.
+    ///
+    /// GitHub's `GET /user` answers with the login the token was issued for, and that is what
+    /// makes a token test worth running: it says *whose* token it is, so an owner who pasted a
+    /// colleague's token sees whose account the workspace is about to act as. Absent for every
+    /// integration whose test does not identify an account yet, and skipped from the JSON when
+    /// absent so an older client decodes exactly what it decoded before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
 }
 
 /// One entry in a directory listing for the in-app file browser.

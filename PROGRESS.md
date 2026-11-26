@@ -1,25 +1,19 @@
 # PROGRESS.md — Warsha Build Log
 
-## Run 2026-11-26 — Onboarding rebuild: connection method, GitHub step, Settings Connection (D-RN-ONBOARDING-2)
+## Run 2026-11-26 — Onboarding rebuild backend lane (D-RN-ONBOARDING-1)
 
-- **Branch & worktree**: `r-next/onb-ui` (base `171fb89`, rebased onto `2aef9ea`; packet commit `7fd8f78`) in `.agents/worktrees/onb-ui`. Local commit only; no push, merge, tag, or `main` changes. `crates/`, `apps/desktop/src-tauri/` and `packages/client/` untouched (backend lane owns them).
+- **Branch & worktree**: `r-next/onb-backend` (rebased onto `2aef9ea`) in `.agents/worktrees/onb-backend`. Local commit only; no push, merge, tag, or `main` changes.
 - **Changes**:
-  - `apps/desktop/src/v3/components/ConnectionMethodForm.tsx` + `.css` (new): shared Local/Server picker with `test_daemon_connection` before save, per-reason plain explanations, "Use this device instead", an honest browser-mode notice, and the config writers (`daemon_url` → `daemon_ws_url` → `daemon_token` → `connection_mode` last).
-  - `apps/desktop/src/v3/pages/onboarding/index.tsx`, `onboarding.css`: five steps `language → connection → provider → github → idea`, `readInitialStep` for the new steps, connection Continue gated on a passing test, provider "Skip for now" with a persistent warning on the idea step, and a skippable GitHub step (`connectIntegration` + `testIntegration`, "Connected as @login", token cleared after success).
-  - `apps/desktop/src/v3/pages/settings/sections/ConnectionSection.tsx` (new) + `settings/{types,index}.tsx`: registered section id `connection`, shows the stored mode/address and a masked "token set" state (never the token), same test-before-save rule, notes that saving reconnects.
-  - `apps/desktop/src/v3/actions/registry/{onboarding,settings}.ts`: `connection.mode.pick`, `connection.test`, `connection.use-local`, `onboarding.provider.skip`, `onboarding.github.connect`, `onboarding.github.skip`, `settings.connection.save`.
-  - `packages/i18n/src/v3/{en,ar}/{onboarding,settings}.ts`: `onboarding.connection.*`, `onboarding.provider.skip*`, `onboarding.github.*`, `settings.section.connection.*` in crisp EN and natural MSA, parity preserved. `onboarding.subtitle` no longer claims a step count (it said "three" for a five-step wizard) and `packages/i18n/src/v3/index.test.ts` now fails if either locale reintroduces a digit or a count word there.
-  - Tests: `apps/desktop/src/v3/pages/onboarding/Onboarding.test.tsx` (six new proving tests plus the updated five-step journeys and a stateful shell stub so the real `invoke` path runs), `apps/desktop/src/v3/pages/settings/sections/ConnectionSection.test.tsx` (new, 4 tests incl. the onboarding→Settings round-trip), `apps/desktop/src/v3/pages/settings/Settings.test.tsx` (nav counts 5→6 primary, 19→20 total), `apps/desktop/e2e/v3/{onboarding,settings}.spec.ts` (new step order, connection/GitHub/provider-skip journeys, connection save).
-  - `DECISIONS.md`: `D-RN-ONBOARDING-2`.
-- **Verification** (re-run on the rebased tree, with `node_modules` symlinked from `/home/moe/Downloads/Warsha` and removed again before the commit):
-  - `pnpm --dir packages/i18n exec vitest run`: exit 0 (**2 files / 64 passed**).
-  - `pnpm --dir apps/desktop exec vitest run`: exit 0 (**94 files / 888 passed**, 0 failed).
-  - `pnpm --dir apps/desktop exec tsc --noEmit`: exit 0.
-  - `pnpm --dir apps/desktop exec eslint src --ext .ts,.tsx`: exit 0, 0 errors, 1 pre-existing warning at `apps/desktop/src/v3/pages/developers/index.tsx:291`.
-  - `pnpm --dir apps/desktop exec vite build`: exit 0.
+  - `apps/desktop/src-tauri` (`Cargo.toml`, `Cargo.lock`, `src/lib.rs`): added `connection_mode` (`local` default / `server`), validated `daemon_url` and `daemon_ws_url` (with `http->ws` / `https->wss` derivation), stored `daemon_token` safely, kept `data_dir` read-only, added `test_daemon_connection` JSON-RPC `health` probe (5s timeout via `reqwest`), and added 6 unit tests covering ok, 401/403->`unauthorized`, closed port->`unreachable`, garbage->`bad_response`, invalid scheme->`invalid_url`, and server/local round-trip + fresh `ShellState` reload.
+  - `crates/warsha-core/src/config.rs`, `crates/warsha-git/src/lib.rs`, `crates/warsha-git/tests/current_user.rs`: added `IntegrationTestResult.account`, `GithubUser { login, name }`, `GitHubClient::current_user()`, and 5 loopback mock tests.
+  - `crates/warshad` (`src/{api.rs,lib.rs,rpc/mod.rs,test_util.rs,tests/mod.rs,tests/integration_github.rs}`, `tests/wave2_rpc.rs`): wired `integrations.test` for `"github"` to live `GET {api_base}/user` (`WARSHA_GITHUB_API_BASE` override -> `DaemonConfig::github_api_base` -> `https://api.github.com`) via `resolve_github_token` + `FallbackSecretStore`, added `ENV_LOCK`/`EnvVarGuard`, serialized `integration_github` tests behind `ENV_LOCK`, and added 7 unit tests (200 `octo-mock`, 401, 500 token redaction, closed-port network error, unconfigured, env/config precedence, `FallbackSecretStore` locked-keychain round-trip) + updated `wave2_rpc`.
+  - `packages/client/src/{index.ts,index.test.ts}`: added `account?: string` to `IntegrationTestResult`, decoded in `decodeIntegrationTestResult`, and added unit test coverage.
+  - Recorded `D-RN-ONBOARDING-1` in `DECISIONS.md`.
+- **Verification**:
+  - `apps/desktop/src-tauri`: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (**15 passed**, 0 failed).
+  - Workspace (`CARGO_TARGET_DIR=/home/moe/tools/target-onb-backend`): `cargo fmt --all --check` exit 0; `cargo clippy -p warshad -p warsha-git -p warsha-core --all-targets -- -D warnings` exit 0; `cargo test -p warsha-git` (**22 passed**, 0 failed); `cargo test -p warshad integration` (**11 passed**, 0 failed); `cargo test -p warshad project_source` (**4 passed**, 0 failed); `cargo test -p warsha-providers secrets` (**12 passed**, 0 failed).
+  - `@warsha/client`: `vitest run` (**2 files / 208 passed**, 0 failed), `tsc --noEmit` exit 0.
   - `node scripts/check-engineering-policy.mjs`: exit 0 (**8 checks, 0 failures**).
-  - `node scripts/ci/actions-gate.mjs` (re-run on the rebased tree): **208 registered, 208 used, 11 violations** — identical to the pre-rebase baseline (A1 `ProjectSourcePicker.tsx` ×6 and `SecretaryChat.tsx` ×4, A6 `factory.retry`); all 7 new action ids are registered, used, and covered by e2e.
-  - **Not run**: Playwright e2e (`apps/desktop/e2e/v3/*.spec.ts`) — no browsers or dev server in this environment; the specs were updated for the new step order but not executed here.
 
 ## Run 2026-11-26 — Project Source Options UI + Tauri folder picker (D-RN-PROJECT-SOURCE-2)
 

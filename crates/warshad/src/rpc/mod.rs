@@ -28,6 +28,16 @@ use crate::{
     AgentLoopSnapshot, DaemonState, Policy, ProcessPolicy, Result, RpcExtensions,
 };
 
+/// The environment variable that points this daemon's live GitHub calls at another REST base.
+///
+/// It exists for the tests and for the Playwright mocks, which have to exercise a real token
+/// check against a loopback server; every installed daemon leaves it unset, and
+/// [`WarshaRpc::github_api_base`] falls through to the configured base and then to GitHub itself.
+pub(crate) const GITHUB_API_BASE_ENV: &str = "WARSHA_GITHUB_API_BASE";
+
+/// GitHub's REST API: the base when neither the environment nor the config names another.
+const DEFAULT_GITHUB_API_BASE: &str = "https://api.github.com";
+
 /// The JSON-RPC error a `providers.*` refusal carries.
 ///
 /// The message is the reason the owner is shown, and every message this module
@@ -671,6 +681,36 @@ impl WarshaRpc {
         catalog_from_registry(&registry, &rows, None).map_err(rpc_policy_refused)
     }
 
+    /// The GitHub REST base every live call in this daemon uses.
+    ///
+    /// Three answers, most specific first:
+    ///
+    /// 1. `WARSHA_GITHUB_API_BASE`, because a test or a Playwright mock has to point a whole
+    ///    daemon at a loopback server without writing a config file;
+    /// 2. `DaemonConfig::github_api_base`, which is how a GitHub Enterprise install names its
+    ///    own API — a daemon configured for one must not go on to call `api.github.com`;
+    /// 3. GitHub's own base.
+    ///
+    /// The trailing slash is dropped: every caller appends `/user` or `/repos/...` to it.
+    pub(crate) fn github_api_base(&self) -> String {
+        github_api_base_for(
+            std::env::var(GITHUB_API_BASE_ENV).ok().as_deref(),
+            self.state.config.github_api_base.as_deref(),
+        )
+    }
+
+    /// The one GitHub token this daemon has, and where it was found.
+    ///
+    /// One token, one store, one reader. `integrations.connect github` writes it under
+    /// [`wave2::integration_secret_account`], which resolves to the fallback store the daemon
+    /// was started with — the OS keychain with the encrypted file behind it (see
+    /// `startup::start_daemon`) — so a keychain that is locked costs the owner a retyped
+    /// password, not a different credential. The same reader answers
+    /// `projects.github_status`, `projects.create_github_repo` and `integrations.test`, which is
+    /// what makes "the settings screen says connected" and "the repo was created" the same fact.
+    ///
+    /// The two older locations stay as fallbacks for an install that predates the store: the
+    /// `github_token` secret, and the client `startup` built from the environment.
     pub(crate) async fn resolve_github_token(&self) -> Option<(String, &'static str)> {
         if let Ok(secret) = self
             .state
@@ -696,6 +736,83 @@ impl WarshaRpc {
             }
         }
         None
+    }
+
+    /// `integrations.test github`: one live `GET /user` with the token the daemon already uses.
+    ///
+    /// Four outcomes, and each one is a sentence an owner can act on:
+    ///
+    /// - **no token** → `unconfigured`, exactly as before this call existed;
+    /// - **a rejected token** → `failed`, saying GitHub refused it (expired, revoked, or a
+    ///   credential kind that cannot read its own account);
+    /// - **anything else that went wrong** → `failed`, with the reason redacted of the token;
+    /// - **a token GitHub accepted** → `ok`, naming the login it belongs to in `account` *and* in
+    ///   the message, because the account is the fact that separates "this token works" from
+    ///   "this token works for the account I meant".
+    ///
+    /// The API base comes from [`WarshaRpc::github_api_base`], so a test or a mock points this at
+    /// a loopback server and no test run reaches GitHub.
+    pub(crate) async fn test_github_integration(&self) -> RpcResult<IntegrationTestResult> {
+        let Some((token, _source)) = self.resolve_github_token().await else {
+            return Ok(IntegrationTestResult {
+                status: "unconfigured".to_string(),
+                message: "`github` is missing an access token: integrations.connect writes the \
+                          configuration, and no live request is made from here"
+                    .to_string(),
+                account: None,
+            });
+        };
+        let client = match warsha_git::GitHubClient::new(&token) {
+            Ok(client) => client.with_api_base(&self.github_api_base()),
+            // An empty token cannot reach here — `resolve_github_token` filters it — but a
+            // client that refuses to be built must still answer in the words of this method
+            // rather than as an RPC error the settings screen has no case for.
+            Err(error) => {
+                return Ok(IntegrationTestResult {
+                    status: "failed".to_string(),
+                    message: format!(
+                        "the GitHub check could not start: {}",
+                        redact_token(&error.to_string(), &token)
+                    ),
+                    account: None,
+                })
+            }
+        };
+
+        match client.current_user().await {
+            Ok(user) => {
+                let login = user.login.trim().to_string();
+                if login.is_empty() {
+                    return Ok(IntegrationTestResult {
+                        status: "failed".to_string(),
+                        message: "GitHub answered the token check without an account name, so \
+                                  this token cannot read its own account"
+                            .to_string(),
+                        account: None,
+                    });
+                }
+                Ok(IntegrationTestResult {
+                    status: "ok".to_string(),
+                    message: format!("GitHub accepted the token: it belongs to `{login}`"),
+                    account: Some(login),
+                })
+            }
+            Err(warsha_git::GitError::AuthRequired) => Ok(IntegrationTestResult {
+                status: "failed".to_string(),
+                message: "GitHub rejected the access token: it is expired, revoked, or not a \
+                          token that can read its account"
+                    .to_string(),
+                account: None,
+            }),
+            Err(error) => Ok(IntegrationTestResult {
+                status: "failed".to_string(),
+                message: format!(
+                    "the GitHub check could not finish: {}",
+                    redact_token(&error.to_string(), &token)
+                ),
+                account: None,
+            }),
+        }
     }
 
     pub(crate) async fn resolve_projects_parent_dir(
@@ -753,6 +870,35 @@ pub(crate) fn rpc_invalid_params(message: impl Into<String>) -> ErrorObjectOwned
 ///
 /// `-32000` is the daemon's existing "server error" code; the message is the
 /// `thiserror` rendering, which names the process, server or project involved.
+/// `message` with `token` replaced, for a string that may be shown to the owner or logged.
+///
+/// The token is compared trimmed, because a stored credential is trimmed before use and a
+/// message quoting the untrimmed original would otherwise survive redaction. An empty token
+/// redacts nothing: replacing the empty string everywhere would destroy the message.
+/// The GitHub REST base, given the two things that can name one instead of GitHub's own.
+///
+/// Pure so that the precedence can be tested without touching the process environment: a test
+/// that set `WARSHA_GITHUB_API_BASE` would redirect every other test in the binary that reaches
+/// GitHub, and the value it proves is the same value this function answers.
+pub(crate) fn github_api_base_for(env_base: Option<&str>, configured: Option<&str>) -> String {
+    let named = |base: &str| {
+        let trimmed = base.trim().trim_end_matches('/');
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    };
+    env_base
+        .and_then(named)
+        .or_else(|| configured.and_then(named))
+        .unwrap_or_else(|| DEFAULT_GITHUB_API_BASE.to_string())
+}
+
+pub(crate) fn redact_token(message: &str, token: &str) -> String {
+    let token = token.trim();
+    if token.is_empty() {
+        return message.to_string();
+    }
+    message.replace(token, "[REDACTED]")
+}
+
 pub(crate) fn rpc_error(message: impl std::fmt::Display) -> ErrorObjectOwned {
     ErrorObject::owned(-32000, message.to_string(), None::<()>)
 }

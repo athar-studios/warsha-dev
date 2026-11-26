@@ -11,8 +11,37 @@
 
 #![allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 use tempfile::TempDir;
+
+/// Serialise tests that mutate a process-wide environment variable such as
+/// `WARSHA_GITHUB_API_BASE`.
+pub(crate) static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// RAII guard that captures the prior value of an environment variable and restores (or
+/// removes) it when dropped — including across `.await` points and test panics.
+pub(crate) struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<OsString>,
+}
+
+impl EnvVarGuard {
+    pub(crate) fn set(key: &'static str, value: &str) -> Self {
+        let previous = std::env::var_os(key);
+        std::env::set_var(key, value);
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(prev) => std::env::set_var(self.key, prev),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
 
 /// A fresh temp directory for one test's data.
 ///
