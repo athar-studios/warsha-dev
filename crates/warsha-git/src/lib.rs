@@ -305,6 +305,21 @@ pub struct Repository {
     pub default_branch: Option<String>,
 }
 
+/// Subset of the GitHub user payload Warsha relies on: `GET /user`.
+///
+/// The login is the part that matters. It is what the onboarding wizard shows the owner as "the
+/// token belongs to this account", and what a daemon reports when a token turns out to have been
+/// issued to somebody other than the account the workspace expected.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GithubUser {
+    /// The account's login, for example `octocat`.
+    #[serde(default)]
+    pub login: String,
+    /// The display name the account has set, when it has one.
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
 /// Subset of the GitHub issue payload Warsha relies on.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Issue {
@@ -474,6 +489,43 @@ impl GitHubClient {
     /// Return the bearer token held by this client (for transient git HTTPS auth).
     pub fn token(&self) -> &str {
         &self.token
+    }
+
+    /// The account this client's token belongs to: `GET /user`.
+    ///
+    /// This is the only GitHub call that tests the token itself rather than using it: GitHub
+    /// answers with the account the bearer token was issued for and 401 when it is expired,
+    /// revoked, or a credential of a kind that cannot read `/user`. That makes it the call a
+    /// "test this token" button should make — it says both *whether* the token works and *whose*
+    /// it is, which is the difference between a token that was mistyped and one that was copied
+    /// from the wrong account.
+    ///
+    /// A 401/403 is reported as [`GitError::AuthRequired`] rather than as a formatted HTTP error,
+    /// so the caller can tell "the token was rejected" from "GitHub answered something else"
+    /// without matching on prose.
+    pub async fn current_user(&self) -> Result<GithubUser> {
+        let request = self.authorized(self.client.get(self.endpoint("user")));
+        let response = request
+            .send()
+            .await
+            .map_err(|e| GitError::GitHub(format!("GitHub request failed: {e}")))?;
+        let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(GitError::AuthRequired);
+        }
+        let body = response
+            .text()
+            .await
+            .map_err(|e| GitError::GitHub(format!("could not read GitHub response: {e}")))?;
+        if !status.is_success() {
+            let code = status.as_u16();
+            let detail = truncate(&body, 300);
+            return Err(GitError::GitHub(format!(
+                "GitHub returned HTTP {code}: {detail}"
+            )));
+        }
+        serde_json::from_str(&body)
+            .map_err(|e| GitError::GitHub(format!("could not decode GitHub user: {e}")))
     }
 
     /// Create a repository owned by the authenticated account.

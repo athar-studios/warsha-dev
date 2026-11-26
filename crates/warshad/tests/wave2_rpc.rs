@@ -144,6 +144,25 @@ async fn daemon_over(dir: &Path, secrets: Arc<InMemorySecretStore>) -> (DaemonHa
     (handle, rpc)
 }
 
+/// The same daemon with GitHub's REST base pointed at a loopback stub.
+///
+/// `integrations.test github` makes a real `GET /user`; without this a test would reach
+/// GitHub itself, which no test in this repository does.
+async fn daemon_over_github(
+    dir: &Path,
+    secrets: Arc<InMemorySecretStore>,
+    github_api_base: &str,
+) -> (DaemonHandle, Rpc) {
+    std::fs::create_dir_all(dir).expect("data dir created");
+    let mut daemon_config = config(dir);
+    daemon_config.github_api_base = Some(github_api_base.to_string());
+    let handle = start_daemon_with_secrets(daemon_config, secrets)
+        .await
+        .expect("daemon starts");
+    let rpc = Rpc::new(handle.rpc_port());
+    (handle, rpc)
+}
+
 struct StubEndpoint {
     base_url: String,
     #[allow(dead_code)]
@@ -151,7 +170,25 @@ struct StubEndpoint {
 }
 
 impl StubEndpoint {
+    /// The catalog stub: `{"data":[],"object":"list"}` on 200, under a `/v1` base.
     fn start(status: u16) -> Self {
+        let body = if status == 200 {
+            r#"{"data":[],"object":"list"}"#
+        } else {
+            r#"{"error":"unauthorized"}"#
+        };
+        Self::start_reply(status, body, "/v1")
+    }
+
+    /// A GitHub `/user` stub: the body is the account the daemon's token check will read.
+    ///
+    /// No path and no `/v1` suffix, because `warsha-git` appends `/user` to the base it is given.
+    fn start_user(body: &'static str) -> Self {
+        Self::start_reply(200, body, "")
+    }
+
+    /// Serve one fixed answer for every request, remembering each `Authorization` header.
+    fn start_reply(status: u16, body: &'static str, suffix: &str) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
         let port = listener.local_addr().expect("bound address").port();
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -171,11 +208,6 @@ impl StubEndpoint {
                 }
                 captured.lock().expect("capture lock").push(authorization);
 
-                let body = if status == 200 {
-                    r#"{"data":[],"object":"list"}"#
-                } else {
-                    r#"{"error":"unauthorized"}"#
-                };
                 let response = format!(
                     "HTTP/1.1 {status} stub\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                     body.len()
@@ -185,7 +217,7 @@ impl StubEndpoint {
         });
 
         Self {
-            base_url: format!("http://127.0.0.1:{port}/v1"),
+            base_url: format!("http://127.0.0.1:{port}{suffix}"),
             seen,
         }
     }
@@ -524,7 +556,9 @@ async fn test_wave2_integrations_rpc_and_credential_validation() {
     let dir = fresh_tempdir();
     let data_dir = dir.path().join("data");
     let secrets = Arc::new(InMemorySecretStore::new());
-    let (handle, rpc) = daemon_over(&data_dir, secrets).await;
+    // `integrations.test github` is a live call, so this daemon's GitHub is the loopback stub.
+    let github = StubEndpoint::start_user(r#"{"login":"octo-wave2"}"#);
+    let (handle, rpc) = daemon_over_github(&data_dir, secrets, &github.base_url).await;
 
     // 1. integrations.list
     let list_res = rpc.call("integrations.list", json!([])).await;
@@ -546,11 +580,13 @@ async fn test_wave2_integrations_rpc_and_credential_validation() {
     assert_eq!(gh_connect["id"], "github");
     assert_eq!(gh_connect["connected"], true);
 
-    // 3. integrations.test GitHub (D3: requires only has_token) -> status "ok"
+    // 3. integrations.test GitHub: one live `GET /user` through the stub, which answers as
+    //    the account the token belongs to (D-RN-ONBOARDING-1).
     let gh_test = rpc
         .call("integrations.test", json!({ "id": "github" }))
         .await;
     assert_eq!(gh_test["status"], "ok");
+    assert_eq!(gh_test["account"], "octo-wave2");
 
     // 4. integrations.connect Slack with webhook URL only
     let slack_connect = rpc

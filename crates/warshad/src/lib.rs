@@ -4536,15 +4536,24 @@ impl WarshaApiServer for WarshaRpc {
         self.integration_status_of(&row.id).await
     }
 
-    /// Report what a daemon that opens no socket can know about an integration.
+    /// What a live check of one integration says.
     ///
-    /// This is the one method under the Spend tier, and the reason it does not spend:
-    /// a check that reached GitHub or Slack would be the daemon using an owner's quota
-    /// on their behalf, and this batch's rule is that no RPC quietly goes to a third
-    /// party. So `ok` means "the configuration is complete and filed" and `unconfigured`
-    /// names the half that is missing — and neither word claims a connection was made.
-    /// A future live probe is a separate decision with its own budget, not a detail of
-    /// this method.
+    /// `github` is checked for real: one `GET /user` through `warsha-git` with the token
+    /// [`Self::resolve_github_token`] finds, which is the token `projects.github_status` and
+    /// `projects.create_github_repo` already use. That call is the cheapest proof a personal
+    /// access token can give — it is a read, it writes nothing, and it answers *whose* token it
+    /// is, which is the thing an owner who pasted a token out of a password manager most needs to
+    /// hear. Its rate limit is generous enough that a settings-screen button does not spend
+    /// anyone's quota.
+    ///
+    /// Every other integration keeps the behaviour it had: the check reports whether the
+    /// configuration is complete and filed, and says so in words that do not claim a connection
+    /// was made. A live Slack probe needs a webhook post or an `auth.test` with a bot token —
+    /// a separate decision with its own budget.
+    ///
+    /// A failure never carries the token. GitHub does not echo it, but a proxy or a captive
+    /// portal in front of a self-hosted base might put the request URL in its body, and a message
+    /// the owner can paste into a bug report is not the place to find that out.
     async fn test_integration(
         &self,
         ext: &RpcExtensions,
@@ -4552,6 +4561,9 @@ impl WarshaApiServer for WarshaRpc {
     ) -> RpcResult<IntegrationTestResult> {
         self.authorize(ext, "integrations.test").await?;
         let row = self.stored_integration(&id).await?;
+        if row.id == "github" {
+            return self.test_github_integration().await;
+        }
         let config = wave2::integration_config(&row).map_err(rpc_error)?;
         let has_token = self
             .state
@@ -4571,13 +4583,6 @@ impl WarshaApiServer for WarshaRpc {
             .map(|url| !url.trim().is_empty())
             .unwrap_or(false);
         let missing: Vec<&str> = match row.id.as_str() {
-            "github" => {
-                if !has_token {
-                    vec!["an access token"]
-                } else {
-                    Vec::new()
-                }
-            }
             "slack" => {
                 if !has_webhook && !has_bot_token {
                     vec!["a webhook URL or bot token"]
@@ -4613,6 +4618,7 @@ impl WarshaApiServer for WarshaRpc {
                     missing.join(" or ")
                 )
             },
+            account: None,
         })
     }
 

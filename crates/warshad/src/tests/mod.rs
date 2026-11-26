@@ -3,6 +3,7 @@ use warsha_providers::{InMemorySecretStore, OneClickProvider};
 
 #[cfg(unix)]
 mod clean1_swarm;
+mod integration_github;
 mod project_source;
 
 #[test]

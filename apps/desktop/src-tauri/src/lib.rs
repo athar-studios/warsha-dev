@@ -34,14 +34,30 @@ pub const CONFIG_DAEMON_TOKEN: &str = "daemon_token";
 /// Config key reporting the data directory the daemon and desktop settings live in.
 pub const CONFIG_DATA_DIR: &str = "data_dir";
 
-/// The keys above are the shell's to answer: `set_config` refuses them, so a stray write
-/// from the webview cannot point the app at an endpoint that is not there or alter the data directory.
-const SHELL_OWNED_KEYS: [&str; 4] = [
-    CONFIG_DAEMON_URL,
-    CONFIG_DAEMON_WS_URL,
-    CONFIG_DAEMON_TOKEN,
-    CONFIG_DATA_DIR,
-];
+/// Config key naming where the daemon the frontend talks to lives: `local` or `server`.
+///
+/// Unset is `local`, which is the behaviour every earlier build had: the three `daemon_*`
+/// keys answer from the daemon this process started (or found already running). `server`
+/// makes them answer from the values the owner stored in `desktop.json` instead, which is
+/// how the onboarding wizard points a desktop install at a daemon on another machine. The
+/// local daemon keeps starting either way, so switching back is one write and no restart.
+pub const CONFIG_CONNECTION_MODE: &str = "connection_mode";
+
+/// The two values [`CONFIG_CONNECTION_MODE`] accepts.
+const CONNECTION_MODE_LOCAL: &str = "local";
+const CONNECTION_MODE_SERVER: &str = "server";
+
+/// The one key the shell alone answers: `set_config` refuses it, so a stray write from the
+/// webview cannot alter where the daemon's data lives.
+///
+/// The three `daemon_*` keys used to be here too. They are writable now — that is what
+/// `connection_mode = server` needs — and the local endpoint they used to report is still
+/// answered from the shell's own state, never from a stale file, because the stored values
+/// are only served when the owner chose `server` and gave a non-empty `daemon_url`.
+const SHELL_OWNED_KEYS: [&str; 1] = [CONFIG_DATA_DIR];
+
+/// How long `test_daemon_connection` waits for an answer before calling an address unreachable.
+const DAEMON_TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Name of the settings file the non-daemon preferences live in, inside the daemon's data dir.
 ///
@@ -100,22 +116,118 @@ impl ShellState {
 
     /// The value `get_config` answers for `key`.
     ///
-    /// The daemon keys and `data_dir` are answered from the endpoint and environment the shell
-    /// started, never from the file: a stale `desktop.json` must not be able to redirect the
-    /// frontend or report a wrong data folder. Every other key is the webview's own, and an unknown
-    /// key is the empty string — which is what the frontend's `checkOnboarding` already expects
-    /// for "not set yet".
+    /// The daemon keys are answered from the endpoint this shell started — or, when the owner
+    /// switched [`CONFIG_CONNECTION_MODE`] to `server` and stored a `daemon_url`, from the server
+    /// values in `desktop.json`. `data_dir` is always the shell's own. Every other key is the
+    /// webview's own, and an unknown key is the empty string — which is what the frontend's
+    /// `checkOnboarding` already expects for "not set yet".
     fn get(&self, key: &str) -> String {
         match key {
-            CONFIG_DAEMON_URL => self.endpoint.base_url.clone(),
-            CONFIG_DAEMON_WS_URL => self.endpoint.ws_url.clone(),
-            CONFIG_DAEMON_TOKEN => self.endpoint.token.clone(),
+            CONFIG_DAEMON_URL | CONFIG_DAEMON_WS_URL | CONFIG_DAEMON_TOKEN => {
+                self.daemon_value(key)
+            }
+            CONFIG_CONNECTION_MODE => self.connection_mode(),
             CONFIG_DATA_DIR => self.data_dir.display().to_string(),
             _ => self.preferences().get(key).cloned().unwrap_or_default(),
         }
     }
 
-    /// Persist `key = value` for the webview's own keys.
+    /// Where the frontend should look for the daemon: `local` until the owner says otherwise.
+    fn connection_mode(&self) -> String {
+        match self.preferences().get(CONFIG_CONNECTION_MODE) {
+            Some(mode) if mode.trim().eq_ignore_ascii_case(CONNECTION_MODE_SERVER) => {
+                CONNECTION_MODE_SERVER.to_string()
+            }
+            _ => CONNECTION_MODE_LOCAL.to_string(),
+        }
+    }
+
+    /// One of the three `daemon_*` keys: the stored server value, or the local endpoint.
+    ///
+    /// The switch is the owner's stored `connection_mode` **and** a non-empty stored
+    /// `daemon_url`: a mode without an address is not a server to talk to, so the local endpoint
+    /// stays the answer instead of an empty string the frontend would have to guess about. A
+    /// single stored key that is empty (a token the owner has not typed yet) falls back to the
+    /// local endpoint's value for that key rather than leaving the frontend with nothing.
+    fn daemon_value(&self, key: &str) -> String {
+        let local = match key {
+            CONFIG_DAEMON_URL => self.endpoint.base_url.clone(),
+            CONFIG_DAEMON_WS_URL => self.endpoint.ws_url.clone(),
+            _ => self.endpoint.token.clone(),
+        };
+        if self.connection_mode() != CONNECTION_MODE_SERVER {
+            return local;
+        }
+        let preferences = self.preferences();
+        let stored_url = preferences
+            .get(CONFIG_DAEMON_URL)
+            .map(|url| url.trim().to_string())
+            .unwrap_or_default();
+        if stored_url.is_empty() {
+            return local;
+        }
+        match preferences.get(key).map(|value| value.trim().to_string()) {
+            Some(value) if !value.is_empty() => value,
+            _ => local,
+        }
+    }
+
+    /// The value one writable key is stored as, after the validation its shape needs.
+    ///
+    /// The three server keys are validated here rather than in the webview because this is the
+    /// process that will hand them to the frontend and, for `daemon_ws_url`, derive what the
+    /// owner left blank: a URL that does not parse is refused with a sentence the settings screen
+    /// can show, not stored and then failed at connect time.
+    fn stored_value(&self, key: &str, value: &str) -> Result<String, String> {
+        let trimmed = value.trim();
+        match key {
+            CONFIG_DAEMON_URL => {
+                if trimmed.is_empty() {
+                    Ok(String::new())
+                } else {
+                    http_base(trimmed).ok_or_else(|| {
+                        "daemon_url must be an http:// or https:// address, or empty to clear it"
+                            .to_string()
+                    })
+                }
+            }
+            CONFIG_DAEMON_WS_URL => {
+                if trimmed.is_empty() {
+                    // An empty ws url is not a value to store: it is the owner asking for the one
+                    // that matches the address they gave. The stored server url answers when
+                    // there is one, the local endpoint otherwise, so clearing the field always
+                    // leaves a usable pair behind.
+                    let stored = self
+                        .preferences()
+                        .get(CONFIG_DAEMON_URL)
+                        .map(|url| url.trim().to_string())
+                        .unwrap_or_default();
+                    let source = if stored.is_empty() {
+                        self.endpoint.base_url.clone()
+                    } else {
+                        stored
+                    };
+                    Ok(derive_ws_url(&source).unwrap_or_default())
+                } else {
+                    ws_base(trimmed).ok_or_else(|| {
+                        "daemon_ws_url must be a ws:// or wss:// address, or empty to derive it"
+                            .to_string()
+                    })
+                }
+            }
+            CONFIG_DAEMON_TOKEN => Ok(trimmed.to_string()),
+            CONFIG_CONNECTION_MODE => match trimmed.to_ascii_lowercase().as_str() {
+                "" | CONNECTION_MODE_LOCAL => Ok(CONNECTION_MODE_LOCAL.to_string()),
+                CONNECTION_MODE_SERVER => Ok(CONNECTION_MODE_SERVER.to_string()),
+                other => Err(format!(
+                    "connection_mode must be \"local\" or \"server\", not \"{other}\""
+                )),
+            },
+            _ => Ok(value.to_string()),
+        }
+    }
+
+    /// Persist `key = value` for the webview's own keys and the four server-connection keys.
     ///
     /// Three things a stored preference owes its owner, only one of which the first
     /// version of this shell did:
@@ -127,6 +239,11 @@ impl ShellState {
     /// - **it does not lose what it did not write**: the file is read again and merged, so a key
     ///   the owner set from another window of the same install survives;
     /// - **a failure is said**, in the error string the webview shows and in `desktop.log`.
+    ///
+    /// Storing a server address without a ws address fills the ws address in from it, so the
+    /// pair the frontend reads back is never half-derived. The token is logged as "stored" or
+    /// "cleared" and never by value: `desktop.log` is a plain-text file the installer
+    /// documentation points owners at.
     fn set(&self, key: &str, value: &str) -> Result<(), String> {
         if SHELL_OWNED_KEYS.contains(&key) {
             return Err(format!("{key} is reported by the shell and cannot be set"));
@@ -134,9 +251,21 @@ impl ShellState {
         if key.trim().is_empty() {
             return Err("a setting needs a name".to_string());
         }
+        let stored = self.stored_value(key, value)?;
         let snapshot = {
             let mut settings = self.preferences();
-            settings.insert(key.to_string(), value.to_string());
+            settings.insert(key.to_string(), stored.clone());
+            if key == CONFIG_DAEMON_URL && !stored.is_empty() {
+                let missing_ws = settings
+                    .get(CONFIG_DAEMON_WS_URL)
+                    .map(|ws| ws.trim().is_empty())
+                    .unwrap_or(true);
+                if missing_ws {
+                    if let Some(derived) = derive_ws_url(&stored) {
+                        settings.insert(CONFIG_DAEMON_WS_URL.to_string(), derived);
+                    }
+                }
+            }
             settings.clone()
         };
         let mut merged = read_settings(&self.settings_path);
@@ -148,7 +277,9 @@ impl ShellState {
         write_settings(&self.settings_path, &merged).map_err(|error| {
             self.note(&format!("could not store {key}: {error}"));
             error
-        })
+        })?;
+        self.note(&format!("{key} {}", logged_value(key, &stored)));
+        Ok(())
     }
 
     /// Append one line to the shell's log, best effort: a log that cannot be written must not be
@@ -227,6 +358,68 @@ fn write_settings(path: &Path, settings: &BTreeMap<String, String>) -> Result<()
         let _ = std::fs::remove_file(&scratch);
         format!("{path:?}: {error}")
     })
+}
+
+/// The base address form of an `http`/`https` URL, or `None` when it is not one.
+///
+/// A server address the frontend will `fetch` has to be an absolute `http(s)` URL with a host;
+/// anything else — a bare `localhost:8787`, a `file:` path, a `ws:` address typed into the wrong
+/// field — is refused where the owner typed it rather than stored and failed at connect time.
+/// The trailing slash is dropped so `{base}/rpc` never grows a double slash.
+fn http_base(value: &str) -> Option<String> {
+    let url = tauri::Url::parse(value.trim()).ok()?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none_or(str::is_empty) {
+        return None;
+    }
+    Some(value.trim().trim_end_matches('/').to_string())
+}
+
+/// The base address form of a `ws`/`wss` URL, or `None` when it is not one.
+fn ws_base(value: &str) -> Option<String> {
+    let url = tauri::Url::parse(value.trim()).ok()?;
+    if !matches!(url.scheme(), "ws" | "wss") || url.host_str().is_none_or(str::is_empty) {
+        return None;
+    }
+    Some(value.trim().trim_end_matches('/').to_string())
+}
+
+/// The websocket address that belongs to an HTTP base address: `http` → `ws`, `https` → `wss`,
+/// same host, port and path.
+///
+/// This is the derivation `daemon_ws_url` promises when the owner clears it, so an installer who
+/// knows only the server's HTTP address never has to work out the ws one: a daemon behind TLS is
+/// reachable at `wss://` and a plain one at `ws://`, and guessing wrong is a connect that hangs
+/// rather than an error that says why.
+fn derive_ws_url(http_url: &str) -> Option<String> {
+    let base = http_base(http_url)?;
+    let mut url = tauri::Url::parse(&base).ok()?;
+    let scheme = match url.scheme() {
+        "https" => "wss",
+        _ => "ws",
+    };
+    url.set_scheme(scheme).ok()?;
+    Some(url.as_str().trim_end_matches('/').to_string())
+}
+
+/// What a stored setting says in `desktop.log`.
+///
+/// The token is the one value that never reaches the log by value: a note saying "daemon_token is
+/// now \"ghp_…\"" would put a credential in a plain-text file the installer documentation tells
+/// owners to send in with a bug report. The rest are addresses and a mode, which are what makes a
+/// connection report readable.
+fn logged_value(key: &str, value: &str) -> String {
+    if key == CONFIG_DAEMON_TOKEN {
+        return if value.is_empty() {
+            "cleared".to_string()
+        } else {
+            "stored".to_string()
+        };
+    }
+    if value.is_empty() {
+        "cleared".to_string()
+    } else {
+        format!("set to {value:?}")
+    }
 }
 
 /// The origins the daemon has to accept the webview's requests from.
@@ -898,16 +1091,244 @@ fn first_line(response: &str) -> String {
         .to_string()
 }
 
+/// What one candidate daemon address answered when asked for `health`.
+///
+/// camelCase on the way out, because this crosses to the frontend as JSON and the settings screen
+/// reads `wsUrl` to fill the websocket field and `reason` to pick the sentence it shows. `reason`
+/// is one of `invalid_url`, `unreachable`, `unauthorized` or `bad_response` — a closed set, so the
+/// UI can branch on it without matching on English prose — and `detail` is the prose, short and
+/// already written for an owner rather than for a log.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaemonConnectionTest {
+    pub ok: bool,
+    pub reason: Option<String>,
+    pub detail: String,
+    pub ws_url: String,
+    pub version: Option<String>,
+}
+
+impl DaemonConnectionTest {
+    fn reachable(ws_url: String, version: Option<String>) -> Self {
+        let detail = match &version {
+            Some(version) => format!("warshad {version} answered the health call"),
+            None => "the daemon answered the health call".to_string(),
+        };
+        Self {
+            ok: true,
+            reason: None,
+            detail,
+            ws_url,
+            version,
+        }
+    }
+
+    fn failed(reason: &str, ws_url: String, detail: String) -> Self {
+        Self {
+            ok: false,
+            reason: Some(reason.to_string()),
+            detail,
+            ws_url,
+            version: None,
+        }
+    }
+}
+
+/// Ask `url` for `health` over JSON-RPC and say what came back, in the four reasons the frontend
+/// knows.
+///
+/// This is the one place the shell makes a request to an address the owner typed, so it is also
+/// the one place that has to tell four very different failures apart:
+///
+/// - **`invalid_url`** — the address is not an absolute `http(s)` URL, so nothing was sent;
+/// - **`unreachable`** — nothing is listening there, or nothing answered inside
+///   [`DAEMON_TEST_TIMEOUT`]. On a slow link this is the honest answer to "is it up", not a
+///   failure of the daemon;
+/// - **`unauthorized`** — something answered and refused the token (HTTP 401/403, or a JSON-RPC
+///   auth error), which is the case an owner can fix without reading a log;
+/// - **`bad_response`** — something answered with a status, a body or a JSON shape that is not a
+///   daemon's `health`.
+///
+/// The token travels as a bearer header and never appears in `detail`, which the frontend shows
+/// and may paste into a bug report.
+async fn probe_daemon(url: &str, token: &str) -> DaemonConnectionTest {
+    let ws_url = derive_ws_url(url).unwrap_or_default();
+    let Some(base) = http_base(url) else {
+        return DaemonConnectionTest::failed(
+            "invalid_url",
+            ws_url,
+            "the address must be a full http:// or https:// URL".to_string(),
+        );
+    };
+
+    let client = match reqwest::Client::builder()
+        .timeout(DAEMON_TEST_TIMEOUT)
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => {
+            return DaemonConnectionTest::failed(
+                "unreachable",
+                ws_url,
+                format!("the test could not start: {error}"),
+            )
+        }
+    };
+
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "health",
+        "params": [],
+    });
+    let response = client
+        .post(format!("{base}/rpc"))
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .bearer_auth(token)
+        .json(&body)
+        .send()
+        .await;
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            return DaemonConnectionTest::failed("unreachable", ws_url, transport_detail(&error))
+        }
+    };
+
+    let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return DaemonConnectionTest::failed(
+            "unauthorized",
+            ws_url,
+            format!(
+                "the daemon answered HTTP {} and refused the token",
+                status.as_u16()
+            ),
+        );
+    }
+    let text = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return DaemonConnectionTest::failed(
+            "bad_response",
+            ws_url,
+            format!("the address answered HTTP {}", status.as_u16()),
+        );
+    }
+
+    let Ok(body) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return DaemonConnectionTest::failed(
+            "bad_response",
+            ws_url,
+            "the address answered with something that is not JSON".to_string(),
+        );
+    };
+    if let Some(error) = body.get("error") {
+        let detail = error
+            .get("message")
+            .and_then(|message| message.as_str())
+            .unwrap_or("the daemon refused the call")
+            .to_string();
+        let reason = if is_auth_refusal(error) {
+            "unauthorized"
+        } else {
+            "bad_response"
+        };
+        return DaemonConnectionTest::failed(reason, ws_url, detail);
+    }
+    let Some(result) = body.get("result") else {
+        return DaemonConnectionTest::failed(
+            "bad_response",
+            ws_url,
+            "the answer carried no result".to_string(),
+        );
+    };
+    if let Some(reported) = result.get("status").and_then(|status| status.as_str()) {
+        if reported != "ok" {
+            return DaemonConnectionTest::failed(
+                "bad_response",
+                ws_url,
+                format!("the daemon reported status {reported:?}"),
+            );
+        }
+    }
+    let version = result
+        .get("version")
+        .and_then(|version| version.as_str())
+        .map(str::to_string);
+    DaemonConnectionTest::reachable(ws_url, version)
+}
+
+/// Whether a JSON-RPC error object is the daemon refusing the caller's token.
+///
+/// The daemon's own auth refusal is an HTTP 401 with `{"error":"unauthorized"}`, which never
+/// reaches here; this covers a daemon that reports the same thing as a JSON-RPC error instead —
+/// codes in the server-error range it uses for auth, or a message that names authentication. It
+/// errs towards "unauthorized" because telling an owner their token was refused is more useful
+/// than telling them the answer was odd when both may be true.
+fn is_auth_refusal(error: &serde_json::Value) -> bool {
+    let code = error
+        .get("code")
+        .and_then(|code| code.as_i64())
+        .unwrap_or_default();
+    if matches!(code, -32001 | -32002) {
+        return true;
+    }
+    let message = error
+        .get("message")
+        .and_then(|message| message.as_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    [
+        "unauthorized",
+        "unauthenticated",
+        "authentication",
+        "forbidden",
+        "token",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
+}
+
+/// The owner-facing sentence for a request that never produced a response.
+///
+/// A timeout and a refused connection are different things to fix — one is "is the machine up",
+/// the other is "is anything listening on that port" — so they are said differently even though
+/// both are `unreachable` to the frontend.
+fn transport_detail(error: &reqwest::Error) -> String {
+    if error.is_timeout() {
+        format!(
+            "the address did not answer within {}s",
+            DAEMON_TEST_TIMEOUT.as_secs()
+        )
+    } else if error.is_connect() {
+        "nothing is listening at that address".to_string()
+    } else {
+        "the address could not be reached".to_string()
+    }
+}
+
 /// `get_config` — the value of one shell config key.
 #[tauri::command]
 fn get_config(key: String, state: State<'_, ShellState>) -> Result<String, String> {
     Ok(state.get(&key))
 }
 
-/// `set_config` — store one webview preference. The daemon keys are read-only.
+/// `set_config` — store one webview preference, or one of the three server-connection values.
 #[tauri::command]
 fn set_config(key: String, value: String, state: State<'_, ShellState>) -> Result<(), String> {
     state.set(&key, &value)
+}
+
+/// `test_daemon_connection` — ask a candidate daemon address for `health` with `token`.
+///
+/// Unsaved by design: the settings screen tests what the owner has typed, before it writes
+/// anything, so a wrong address costs a click rather than a stored setting to undo.
+#[tauri::command]
+async fn test_daemon_connection(
+    url: String,
+    token: String,
+) -> Result<DaemonConnectionTest, String> {
+    Ok(probe_daemon(&url, &token).await)
 }
 
 /// `pick_folder` — open a native OS directory picker dialog and return the chosen path, if any.
@@ -985,6 +1406,7 @@ pub fn run() -> anyhow::Result<()> {
         .invoke_handler(tauri::generate_handler![
             get_config,
             set_config,
+            test_daemon_connection,
             pick_folder
         ])
         .build(tauri::generate_context!())?;
@@ -1263,5 +1685,334 @@ mod tests {
                 "plugins.updater must not be active: the updater endpoint ships no signed artifact"
             ),
         }
+    }
+
+    /// One scratch HTTP server on loopback that answers every request with `status` and `body`
+    /// and keeps the request head it saw.
+    ///
+    /// A real socket on `127.0.0.1`, not a mocked client: what these tests are about is what the
+    /// shell does with an answer that came off a wire — a 401, a body that is not JSON, a port
+    /// nothing is listening on — and a mock would answer those by agreeing with the code instead
+    /// of by being a server. Only the loopback interface is bound, so no test can reach a real
+    /// daemon or the network.
+    struct MockServer {
+        url: String,
+        seen: std::sync::Arc<Mutex<Vec<String>>>,
+    }
+
+    impl MockServer {
+        fn answering(status: u16, body: &'static str) -> Self {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port on loopback");
+            let address = listener.local_addr().expect("the bound address");
+            let seen: std::sync::Arc<Mutex<Vec<String>>> =
+                std::sync::Arc::new(Mutex::new(Vec::new()));
+            let requests = std::sync::Arc::clone(&seen);
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    let Ok(mut stream) = stream else { break };
+                    let Some(head) = read_request_head(&mut stream) else {
+                        continue;
+                    };
+                    if let Ok(mut requests) = requests.lock() {
+                        requests.push(head);
+                    }
+                    let response = format!(
+                        "HTTP/1.1 {status} stub\r\ncontent-type: application/json\r\n\
+                         content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                }
+            });
+            Self {
+                url: format!("http://{address}"),
+                seen,
+            }
+        }
+
+        /// Every request head the server saw, lowercased, joined — what a header assertion needs.
+        fn heads(&self) -> String {
+            self.seen
+                .lock()
+                .expect("the request log is not poisoned")
+                .join("\n")
+                .to_ascii_lowercase()
+        }
+    }
+
+    /// Read one request's head (up to the blank line) off `stream`.
+    fn read_request_head(stream: &mut std::net::TcpStream) -> Option<String> {
+        use std::io::Read;
+
+        let mut buffer = Vec::new();
+        let mut chunk = [0u8; 512];
+        loop {
+            let read = stream.read(&mut chunk).ok()?;
+            if read == 0 {
+                return Some(String::from_utf8_lossy(&buffer).into_owned());
+            }
+            buffer.extend_from_slice(&chunk[..read]);
+            if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
+                return Some(String::from_utf8_lossy(&buffer).into_owned());
+            }
+            if buffer.len() > 64 * 1024 {
+                return None;
+            }
+        }
+    }
+
+    /// The JSON-RPC answer a healthy daemon gives, as `warshad` writes it.
+    const HEALTHY_ANSWER: &str = r#"{"jsonrpc":"2.0","id":1,"result":{"status":"ok","version":"0.3.1","uptime_seconds":7,"capabilities":{}}}"#;
+
+    #[test]
+    fn a_healthy_daemon_answers_the_connection_test_with_its_version() {
+        let server = MockServer::answering(200, HEALTHY_ANSWER);
+        let report = tauri::async_runtime::block_on(probe_daemon(&server.url, "good-token"));
+
+        assert!(report.ok, "{report:?}");
+        assert_eq!(
+            report.reason, None,
+            "a reachable daemon has no reason to give"
+        );
+        assert_eq!(report.version.as_deref(), Some("0.3.1"));
+        assert!(report.detail.contains("0.3.1"), "{report:?}");
+        assert_eq!(
+            report.ws_url,
+            server.url.replacen("http://", "ws://", 1),
+            "the ws address is derived from the http one the owner typed"
+        );
+
+        // The token went on the wire as a bearer header, and nowhere else: not into the detail
+        // the settings screen shows, and not into the log.
+        let heads = server.heads();
+        assert!(
+            heads.contains("authorization: bearer good-token"),
+            "the health call carries the token: {heads}"
+        );
+        assert!(
+            heads.contains("post /rpc"),
+            "the probe is the same POST the client makes: {heads}"
+        );
+        assert!(!report.detail.contains("good-token"), "{report:?}");
+    }
+
+    #[test]
+    fn a_refused_token_is_unauthorized_and_not_a_bad_answer() {
+        let server = MockServer::answering(401, r#"{"error":"unauthorized"}"#);
+        let report = tauri::async_runtime::block_on(probe_daemon(&server.url, "wrong-token"));
+        assert!(!report.ok);
+        assert_eq!(report.reason.as_deref(), Some("unauthorized"), "{report:?}");
+        assert_eq!(report.version, None, "a refused call learned no version");
+        assert!(
+            !report.detail.contains("wrong-token"),
+            "an error an owner may paste must not carry the token: {report:?}"
+        );
+
+        // 403 is the same fact to the frontend: the daemon answered and would not have us.
+        let forbidden = MockServer::answering(403, "{}");
+        let report = tauri::async_runtime::block_on(probe_daemon(&forbidden.url, "t"));
+        assert_eq!(report.reason.as_deref(), Some("unauthorized"), "{report:?}");
+    }
+
+    #[test]
+    fn a_closed_port_is_unreachable() {
+        // A port that was bound and then released: nothing is listening on it now, which is the
+        // "the server is not running" case the wizard has to name rather than hang on.
+        let address = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port on loopback");
+            listener.local_addr().expect("the bound address")
+        };
+        let report =
+            tauri::async_runtime::block_on(probe_daemon(&format!("http://{address}"), "t"));
+        assert!(!report.ok);
+        assert_eq!(report.reason.as_deref(), Some("unreachable"), "{report:?}");
+        assert!(report.version.is_none());
+        assert_eq!(report.ws_url, format!("ws://{address}"));
+    }
+
+    #[test]
+    fn an_answer_that_is_not_a_health_report_is_a_bad_response() {
+        let garbage = MockServer::answering(200, "<html>not a daemon</html>");
+        let report = tauri::async_runtime::block_on(probe_daemon(&garbage.url, "t"));
+        assert_eq!(report.reason.as_deref(), Some("bad_response"), "{report:?}");
+
+        // A JSON body that is a JSON-RPC error which is not about auth is also not a daemon
+        // that said yes.
+        let refusal = MockServer::answering(
+            200,
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"unknown method"}}"#,
+        );
+        let report = tauri::async_runtime::block_on(probe_daemon(&refusal.url, "t"));
+        assert_eq!(report.reason.as_deref(), Some("bad_response"), "{report:?}");
+        assert!(!report.ok);
+
+        // An auth error delivered as JSON-RPC rather than as a status is unauthorized.
+        let auth = MockServer::answering(
+            200,
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32001,"message":"authentication required"}}"#,
+        );
+        let report = tauri::async_runtime::block_on(probe_daemon(&auth.url, "t"));
+        assert_eq!(report.reason.as_deref(), Some("unauthorized"), "{report:?}");
+    }
+
+    #[test]
+    fn an_address_that_is_not_http_is_refused_before_anything_is_sent() {
+        for address in [
+            "",
+            "daemon.example.com",
+            "localhost:8787",
+            "ftp://daemon.example.com",
+            "ws://daemon.example.com",
+        ] {
+            let report = tauri::async_runtime::block_on(probe_daemon(address, "t"));
+            assert!(!report.ok, "{address} is not an http address");
+            assert_eq!(
+                report.reason.as_deref(),
+                Some("invalid_url"),
+                "{address}: {report:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_server_mode_answers_with_the_stored_values_and_local_answers_with_the_endpoint() {
+        let directory = scratch("settings-server-mode");
+        let state = shell(&directory);
+
+        // Unset is local, and local is the endpoint this shell started — the behaviour every
+        // earlier build had.
+        assert_eq!(state.get(CONFIG_CONNECTION_MODE), "local");
+        assert_eq!(state.get(CONFIG_DAEMON_URL), "http://127.0.0.1:1234");
+        assert_eq!(state.get(CONFIG_DAEMON_TOKEN), "a-token");
+
+        state
+            .set(CONFIG_DAEMON_URL, "https://daemon.example.com")
+            .expect("a server address is stored");
+        state
+            .set(CONFIG_DAEMON_TOKEN, "server-token")
+            .expect("a server token is stored");
+        state
+            .set(CONFIG_CONNECTION_MODE, "server")
+            .expect("the mode is stored");
+
+        assert_eq!(state.get(CONFIG_DAEMON_URL), "https://daemon.example.com");
+        assert_eq!(
+            state.get(CONFIG_DAEMON_WS_URL),
+            "wss://daemon.example.com",
+            "a ws address the owner never typed is derived from the one they did"
+        );
+        assert_eq!(state.get(CONFIG_DAEMON_TOKEN), "server-token");
+
+        // A restart keeps the choice: the mode and the values are in `desktop.json`, not in
+        // this process's memory.
+        let restarted = shell(&directory);
+        assert_eq!(restarted.get(CONFIG_CONNECTION_MODE), "server");
+        assert_eq!(
+            restarted.get(CONFIG_DAEMON_URL),
+            "https://daemon.example.com"
+        );
+        assert_eq!(restarted.get(CONFIG_DAEMON_TOKEN), "server-token");
+
+        // Switching back is one write, and it is the local endpoint again — the stored server
+        // values stay on disk, so switching forward again needs no retyping.
+        restarted
+            .set(CONFIG_CONNECTION_MODE, "local")
+            .expect("the mode is stored");
+        assert_eq!(restarted.get(CONFIG_CONNECTION_MODE), "local");
+        assert_eq!(restarted.get(CONFIG_DAEMON_URL), "http://127.0.0.1:1234");
+        assert_eq!(restarted.get(CONFIG_DAEMON_WS_URL), "ws://127.0.0.1:4321");
+        assert_eq!(restarted.get(CONFIG_DAEMON_TOKEN), "a-token");
+        let on_disk = read_settings(&directory.join(SETTINGS_FILE));
+        assert_eq!(on_disk[CONFIG_DAEMON_URL], "https://daemon.example.com");
+        assert_eq!(on_disk[CONFIG_DAEMON_TOKEN], "server-token");
+
+        // `server` with no address is not a server to talk to, so the local endpoint stays the
+        // answer instead of an address the frontend cannot dial.
+        restarted
+            .set(CONFIG_DAEMON_URL, "")
+            .expect("the server address is cleared");
+        restarted
+            .set(CONFIG_CONNECTION_MODE, "server")
+            .expect("the mode is stored");
+        assert_eq!(restarted.get(CONFIG_DAEMON_URL), "http://127.0.0.1:1234");
+
+        // The token was never written to the log, and the log says it was stored.
+        let log = std::fs::read_to_string(directory.join(LOG_FILE)).expect("the log is readable");
+        assert!(!log.contains("server-token"), "{log}");
+        assert!(log.contains("daemon_token stored"), "{log}");
+    }
+
+    #[test]
+    fn the_server_values_are_validated_where_the_owner_typed_them() {
+        let directory = scratch("settings-validation");
+        let state = shell(&directory);
+
+        for address in [
+            "daemon.example.com",
+            "localhost:8787",
+            "ftp://daemon.example.com",
+            "ws://daemon.example.com",
+            "http://",
+        ] {
+            assert!(
+                state.set(CONFIG_DAEMON_URL, address).is_err(),
+                "{address} is not an http address to store"
+            );
+        }
+        for address in ["http://daemon.example.com", "daemon.example.com", "wss://"] {
+            assert!(
+                state.set(CONFIG_DAEMON_WS_URL, address).is_err(),
+                "{address} is not a ws address to store"
+            );
+        }
+        assert!(
+            state.set(CONFIG_CONNECTION_MODE, "cloud").is_err(),
+            "the mode is one of two words"
+        );
+        assert_eq!(
+            state.set(CONFIG_DATA_DIR, "/elsewhere"),
+            Err("data_dir is reported by the shell and cannot be set".to_string()),
+            "the data directory stays the shell's to answer"
+        );
+        assert!(
+            read_settings(&directory.join(SETTINGS_FILE)).is_empty(),
+            "a refused write stores nothing"
+        );
+
+        // A ws address the owner does type is kept as typed, and an empty one is re-derived
+        // from the server address rather than stored blank.
+        assert!(state
+            .set(CONFIG_DAEMON_URL, "https://daemon.example.com/")
+            .is_ok());
+        assert_eq!(
+            read_settings(&directory.join(SETTINGS_FILE))[CONFIG_DAEMON_URL],
+            "https://daemon.example.com",
+            "a trailing slash is dropped so the rpc path never doubles it"
+        );
+        state
+            .set(CONFIG_DAEMON_WS_URL, "wss://daemon.example.com:8443/socket")
+            .expect("a ws address is stored");
+        assert_eq!(
+            read_settings(&directory.join(SETTINGS_FILE))[CONFIG_DAEMON_WS_URL],
+            "wss://daemon.example.com:8443/socket"
+        );
+        state
+            .set(CONFIG_DAEMON_WS_URL, "  ")
+            .expect("an empty ws address is derived");
+        assert_eq!(
+            read_settings(&directory.join(SETTINGS_FILE))[CONFIG_DAEMON_WS_URL],
+            "wss://daemon.example.com"
+        );
+
+        // The token is stored trimmed, and the mode accepts either word in any case.
+        state
+            .set(CONFIG_DAEMON_TOKEN, "  spaced-token  ")
+            .expect("a token");
+        assert_eq!(
+            read_settings(&directory.join(SETTINGS_FILE))[CONFIG_DAEMON_TOKEN],
+            "spaced-token"
+        );
+        state.set(CONFIG_CONNECTION_MODE, "SERVER").expect("a mode");
+        assert_eq!(state.get(CONFIG_CONNECTION_MODE), "server");
     }
 }

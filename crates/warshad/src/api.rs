@@ -792,10 +792,15 @@ pub trait WarshaApi {
     // row: `integrations.connect` takes `IntegrationConfig`, files `token` and
     // `bot_token` in the keychain under `integration:{id}` / `integration:{id}:bot`,
     // and stores the rest. Every answer is an [`IntegrationStatus`], which has no
-    // token field by construction. `integrations.test` is the one method under the
-    // Spend tier: a check that reached GitHub or Slack would be the daemon spending
-    // an owner's quota on their behalf, so today it reports what the daemon can know
-    // locally — whether the service is configured and filed — and says so plainly.
+    // token field by construction.
+    //
+    // `integrations.test` is the one method under the Spend tier, and the one place
+    // it spends on purpose: for `github` it makes a single `GET /user` with the
+    // token the daemon already uses, which is a read, writes nothing, and answers
+    // *whose* token it is (see `IntegrationTestResult::account`). Slack and the
+    // generic services keep the local answer — whether the configuration is
+    // complete and filed — because a live probe there means posting a webhook or
+    // calling `auth.test`, which is a separate decision with its own budget.
     #[method(name = "integrations.list", with_extensions)]
     async fn list_integrations(&self) -> RpcResult<Vec<IntegrationStatus>>;
 

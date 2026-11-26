@@ -1926,9 +1926,11 @@ export interface IntegrationConfig {
 
 /** The outcome of a live integration test (`warsha_core::IntegrationTestResult`). */
 export interface IntegrationTestResult {
-  /** Coarse status: `ok`, `error`, `unconfigured`. */
+  /** Coarse status: `ok`, `failed`, `unconfigured`. */
   status: string;
   message: string;
+  /** The authenticated account login when the integration test proved who owns the credential. */
+  account?: string;
 }
 
 /** One entry in a directory listing for the file browser (`warsha_core::FileEntry`). */
@@ -2155,9 +2157,11 @@ export function decodeIntegrationStatus(source: unknown): IntegrationStatus {
 
 export function decodeIntegrationTestResult(source: unknown): IntegrationTestResult {
   const record = wave2Object(source, 'integration test result');
+  const account = wave2NullableString(record, 'account');
   return {
     status: wave2String(record, 'status'),
     message: wave2String(record, 'message'),
+    ...(account ? { account } : {}),
   };
 }
 

@@ -1,6 +1,23 @@
 
 # DECISIONS.md — Architecture and Design Decisions
 
+## 2026-11-26 — D-RN-ONBOARDING-1: Tauri connection mode + daemon probe, live GitHub account test with FallbackSecretStore, and client account decoding
+
+- **Context**: Onboarding rebuild backend lane on `r-next/onb-backend` needed shell-side local-vs-server connection configuration with a live daemon probe, live GitHub `GET /user` account verification through the daemon's single `FallbackSecretStore` reader, and matching `@warsha/client` decoding.
+- **Decisions**:
+  1. **Shell connection method (`apps/desktop/src-tauri/{Cargo.toml,Cargo.lock,src/lib.rs}`)**:
+     - Added `connection_mode` (`"local"` default when unset/unrecognized, or `"server"`). When `connection_mode == "server"` and stored `daemon_url` is non-empty, `get_config('daemon_url' | 'daemon_ws_url' | 'daemon_token')` returns stored server values from `desktop.json`; otherwise it returns the local `Endpoint` values without mutating the local endpoint struct. `data_dir` remains shell-owned and read-only.
+     - Validated `daemon_url` (`http`/`https` or empty) and `daemon_ws_url` (`ws`/`wss` or empty -> auto-derived `http`->`ws` / `https`->`wss` with matching host:port) in `set_config`; `daemon_token` logs `"stored"`/`"cleared"` instead of the raw secret.
+     - Added `reqwest` (`0.12`, `json` + `rustls-tls`, no default features) and `test_daemon_connection(url, token) -> Result<DaemonConnectionTest, String>` (registered in `generate_handler!`) with a 5s timeout sending a JSON-RPC `health` POST with `Authorization: Bearer <token>`, returning camelCase `{ ok, reason, detail, wsUrl, version }` (`reason` in `invalid_url | unreachable | unauthorized | bad_response`).
+  2. **GitHub account test (`crates/warsha-core`, `crates/warsha-git`, `crates/warshad`)**:
+     - Kept one GitHub token, one store (`state.secrets` = `FallbackSecretStore`), and one reader (`resolve_github_token`) across `integrations.test`, `projects.github_status`, and `projects.create_github_repo`.
+     - Added `GithubUser { login, name }` and `GitHubClient::current_user()` (`GET {api_base}/user`) in `crates/warsha-git/src/lib.rs`, and `#[serde(default, skip_serializing_if = "Option::is_none")] pub account: Option<String>` on `IntegrationTestResult` in `crates/warsha-core/src/config.rs`.
+     - Updated `integrations.test` for `"github"` (`test_github_integration` in `crates/warshad/src/rpc/mod.rs`) to resolve the API base via `WARSHA_GITHUB_API_BASE` -> `DaemonConfig::github_api_base` -> `https://api.github.com`: `200` returns `status: "ok"`, `account: Some(login)`, and a message naming `login`; `401`/`403` returns `status: "failed"` with no account; network/other failures return `status: "failed"` with a token-redacted plain message; no token returns `status: "unconfigured"`.
+     - Added `ENV_LOCK` + `EnvVarGuard` in `crates/warshad/src/test_util.rs` and serialized `crates/warshad/src/tests/integration_github.rs` tests behind `ENV_LOCK` so `WARSHA_GITHUB_API_BASE` overrides cannot race with parallel `--lib` tests.
+  3. **TS client (`packages/client/src/{index.ts,index.test.ts}`)**:
+     - Added `account?: string` on `IntegrationTestResult` and decoded it via `wave2NullableString(record, 'account')` in `decodeIntegrationTestResult`.
+- **Proof**: `apps/desktop/src-tauri` (`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`: 15 passed); workspace (`cargo fmt --all --check`, `cargo clippy -p warshad -p warsha-git -p warsha-core --all-targets -- -D warnings`, `warsha-git`: 22 passed, `warshad integration`: 11 passed, `warshad project_source`: 4 passed, `warsha-providers secrets`: 12 passed); `@warsha/client` (`vitest run`: 2 files / 208 passed, `tsc --noEmit` exit 0); `node scripts/check-engineering-policy.mjs` (8 checks, 0 failures).
+
 ## 2026-11-26 — D-RN-PROJECT-SOURCE-1: backend, git/worktree, daemon RPC, and client support for Project Source Options Round
 
 - **Context**: Project creation previously only supported creating a fresh repo under `<data_dir>/projects/<id>/repo` or passing an already-existing `repo_path` without recording `repo_url` or supporting folder preparation, repository cloning, or GitHub repo creation.

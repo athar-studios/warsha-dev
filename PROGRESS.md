@@ -1,5 +1,20 @@
 # PROGRESS.md — Warsha Build Log
 
+## Run 2026-11-26 — Onboarding rebuild backend lane (D-RN-ONBOARDING-1)
+
+- **Branch & worktree**: `r-next/onb-backend` (rebased onto `2aef9ea`) in `.agents/worktrees/onb-backend`. Local commit only; no push, merge, tag, or `main` changes.
+- **Changes**:
+  - `apps/desktop/src-tauri` (`Cargo.toml`, `Cargo.lock`, `src/lib.rs`): added `connection_mode` (`local` default / `server`), validated `daemon_url` and `daemon_ws_url` (with `http->ws` / `https->wss` derivation), stored `daemon_token` safely, kept `data_dir` read-only, added `test_daemon_connection` JSON-RPC `health` probe (5s timeout via `reqwest`), and added 6 unit tests covering ok, 401/403->`unauthorized`, closed port->`unreachable`, garbage->`bad_response`, invalid scheme->`invalid_url`, and server/local round-trip + fresh `ShellState` reload.
+  - `crates/warsha-core/src/config.rs`, `crates/warsha-git/src/lib.rs`, `crates/warsha-git/tests/current_user.rs`: added `IntegrationTestResult.account`, `GithubUser { login, name }`, `GitHubClient::current_user()`, and 5 loopback mock tests.
+  - `crates/warshad` (`src/{api.rs,lib.rs,rpc/mod.rs,test_util.rs,tests/mod.rs,tests/integration_github.rs}`, `tests/wave2_rpc.rs`): wired `integrations.test` for `"github"` to live `GET {api_base}/user` (`WARSHA_GITHUB_API_BASE` override -> `DaemonConfig::github_api_base` -> `https://api.github.com`) via `resolve_github_token` + `FallbackSecretStore`, added `ENV_LOCK`/`EnvVarGuard`, serialized `integration_github` tests behind `ENV_LOCK`, and added 7 unit tests (200 `octo-mock`, 401, 500 token redaction, closed-port network error, unconfigured, env/config precedence, `FallbackSecretStore` locked-keychain round-trip) + updated `wave2_rpc`.
+  - `packages/client/src/{index.ts,index.test.ts}`: added `account?: string` to `IntegrationTestResult`, decoded in `decodeIntegrationTestResult`, and added unit test coverage.
+  - Recorded `D-RN-ONBOARDING-1` in `DECISIONS.md`.
+- **Verification**:
+  - `apps/desktop/src-tauri`: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (**15 passed**, 0 failed).
+  - Workspace (`CARGO_TARGET_DIR=/home/moe/tools/target-onb-backend`): `cargo fmt --all --check` exit 0; `cargo clippy -p warshad -p warsha-git -p warsha-core --all-targets -- -D warnings` exit 0; `cargo test -p warsha-git` (**22 passed**, 0 failed); `cargo test -p warshad integration` (**11 passed**, 0 failed); `cargo test -p warshad project_source` (**4 passed**, 0 failed); `cargo test -p warsha-providers secrets` (**12 passed**, 0 failed).
+  - `@warsha/client`: `vitest run` (**2 files / 208 passed**, 0 failed), `tsc --noEmit` exit 0.
+  - `node scripts/check-engineering-policy.mjs`: exit 0 (**8 checks, 0 failures**).
+
 ## Run 2026-11-26 — Project Source Options UI + Tauri folder picker (D-RN-PROJECT-SOURCE-2)
 
 - **Branch & worktree**: `r-next/pso-ui` (base `5857f62`) in `.agents/worktrees/pso-ui`. Local commit only; no push, merge, tag, or `main` changes.
