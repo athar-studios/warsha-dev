@@ -22,6 +22,14 @@ export const ACTIONS: readonly ActionDef[] = [
     rpc: ['preferences.record'],
   },
 
+  // Connection section: where Warsha runs (this device or a warshad). Writes shell config through
+  // invoke('set_config'), so no daemon method and no rpc entry.
+  {
+    id: 'settings.connection.save',
+    labelKey: 'settings.section.connection.save',
+    effect: 'state',
+  },
+
   // Models & Providers section
   { id: 'settings.provider.add.open', labelKey: 'settings.providers.add', effect: 'state' },
   {

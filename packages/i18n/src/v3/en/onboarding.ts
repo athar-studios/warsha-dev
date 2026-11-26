@@ -62,4 +62,75 @@ export default {
   'onboarding.repo_path_label': 'Git repository path (optional)',
   'onboarding.repo_path_placeholder': 'e.g. /home/user/my-project',
   'onboarding.repo_path_hint': 'Path to an existing git repository to work on.',
+
+  // Connection method (shared by onboarding and Settings → Connection)
+  'onboarding.step_connection': 'Connection',
+  'onboarding.connection_title': 'How should Warsha run?',
+  'onboarding.connection_desc':
+    'Work on this device, or send the work to a Warsha server you can reach.',
+  'onboarding.connection_mode_label': 'Connection method',
+  'onboarding.connection_mode_local': 'This device',
+  'onboarding.connection_mode_local_desc':
+    'Everything runs here. Your files and keys stay on this computer.',
+  'onboarding.connection_mode_server': 'Server',
+  'onboarding.connection_mode_server_desc':
+    'Use a Warsha daemon running on another machine or a shared host.',
+  'onboarding.connection_url': 'Server address',
+  'onboarding.connection_url_placeholder': 'https://warsha.example.com',
+  'onboarding.connection_url_hint': 'The address the desktop app should talk to.',
+  'onboarding.connection_token': 'Access token',
+  'onboarding.connection_token_placeholder': 'Paste the server access token',
+  'onboarding.connection_token_hint': 'Kept in the system keychain and never shown again.',
+  'onboarding.connection_test': 'Test connection',
+  'onboarding.connection_testing': 'Testing connection…',
+  'onboarding.connection_success': 'The server answered',
+  'onboarding.connection_success_version': 'The server answered, version {version}',
+  'onboarding.connection_error_invalid_url':
+    'That is not a server address. Use one that starts with http:// or https://.',
+  'onboarding.connection_error_unreachable':
+    'The server did not answer. Check the address, and that the server is running.',
+  'onboarding.connection_error_unauthorized':
+    'The server rejected the token. Check the access token and try again.',
+  'onboarding.connection_error_bad_response':
+    'The server replied with something Warsha did not expect. Check that the address points to a Warsha server.',
+  'onboarding.connection_error_generic': 'The connection test did not succeed.',
+  'onboarding.connection_error_title': "Couldn't reach that server",
+  'onboarding.connection_use_local': 'Use this device instead',
+  'onboarding.connection_test_required': 'Test the server connection before continuing.',
+  'onboarding.connection_save_failed': "Couldn't save the connection. Try again.",
+  'onboarding.connection_browser_notice':
+    'A server connection can be set from the desktop app. For now Warsha runs on this device.',
+  'onboarding.connection_browser_test':
+    'Testing a server connection needs the desktop app.',
+  'onboarding.connection_switch_note': 'Saving this reconnects Warsha.',
+
+  // Provider step: skipping the model provider
+  'onboarding.provider_skip': 'Skip for now',
+  'onboarding.provider_skip_warning':
+    "Runs won't start until you connect a model provider. You can do it later from Settings → Models.",
+
+  // GitHub step
+  'onboarding.step_github': 'GitHub',
+  'onboarding.github_title': 'Link GitHub (optional)',
+  'onboarding.github_desc':
+    'Linking GitHub lets Warsha clone your private repositories and create new repositories for your projects.',
+  'onboarding.github_token': 'GitHub token',
+  'onboarding.github_token_placeholder': 'Paste a personal access token',
+  'onboarding.github_connect': 'Connect and test',
+  'onboarding.github_testing': 'Checking with GitHub…',
+  'onboarding.github_connected': 'Connected as @{login}',
+  'onboarding.github_connected_noname': 'GitHub is connected.',
+  'onboarding.github_failed_title': "GitHub didn't accept that token",
+  'onboarding.github_unconfigured': 'GitHub is not connected yet.',
+  'onboarding.github_token_required': 'Paste a GitHub token first.',
+  'onboarding.github_skip': 'Skip for now',
+  'onboarding.github_privacy': 'The token is kept in the system keychain and never shown again.',
+  'onboarding.github_hint':
+    'Create a token at https://github.com/settings/tokens and give it repository access.',
+  'onboarding.github_open_tokens': 'Open GitHub token settings',
+  'onboarding.action_github_connect': 'Connect GitHub',
+  'onboarding.action_skip': 'Skip step',
+  'onboarding.action_connection_pick': 'Pick connection method',
+  'onboarding.action_connection_test': 'Test connection',
+  'onboarding.action_connection_local': 'Use this device',
 };

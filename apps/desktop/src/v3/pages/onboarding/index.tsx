@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { ALL_ROLES, type ModelInfo } from '@warsha/client';
+import { ALL_ROLES, type IntegrationTestResult, type ModelInfo } from '@warsha/client';
 import { useLocale, useT, type Locale } from '@warsha/i18n/v3';
 import {
   Banner,
@@ -19,17 +19,27 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useAction } from '../../actions';
 import { useCapabilities, useReloadCapabilities } from '../../app/CapabilitiesContext';
-import { useClient } from '../../app/ClientContext';
+import { useClient, useReloadClient } from '../../app/ClientContext';
 import { useDataReady } from '../../app/DataReadyContext';
 import { readDefaultBudget } from '../../app/defaultBudget';
 import { notify } from '../../app/toast';
+import {
+  ConnectionMethodForm,
+  readConnectionConfig,
+  saveConnection,
+  useConnectionMethod,
+} from '../../components/ConnectionMethodForm';
 import { useDefaultBudget, useProviders } from '../../data';
 import { reloadAllProjects } from '../../data/useProjects';
 import { useNavigate } from '../../router';
 
 import './onboarding.css';
 
-export type OnboardingStep = 'language' | 'provider' | 'idea';
+export type OnboardingStep = 'language' | 'connection' | 'provider' | 'github' | 'idea';
+
+/** `testIntegration` reports the GitHub login in `account`, which the client type does not carry yet. */
+type GithubTestResult = IntegrationTestResult & { account?: string };
+
 
 export interface ProviderPreset {
   kind: string;
@@ -83,7 +93,13 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
   },
 ];
 
-const STEPS: readonly OnboardingStep[] = ['language', 'provider', 'idea'];
+const STEPS: readonly OnboardingStep[] = [
+  'language',
+  'connection',
+  'provider',
+  'github',
+  'idea',
+];
 
 export const MASKED_KEY_PLACEHOLDER = '••••••••';
 
@@ -129,7 +145,13 @@ function readInitialStep(): OnboardingStep {
   if (queryIdx >= 0) {
     const params = new URLSearchParams(hash.slice(queryIdx + 1));
     const stepParam = params.get('step');
-    if (stepParam === 'provider' || stepParam === 'idea' || stepParam === 'language') {
+    if (
+      stepParam === 'language' ||
+      stepParam === 'connection' ||
+      stepParam === 'provider' ||
+      stepParam === 'github' ||
+      stepParam === 'idea'
+    ) {
       return stepParam;
     }
   }
@@ -148,6 +170,7 @@ export default function OnboardingPage(): React.ReactElement {
   const t = useT();
   const { locale, setLocale } = useLocale();
   const client = useClient();
+  const reloadClient = useReloadClient();
   const navigate = useNavigate();
   const { setReady } = useDataReady();
   const capabilities = useCapabilities();
@@ -185,6 +208,36 @@ export default function OnboardingPage(): React.ReactElement {
   const [repoPath, setRepoPath] = useState<string>('');
   const [ideaError, setIdeaError] = useState<string | undefined>(undefined);
   const [startError, setStartError] = useState<string | null>(null);
+
+  // Connection step: this device by default; a server only after it answers with the typed values.
+  const connection = useConnectionMethod();
+  const { setMode: setConnectionMode, setUrl: setConnectionUrl } = connection;
+  const [connectionSaving, setConnectionSaving] = useState<boolean>(false);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+
+  // Provider step: skipping is allowed, but the wizard says plainly what will not run.
+  const [providerSkipped, setProviderSkipped] = useState<boolean>(false);
+
+  // GitHub step: optional, never blocks.
+  const [githubToken, setGithubToken] = useState<string>('');
+  const [githubBusy, setGithubBusy] = useState<boolean>(false);
+  const [githubResult, setGithubResult] = useState<GithubTestResult | null>(null);
+  const [githubError, setGithubError] = useState<string | null>(null);
+
+  // Preselect the stored connection so a reload does not silently drop back to this device.
+  useEffect(() => {
+    let cancelled = false;
+    void readConnectionConfig().then((stored) => {
+      if (cancelled) return;
+      if (stored.mode === 'server') {
+        setConnectionMode('server');
+        if (stored.url) setConnectionUrl(stored.url);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [setConnectionMode, setConnectionUrl]);
 
   // Sync data-ready with provider list load status
   useEffect(() => {
@@ -482,15 +535,100 @@ export default function OnboardingPage(): React.ReactElement {
     }
   });
 
+  /** One step forward. The connection step writes its choice first, through handleConnectionContinue. */
+  const advance = useCallback((): void => {
+    const index = STEPS.indexOf(step);
+    if (index < 0 || index >= STEPS.length - 1) return;
+    setStep(STEPS[index + 1]);
+  }, [step]);
+
+  const handleConnectionContinue = useCallback(async (): Promise<void> => {
+    if (connection.draft.mode === 'server' && !connection.isVerified) {
+      setConnectionError(t('onboarding.connection_test_required'));
+      return;
+    }
+    setConnectionError(null);
+    setConnectionSaving(true);
+    try {
+      await saveConnection({
+        mode: connection.draft.mode,
+        url: connection.draft.url,
+        token: connection.draft.token,
+        wsUrl: connection.result?.wsUrl ?? '',
+      });
+      await reloadClient();
+    } catch {
+      setConnectionError(t('onboarding.connection_save_failed'));
+      return;
+    } finally {
+      setConnectionSaving(false);
+    }
+    advance();
+  }, [advance, connection, reloadClient, t]);
+
+  const handleGithubConnect = useCallback(async (): Promise<void> => {
+    const token = githubToken.trim();
+    if (!token) {
+      setGithubError(t('onboarding.github_token_required'));
+      return;
+    }
+    if (!client) {
+      setGithubError(t('onboarding.github_failed_title'));
+      return;
+    }
+    setGithubError(null);
+    setGithubResult(null);
+    setGithubBusy(true);
+    try {
+      // The same store Home and Settings read: one GitHub token, connected once.
+      await client.connectIntegration('github', { token });
+      const probe: GithubTestResult = await client.testIntegration('github');
+      setGithubResult({
+        status: typeof probe.status === 'string' ? probe.status : 'failed',
+        message: typeof probe.message === 'string' ? probe.message : '',
+        ...(typeof probe.account === 'string' && probe.account ? { account: probe.account } : {}),
+      });
+      // A token that works is never needed back on screen, and never shown again.
+      if (probe.status === 'ok') setGithubToken('');
+    } catch (err) {
+      const message = sanitizeSecretError(err, token);
+      setGithubResult({
+        status: 'failed',
+        message: message || t('onboarding.github_failed_title'),
+      });
+    } finally {
+      setGithubBusy(false);
+    }
+  }, [client, githubToken, t]);
+
+  const handleProviderSkip = useCallback((): void => {
+    setProviderSkipped(true);
+  }, []);
+
+  const handleGithubSkip = useCallback((): void => {
+    advance();
+  }, [advance]);
+
   const handleBack = useCallback((): void => {
-    if (step === 'provider') setStep('language');
-    else if (step === 'idea') setStep('provider');
+    const index = STEPS.indexOf(step);
+    if (index > 0) setStep(STEPS[index - 1]);
   }, [step]);
 
   const handleNext = useCallback((): void => {
-    if (step === 'language') setStep('provider');
-    else if (step === 'provider') setStep('idea');
-  }, [step]);
+    if (step === 'connection') {
+      void handleConnectionContinue();
+      return;
+    }
+    advance();
+  }, [advance, handleConnectionContinue, step]);
+
+  const showProviderSkipWarning = providerSkipped && !testPassed;
+  const connectionBlocked = connection.draft.mode === 'server' && !connection.isVerified;
+  const githubFailure =
+    githubError ??
+    (githubResult !== null && githubResult.status !== 'ok'
+      ? githubResult.message || t('onboarding.github_unconfigured')
+      : null);
 
   const handleLater = useCallback(async (): Promise<void> => {
     await markOnboardingComplete();
@@ -625,6 +763,72 @@ export default function OnboardingPage(): React.ReactElement {
           </section>
         )}
 
+        {step === 'connection' && (
+          <section className="v3-onboarding-card" data-testid="onboarding-step-connection">
+            <header className="v3-onboarding-header">
+              <h2 className="v3-onboarding-subtitle">{t('onboarding.connection_title')}</h2>
+              <p className="v3-onboarding-desc">{t('onboarding.connection_desc')}</p>
+            </header>
+
+            {connectionError && (
+              <Banner
+                variant="danger"
+                title={t('onboarding.error_title')}
+                data-testid="onboarding-connection-save-error"
+              >
+                <bdi dir="auto">{connectionError}</bdi>
+              </Banner>
+            )}
+
+            <ConnectionMethodForm
+              draft={connection.draft}
+              result={connection.result}
+              testing={connection.testing}
+              testIdPrefix="onboarding"
+              disabled={connectionSaving}
+              onModeChange={setConnectionMode}
+              onUrlChange={setConnectionUrl}
+              onTokenChange={connection.setToken}
+              onTest={() => {
+                void connection.test();
+              }}
+              onUseLocal={connection.useLocal}
+            />
+
+            {connectionBlocked && (
+              <p className="v3-onboarding-desc" data-testid="onboarding-connection-test-required">
+                {t('onboarding.connection_test_required')}
+              </p>
+            )}
+
+            <footer className="v3-onboarding-actions">
+              <div className="v3-onboarding-actions-start">
+                <Button
+                  variant="secondary"
+                  data-action="onboarding.back"
+                  data-testid="onboarding-back-btn"
+                  onClick={handleBack}
+                >
+                  {t('onboarding.back')}
+                </Button>
+              </div>
+              <div className="v3-onboarding-actions-end">
+                <Button
+                  variant={connectionBlocked ? 'secondary' : 'primary'}
+                  iconEnd={<IconArrow size={16} />}
+                  loading={connectionSaving}
+                  disabled={connectionBlocked}
+                  data-action="onboarding.next"
+                  data-testid="onboarding-next-btn"
+                  onClick={handleNext}
+                >
+                  {t('onboarding.next')}
+                </Button>
+              </div>
+            </footer>
+          </section>
+        )}
+
         {step === 'provider' && (
           <section className="v3-onboarding-card" data-testid="onboarding-step-provider">
             <header className="v3-onboarding-header">
@@ -648,6 +852,12 @@ export default function OnboardingPage(): React.ReactElement {
             {providersResult.status === 'empty' && !testPassed && (
               <Banner variant="info" data-testid="onboarding-empty-banner">
                 {t('onboarding.provider_empty')}
+              </Banner>
+            )}
+
+            {showProviderSkipWarning && (
+              <Banner variant="attention" data-testid="onboarding-provider-warning">
+                {t('onboarding.provider_skip_warning')}
               </Banner>
             )}
 
@@ -846,10 +1056,116 @@ export default function OnboardingPage(): React.ReactElement {
                 >
                   {t('onboarding.back')}
                 </Button>
+                <Button
+                  variant="ghost"
+                  data-action="onboarding.provider.skip"
+                  data-testid="onboarding-provider-skip-btn"
+                  onClick={handleProviderSkip}
+                >
+                  {t('onboarding.provider_skip')}
+                </Button>
               </div>
               <div className="v3-onboarding-actions-end">
                 <Button
                   variant={showPrimaryNextOnProvider ? 'primary' : 'secondary'}
+                  iconEnd={<IconArrow size={16} />}
+                  data-action="onboarding.next"
+                  data-testid="onboarding-next-btn"
+                  onClick={handleNext}
+                >
+                  {t('onboarding.next')}
+                </Button>
+              </div>
+            </footer>
+          </section>
+        )}
+
+        {step === 'github' && (
+          <section className="v3-onboarding-card" data-testid="onboarding-step-github">
+            <header className="v3-onboarding-header">
+              <h2 className="v3-onboarding-subtitle">{t('onboarding.github_title')}</h2>
+              <p className="v3-onboarding-desc">{t('onboarding.github_desc')}</p>
+            </header>
+
+            {githubResult?.status === 'ok' && (
+              <Banner
+                variant="success"
+                icon={<IconCheck size={20} />}
+                data-testid="onboarding-github-connected"
+              >
+                {githubResult.account
+                  ? t('onboarding.github_connected', { login: githubResult.account })
+                  : t('onboarding.github_connected_noname')}
+              </Banner>
+            )}
+
+            {githubFailure && (
+              <Banner
+                variant="attention"
+                title={t('onboarding.github_failed_title')}
+                data-testid="onboarding-github-error"
+              >
+                <bdi dir="auto">{githubFailure}</bdi>
+              </Banner>
+            )}
+
+            <div className="v3-onboarding-field-group">
+              <TextField
+                type="password"
+                label={t('onboarding.github_token')}
+                placeholder={t('onboarding.github_token_placeholder')}
+                hint={t('onboarding.github_privacy')}
+                value={githubToken}
+                onChange={(e) => {
+                  setGithubToken(e.target.value);
+                  if (githubError) setGithubError(null);
+                }}
+                dir="ltr"
+                autoComplete="off"
+                data-testid="onboarding-github-token"
+              />
+
+              <div>
+                <Button
+                  variant="secondary"
+                  loading={githubBusy}
+                  data-action="onboarding.github.connect"
+                  data-testid="onboarding-github-connect-btn"
+                  onClick={() => {
+                    void handleGithubConnect();
+                  }}
+                >
+                  {githubBusy ? t('onboarding.github_testing') : t('onboarding.github_connect')}
+                </Button>
+              </div>
+
+              <p className="v3-onboarding-desc" data-testid="onboarding-github-hint">
+                {t('onboarding.github_hint')}
+              </p>
+            </div>
+
+            <footer className="v3-onboarding-actions">
+              <div className="v3-onboarding-actions-start">
+                <Button
+                  variant="secondary"
+                  data-action="onboarding.back"
+                  data-testid="onboarding-back-btn"
+                  onClick={handleBack}
+                >
+                  {t('onboarding.back')}
+                </Button>
+                <Button
+                  variant="ghost"
+                  data-action="onboarding.github.skip"
+                  data-testid="onboarding-github-skip-btn"
+                  onClick={handleGithubSkip}
+                >
+                  {t('onboarding.github_skip')}
+                </Button>
+              </div>
+              <div className="v3-onboarding-actions-end">
+                <Button
+                  variant="primary"
                   iconEnd={<IconArrow size={16} />}
                   data-action="onboarding.next"
                   data-testid="onboarding-next-btn"
@@ -868,6 +1184,12 @@ export default function OnboardingPage(): React.ReactElement {
               <h2 className="v3-onboarding-subtitle">{t('onboarding.idea_title')}</h2>
               <p className="v3-onboarding-desc">{t('onboarding.idea_desc')}</p>
             </header>
+
+            {showProviderSkipWarning && (
+              <Banner variant="attention" data-testid="onboarding-provider-warning">
+                {t('onboarding.provider_skip_warning')}
+              </Banner>
+            )}
 
             {startError && (
               <Banner

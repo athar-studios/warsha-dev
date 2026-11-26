@@ -128,6 +128,78 @@ async function renderOnboarding(
   return utils;
 }
 
+/**
+ * The shell calls onboarding makes: config reads/writes plus the daemon connection
+ * test. Tests get a stateful in-memory config map and a swappable test reply, so the
+ * real `invoke` path runs instead of a stubbed module.
+ */
+interface ShellCall {
+  cmd: string;
+  args?: Record<string, unknown>;
+}
+
+const shell: {
+  config: Map<string, string>;
+  connectionReply: { ok: boolean; reason?: string; detail: string; wsUrl: string; version?: string };
+  calls: ShellCall[];
+} = {
+  config: new Map<string, string>(),
+  connectionReply: { ok: false, reason: 'unreachable', detail: '', wsUrl: '' },
+  calls: [],
+};
+
+function installShellStub(): void {
+  (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {
+    invoke: (cmd: string, args?: Record<string, unknown>) => {
+      shell.calls.push({ cmd, args });
+      if (cmd === 'get_config') {
+        const key = typeof args?.key === 'string' ? args.key : '';
+        return Promise.resolve(shell.config.get(key) ?? '');
+      }
+      if (cmd === 'set_config') {
+        const key = typeof args?.key === 'string' ? args.key : '';
+        const value = typeof args?.value === 'string' ? args.value : '';
+        shell.config.set(key, value);
+        return Promise.resolve('');
+      }
+      if (cmd === 'test_daemon_connection') {
+        return Promise.resolve(shell.connectionReply);
+      }
+      return Promise.resolve('');
+    },
+    transformCallback: () => 1,
+    unregisterCallback: () => undefined,
+    convertFileSrc: (filePath: string) => filePath,
+  };
+}
+
+/** Let the queued config writes and reloads settle before asserting. */
+async function settle(): Promise<void> {
+  await act(async () => {
+    for (let i = 0; i < 12; i += 1) {
+      await Promise.resolve();
+    }
+  });
+}
+
+/** Advance one step with the wizard's Next button. */
+async function clickNext(): Promise<void> {
+  fireEvent.click(screen.getByTestId('onboarding-next-btn'));
+  await settle();
+}
+
+/** Go back one step with the wizard's Back button. */
+async function clickBack(): Promise<void> {
+  fireEvent.click(screen.getByTestId('onboarding-back-btn'));
+  await settle();
+}
+
+function fieldInput(testId: string): HTMLInputElement {
+  const input = screen.getByTestId(testId).querySelector('input');
+  if (!input) throw new Error(`No input inside ${testId}`);
+  return input as HTMLInputElement;
+}
+
 describe('Onboarding helper utilities', () => {
   it('validates HTTP/HTTPS URLs cleanly', () => {
     expect(isValidHttpUrl('https://api.example.com/v1')).toBe(true);
@@ -171,6 +243,10 @@ describe('OnboardingPage', () => {
     } catch {
       // ignore
     }
+    shell.config.clear();
+    shell.calls.length = 0;
+    shell.connectionReply = { ok: false, reason: 'unreachable', detail: '', wsUrl: '' };
+    installShellStub();
   });
 
   afterEach(() => {
@@ -244,9 +320,8 @@ describe('OnboardingPage', () => {
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Get started');
     expect(screen.getByRole('heading', { level: 2 }).textContent).toBe('Choose your language');
 
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('onboarding-next-btn'));
-    });
+    await clickNext();
+    await clickNext();
 
     expect(screen.getByTestId('onboarding-step-provider')).toBeTruthy();
   });
@@ -255,9 +330,8 @@ describe('OnboardingPage', () => {
     const client = makeMockClient();
     await renderOnboarding({ client, locale: 'ar' });
 
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('onboarding-next-btn'));
-    });
+    await clickNext();
+    await clickNext();
 
     expect(screen.getByTestId('onboarding-empty-banner')).toBeTruthy();
     for (const preset of PROVIDER_PRESETS) {
@@ -277,9 +351,8 @@ describe('OnboardingPage', () => {
     const client = makeMockClient();
     const { container } = await renderOnboarding({ client, locale: 'en' });
 
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('onboarding-next-btn'));
-    });
+    await clickNext();
+    await clickNext();
 
     expect(container.querySelectorAll('[data-variant="primary"]')).toHaveLength(1);
 
@@ -336,9 +409,8 @@ describe('OnboardingPage', () => {
     });
     await renderOnboarding({ client, locale: 'en' });
 
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('onboarding-next-btn'));
-    });
+    await clickNext();
+    await clickNext();
 
     const keyInput = screen.getByLabelText(/API key/i) as HTMLInputElement;
     await act(async () => {
@@ -361,9 +433,8 @@ describe('OnboardingPage', () => {
     const client = makeMockClient();
     await renderOnboarding({ client, locale: 'en' });
 
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('onboarding-next-btn'));
-    });
+    await clickNext();
+    await clickNext();
 
     await act(async () => {
       fireEvent.click(screen.getByTestId('onboarding-provider-custom'));
@@ -411,25 +482,20 @@ describe('OnboardingPage', () => {
     const client = makeMockClient();
     const { container } = await renderOnboarding({ client, locale: 'en' });
 
-    // Go to step 2 -> step 3
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('onboarding-next-btn'));
-    });
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('onboarding-next-btn'));
-    });
+    // language -> connection -> provider -> github -> idea
+    await clickNext();
+    await clickNext();
+    await clickNext();
+    await clickNext();
 
     expect(screen.getByTestId('onboarding-step-idea')).toBeTruthy();
     expect(container.querySelectorAll('[data-variant="primary"]')).toHaveLength(1);
 
-    // Back returns to step 2
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('onboarding-back-btn'));
-    });
-    expect(screen.getByTestId('onboarding-step-provider')).toBeTruthy();
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('onboarding-next-btn'));
-    });
+    // Back returns to the GitHub step
+    await clickBack();
+    expect(screen.getByTestId('onboarding-step-github')).toBeTruthy();
+    await clickNext();
+    expect(screen.getByTestId('onboarding-step-idea')).toBeTruthy();
 
     // Empty idea shows validation error
     await act(async () => {
@@ -489,9 +555,8 @@ describe('OnboardingPage', () => {
     });
     await renderOnboarding({ client, locale: 'en' });
 
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('onboarding-next-btn'));
-    });
+    await clickNext();
+    await clickNext();
 
     const keyInput = screen.getByLabelText(/API key/i) as HTMLInputElement;
     await act(async () => {
@@ -524,9 +589,8 @@ describe('OnboardingPage', () => {
     });
     await renderOnboarding({ client, locale: 'en' });
 
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('onboarding-next-btn'));
-    });
+    await clickNext();
+    await clickNext();
 
     const keyInput = screen.getByLabelText(/API key/i) as HTMLInputElement;
     await act(async () => {
@@ -594,9 +658,8 @@ describe('OnboardingPage', () => {
     await renderOnboarding({ client, locale: 'en' });
 
     // Step 1 (language) -> Step 2 (provider)
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('onboarding-next-btn'));
-    });
+    await clickNext();
+    await clickNext();
     expect(screen.getByTestId('onboarding-step-provider')).toBeTruthy();
 
     // Enter real API key and verify required attribute
@@ -623,23 +686,21 @@ describe('OnboardingPage', () => {
     expect(isMaskedKey(keyInputAfterSave.value)).toBe(true);
     expect(keyInputAfterSave.value).not.toContain('sk-');
 
-    // Next button becomes primary and advances to step 3 (idea)
+    // Next button becomes primary and advances to the GitHub step, then the idea step
     const nextBtn = screen.getByTestId('onboarding-next-btn');
     expect(nextBtn.getAttribute('data-variant')).toBe('primary');
 
-    await act(async () => {
-      fireEvent.click(nextBtn);
-      await Promise.resolve();
-    });
+    await clickNext();
+    expect(screen.getByTestId('onboarding-step-github')).toBeTruthy();
+    await clickNext();
 
-    // Successfully advanced to Step 3
+    // Successfully advanced to Step 5 (idea)
     expect(screen.getByTestId('onboarding-step-idea')).toBeTruthy();
 
-    // Navigate back to provider step
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('onboarding-back-btn'));
-      await Promise.resolve();
-    });
+    // Navigate back to the provider step through the GitHub step
+    await clickBack();
+    expect(screen.getByTestId('onboarding-step-github')).toBeTruthy();
+    await clickBack();
     expect(screen.getByTestId('onboarding-step-provider')).toBeTruthy();
 
     // Provider key remains masked
@@ -658,11 +719,9 @@ describe('OnboardingPage', () => {
     expect(client.testProvider).not.toHaveBeenCalled();
     expect(screen.queryByTestId('onboarding-test-error')).toBeNull();
 
-    // Next advances again to Step 3
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('onboarding-next-btn'));
-      await Promise.resolve();
-    });
+    // Next advances again to the idea step through GitHub
+    await clickNext();
+    await clickNext();
     expect(screen.getByTestId('onboarding-step-idea')).toBeTruthy();
   });
 
@@ -817,5 +876,230 @@ describe('OnboardingPage', () => {
     expect(screen.getByTestId('route-inspector').textContent).toBe('/p/proj-123');
 
     consoleWarnSpy.mockRestore();
+  });
+
+  it('connection step: a failed server test keeps Continue disabled and explains the reason', async () => {
+    await renderOnboarding({ client: makeMockClient(), locale: 'en' });
+    await clickNext();
+
+    expect(screen.getByTestId('onboarding-step-connection')).toBeTruthy();
+    expect(
+      screen.getByTestId('onboarding-connection-mode-local').getAttribute('aria-checked')
+    ).toBe('true');
+
+    fireEvent.click(screen.getByTestId('onboarding-connection-mode-server'));
+    await settle();
+    expect(
+      screen.getByTestId('onboarding-connection-mode-server').getAttribute('aria-checked')
+    ).toBe('true');
+
+    fireEvent.change(fieldInput('onboarding-connection-url'), {
+      target: { value: 'http://10.0.0.5:7878' },
+    });
+    fireEvent.change(fieldInput('onboarding-connection-token'), {
+      target: { value: 'tok-server' },
+    });
+    await settle();
+
+    // A server needs a passing test for the values on screen before Continue works.
+    expect((screen.getByTestId('onboarding-next-btn') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId('onboarding-connection-test-required')).toBeTruthy();
+
+    shell.connectionReply = { ok: false, reason: 'unreachable', detail: 'dns failure', wsUrl: '' };
+    fireEvent.click(screen.getByTestId('onboarding-connection-test'));
+    await settle();
+    expect(screen.getByTestId('onboarding-connection-error')).toBeTruthy();
+    expect(screen.getByTestId('onboarding-connection-error-reason').textContent).toContain(
+      'The server did not answer'
+    );
+    expect((screen.getByTestId('onboarding-next-btn') as HTMLButtonElement).disabled).toBe(true);
+    expect(shell.config.get('connection_mode')).toBeUndefined();
+
+    // A rejected token gets its own plain sentence, not the unreachable one.
+    shell.connectionReply = { ok: false, reason: 'unauthorized', detail: 'token rejected', wsUrl: '' };
+    fireEvent.click(screen.getByTestId('onboarding-connection-test'));
+    await settle();
+    expect(screen.getByTestId('onboarding-connection-error-reason').textContent).toContain(
+      'rejected the token'
+    );
+    expect((screen.getByTestId('onboarding-next-btn') as HTMLButtonElement).disabled).toBe(true);
+
+    // A rejected token never leaks back into the explanation.
+    expect(screen.getByTestId('onboarding-connection-error').textContent).not.toContain(
+      'tok-server'
+    );
+
+    // "Use this device instead" returns to Local, which keeps working.
+    fireEvent.click(screen.getByTestId('onboarding-connection-use-local'));
+    await settle();
+    expect(
+      screen.getByTestId('onboarding-connection-mode-local').getAttribute('aria-checked')
+    ).toBe('true');
+    expect((screen.getByTestId('onboarding-next-btn') as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByTestId('onboarding-connection-error')).toBeNull();
+  });
+
+  it('connection step: a passing test enables Continue, edits invalidate it, and saving writes the server config', async () => {
+    await renderOnboarding({ client: makeMockClient(), locale: 'en' });
+    await clickNext();
+
+    fireEvent.click(screen.getByTestId('onboarding-connection-mode-server'));
+    await settle();
+    fireEvent.change(fieldInput('onboarding-connection-url'), {
+      target: { value: 'http://warsha.example:7878' },
+    });
+    fireEvent.change(fieldInput('onboarding-connection-token'), {
+      target: { value: 'tok-server' },
+    });
+    await settle();
+
+    shell.connectionReply = {
+      ok: true,
+      detail: 'ok',
+      wsUrl: 'ws://warsha.example:7878/ws',
+      version: '0.9.3',
+    };
+    fireEvent.click(screen.getByTestId('onboarding-connection-test'));
+    await settle();
+    expect(screen.getByTestId('onboarding-connection-success').textContent).toContain('0.9.3');
+    expect((screen.getByTestId('onboarding-next-btn') as HTMLButtonElement).disabled).toBe(false);
+
+    // Editing the address invalidates the earlier result.
+    fireEvent.change(fieldInput('onboarding-connection-url'), {
+      target: { value: 'http://warsha.example:9999' },
+    });
+    await settle();
+    expect(screen.queryByTestId('onboarding-connection-success')).toBeNull();
+    expect((screen.getByTestId('onboarding-next-btn') as HTMLButtonElement).disabled).toBe(true);
+
+    // Retest the edited address, then Continue stores every key and advances.
+    shell.connectionReply = {
+      ok: true,
+      detail: 'ok',
+      wsUrl: 'ws://warsha.example:9999/ws',
+      version: '0.9.3',
+    };
+    fireEvent.click(screen.getByTestId('onboarding-connection-test'));
+    await settle();
+    await clickNext();
+
+    expect(shell.config.get('daemon_url')).toBe('http://warsha.example:9999');
+    expect(shell.config.get('daemon_ws_url')).toBe('ws://warsha.example:9999/ws');
+    expect(shell.config.get('daemon_token')).toBe('tok-server');
+    expect(shell.config.get('connection_mode')).toBe('server');
+    const writtenKeys = shell.calls
+      .filter((call) => call.cmd === 'set_config')
+      .map((call) => call.args?.key);
+    expect(writtenKeys.slice(-4)).toEqual([
+      'daemon_url',
+      'daemon_ws_url',
+      'daemon_token',
+      'connection_mode',
+    ]);
+    expect(screen.getByTestId('onboarding-step-provider')).toBeTruthy();
+  });
+
+  it('connection step: choosing this device writes connection_mode=local', async () => {
+    await renderOnboarding({ client: makeMockClient(), locale: 'en' });
+    await clickNext();
+
+    await clickNext();
+    expect(shell.config.get('connection_mode')).toBe('local');
+    expect(screen.getByTestId('onboarding-step-provider')).toBeTruthy();
+  });
+
+  it('github step: reports the connected login, shows a plain failure, and skips without blocking', async () => {
+    const client = makeMockClient({
+      connectIntegration: vi.fn().mockResolvedValue({ id: 'github', connected: true }),
+      testIntegration: vi
+        .fn()
+        .mockResolvedValue({ status: 'ok', message: 'authenticated', account: 'octo-mock' }),
+    });
+    await renderOnboarding({ client, locale: 'en' });
+    await clickNext();
+    await clickNext();
+    await clickNext();
+    expect(screen.getByTestId('onboarding-step-github')).toBeTruthy();
+
+    fireEvent.change(fieldInput('onboarding-github-token'), {
+      target: { value: 'ghp_warsha_mock' },
+    });
+    fireEvent.click(screen.getByTestId('onboarding-github-connect-btn'));
+    await settle();
+
+    expect(client.connectIntegration).toHaveBeenCalledWith('github', {
+      token: 'ghp_warsha_mock',
+    });
+    expect(screen.getByTestId('onboarding-github-connected').textContent).toContain('@octo-mock');
+    // A working token is never shown back to the user.
+    expect(fieldInput('onboarding-github-token').value).toBe('');
+
+    // A rejected token shows GitHub's message plainly and never blocks the wizard.
+    vi.mocked(client.testIntegration).mockResolvedValue({
+      status: 'failed',
+      message: 'Bad credentials',
+    });
+    fireEvent.change(fieldInput('onboarding-github-token'), {
+      target: { value: 'ghp_wrong' },
+    });
+    fireEvent.click(screen.getByTestId('onboarding-github-connect-btn'));
+    await settle();
+    expect(screen.getByTestId('onboarding-github-error').textContent).toContain(
+      'Bad credentials'
+    );
+    expect((screen.getByTestId('onboarding-next-btn') as HTMLButtonElement).disabled).toBe(false);
+
+    // Skip continues to the idea step.
+    fireEvent.click(screen.getByTestId('onboarding-github-skip-btn'));
+    await settle();
+    expect(screen.getByTestId('onboarding-step-idea')).toBeTruthy();
+  });
+
+  it('provider skip warns on the provider step and again on the idea step', async () => {
+    await renderOnboarding({ client: makeMockClient(), locale: 'en' });
+    await clickNext();
+    await clickNext();
+    expect(screen.getByTestId('onboarding-step-provider')).toBeTruthy();
+    expect(screen.queryByTestId('onboarding-provider-warning')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('onboarding-provider-skip-btn'));
+    await settle();
+    expect(screen.getByTestId('onboarding-provider-warning').textContent).toContain(
+      "Runs won't start until you connect a model provider. You can do it later from Settings → Models."
+    );
+
+    await clickNext();
+    await clickNext();
+    expect(screen.getByTestId('onboarding-step-idea')).toBeTruthy();
+    expect(screen.getByTestId('onboarding-provider-warning').textContent).toContain(
+      "Runs won't start until you connect a model provider"
+    );
+  });
+
+  it('renders the connection and GitHub steps in Arabic with a right-to-left document', async () => {
+    await renderOnboarding({ client: makeMockClient(), locale: 'ar' });
+    await clickNext();
+
+    expect(screen.getByTestId('onboarding-step-connection')).toBeTruthy();
+    expect(document.documentElement.getAttribute('dir')).toBe('rtl');
+    expect(screen.getByTestId('onboarding-step-connection').textContent).toContain(
+      'كيف نُشغّل ورشة؟'
+    );
+
+    fireEvent.click(screen.getByTestId('onboarding-connection-mode-server'));
+    await settle();
+    expect(screen.getByTestId('onboarding-connection-mode-server').textContent).toContain('خادم');
+    // Technical fields stay left-to-right even inside an RTL page.
+    expect(fieldInput('onboarding-connection-url').getAttribute('dir')).toBe('ltr');
+
+    // Back to this device so the wizard can move on without a server test.
+    fireEvent.click(screen.getByTestId('onboarding-connection-mode-local'));
+    await settle();
+    await clickNext();
+    await clickNext();
+    expect(screen.getByTestId('onboarding-step-github')).toBeTruthy();
+    expect(screen.getByTestId('onboarding-step-github').textContent).toContain('GitHub');
+    expect(screen.getByTestId('onboarding-github-token').textContent).toContain('رمز GitHub');
+    expect(screen.getByTestId('onboarding-github-skip-btn').textContent).toBe('تخطٍّ الآن');
   });
 });

@@ -1,5 +1,6 @@
 export type SettingsSectionId =
   | 'general'
+  | 'connection'
   | 'models'
   | 'devices'
   | 'workflows'
@@ -34,6 +35,14 @@ export const SETTINGS_SECTIONS: readonly SectionMeta[] = [
     id: 'general',
     labelKey: 'settings.section.general',
     descKey: 'settings.section.general.desc',
+    scopeKey: 'settings.scope.device',
+    isAdvanced: false,
+    isQuick: true,
+  },
+  {
+    id: 'connection',
+    labelKey: 'settings.section.connection',
+    descKey: 'settings.section.connection.desc',
     scopeKey: 'settings.scope.device',
     isAdvanced: false,
     isQuick: true,
