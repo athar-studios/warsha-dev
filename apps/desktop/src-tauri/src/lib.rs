@@ -1243,7 +1243,8 @@ async fn probe_daemon(url: &str, token: &str) -> DaemonConnectionTest {
         );
     };
     if let Some(reported) = result.get("status").and_then(|status| status.as_str()) {
-        if reported != "ok" {
+        let normalized = reported.to_ascii_lowercase();
+        if !matches!(normalized.as_str(), "healthy" | "ok" | "ready" | "degraded") {
             return DaemonConnectionTest::failed(
                 "bad_response",
                 ws_url,
@@ -1761,8 +1762,10 @@ mod tests {
         }
     }
 
-    /// The JSON-RPC answer a healthy daemon gives, as `warshad` writes it.
-    const HEALTHY_ANSWER: &str = r#"{"jsonrpc":"2.0","id":1,"result":{"status":"ok","version":"0.3.1","uptime_seconds":7,"capabilities":{}}}"#;
+    /// The JSON-RPC answer a healthy daemon gives, as `warshad` writes it
+    /// (`crates/warshad/src/lib.rs` `health`: `status: "healthy"` when its
+    /// capabilities probe passes, `"degraded"` otherwise).
+    const HEALTHY_ANSWER: &str = r#"{"jsonrpc":"2.0","id":1,"result":{"status":"healthy","version":"0.3.1","uptime_seconds":7,"capabilities":{}}}"#;
 
     #[test]
     fn a_healthy_daemon_answers_the_connection_test_with_its_version() {
@@ -1794,6 +1797,24 @@ mod tests {
             "the probe is the same POST the client makes: {heads}"
         );
         assert!(!report.detail.contains("good-token"), "{report:?}");
+    }
+
+    #[test]
+    fn the_other_healthy_statuses_still_pass_the_connection_test() {
+        // `isDaemonHealthy` (`apps/desktop/src/v3/data/useHealth.ts:14-18`) accepts
+        // `healthy | ok | ready | degraded`, case-insensitive; the probe must agree.
+        for status in ["ok", "ready", "degraded", "Healthy", "DEGRADED"] {
+            let body = format!(
+                r#"{{"jsonrpc":"2.0","id":1,"result":{{"status":{status:?},"version":"0.3.1"}}}}"#
+            );
+            // `MockServer::answering` needs a `'static` body, so leak one per case;
+            // five small test-only leaks are bounded and never shipped.
+            let body: &'static str = Box::leak(body.into_boxed_str());
+            let server = MockServer::answering(200, body);
+            let report = tauri::async_runtime::block_on(probe_daemon(&server.url, "t"));
+            assert!(report.ok, "status {status:?}: {report:?}");
+            assert_eq!(report.version.as_deref(), Some("0.3.1"), "{report:?}");
+        }
     }
 
     #[test]
@@ -1853,6 +1874,15 @@ mod tests {
         );
         let report = tauri::async_runtime::block_on(probe_daemon(&auth.url, "t"));
         assert_eq!(report.reason.as_deref(), Some("unauthorized"), "{report:?}");
+
+        // A status outside the healthy set the app accepts is still not a daemon's yes.
+        let offline = MockServer::answering(
+            200,
+            r#"{"jsonrpc":"2.0","id":1,"result":{"status":"offline","version":"0.3.1"}}"#,
+        );
+        let report = tauri::async_runtime::block_on(probe_daemon(&offline.url, "t"));
+        assert!(!report.ok, "{report:?}");
+        assert_eq!(report.reason.as_deref(), Some("bad_response"), "{report:?}");
     }
 
     #[test]

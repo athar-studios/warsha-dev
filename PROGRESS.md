@@ -1,5 +1,16 @@
 # PROGRESS.md — Warsha Build Log
 
+## Run 2026-11-26 — Onboarding probe accepts real daemon health statuses (D-RN-ONBOARDING-4)
+
+- **Branch & worktree**: `r-next/onb-backend` (tip `3e26a5a`) in `.agents/worktrees/onb-backend`. Local commit only; no push, merge, tag, or `main` changes. No unfamiliar concurrent changes encountered; tree was clean.
+- **Fix** (`apps/desktop/src-tauri/src/lib.rs` only):
+  - `probe_daemon`: replaced the `reported != "ok"` check with acceptance of `healthy | ok | ready | degraded` (case-insensitive), matching `isDaemonHealthy` (`apps/desktop/src/v3/data/useHealth.ts:14-18`); missing `status` still passes as before, anything else is still `bad_response` with the existing detail.
+  - Mock tests now mirror `crates/warshad/src/lib.rs:355-369` (`HEALTHY_ANSWER` answers `status: "healthy"` with `version`/`uptime_seconds`/`capabilities`); new coverage that `ok | ready | degraded` (incl. mixed case) pass with version propagation, and `"offline"` is `bad_response`.
+  - Recorded `D-RN-ONBOARDING-4` in `DECISIONS.md`.
+- **Verification**:
+  - `apps/desktop/src-tauri`: `cargo fmt --check` exit 0, `cargo clippy --all-targets -- -D warnings` exit 0, `cargo test` exit 0 (**16 passed**, 0 failed).
+  - `node scripts/check-engineering-policy.mjs` from the worktree root: exit 0 (**8 checks, 0 failures**).
+
 ## Run 2026-11-26 — Onboarding rebuild backend lane (D-RN-ONBOARDING-1)
 
 - **Branch & worktree**: `r-next/onb-backend` (rebased onto `2aef9ea`) in `.agents/worktrees/onb-backend`. Local commit only; no push, merge, tag, or `main` changes.
