@@ -1,11 +1,18 @@
 
 # DECISIONS.md — Architecture and Design Decisions
 
+## 2026-11-28 — D-RN-CLEAN13-1: K-1 truth correction (Option A applied, Option B deferred)
+
+- **Why**: external verification of CLEAN-12 (NOT CLEAR, all gates green) proved the K3 commit `54ced28` removed only a redundant duplicate insert: `ProviderRouter::new()` pre-registers `FakeProvider` under `"fake"` on every router including production (`provider_ids() == ["fake"]`), and `roles.set` still accepts `"fake"`.
+- **Option A (applied)**: reworded the comment at `crates/warshad/src/startup.rs` and the CLEAN-12 entries in PROGRESS.md/DECISIONS.md to the truth. K3 holds via `dispatch_chat`'s `WARSHA_LLM_PROVIDER` gate plus `PipelineError::NoProviderRouted`.
+- **Option B (DEFERRED, not implemented)**: actually remove the fake from production routers — take it out of `ProviderRouter::with_capacity_and_policy`, drop `"fake"` from the `roles.set` allowlist, add a proving test. The `fake_e2e` test asserting the fake is registered on every router is unchanged.
+- **Also**: PROGRESS.md hands-on report path fixed (L-4); file-count pass ratios rewritten as true counts (nit); evidenced Judge report replaces the one-line ledger report (J-1).
+
 ## 2026-11-28 — D-RN-CLEAN12-1: remove FakeProvider from production daemon startup (CLEAN-12 K3 no silent fakes)
 
 - **Branch / base**: `clean12-fix`, base `75bae11` (CLEAN-11 merged tip), isolated worktree `.agents/worktrees/clean12-fix`. Local only; zero changes to non-test product code outside `crates/warshad/src/startup.rs`, no push, tag, or publish.
-- **K3 gap (KEEL milestone P0)**: `FakeProvider` registered unconditionally in production daemon startup (`crates/warshad/src/startup.rs:303`) — this IS the silent fake fallback K3 forbids.
-- **Fix (commit `54ced28`)**: Removed the unconditional `FakeProvider` registration block in `start_daemon_with_interfaces` and replaced with NOTE comment explaining `FakeProvider` is only used when `WARSHA_LLM_PROVIDER=fake` is explicitly set (via `dispatch_chat` at `pipeline/src/lib.rs:1854`). Retained `MockProvider` registrations (`MOCK_PROVIDER_ID`/`"mock"` and `"mock-503"`) for test wiring.
+- **K3 gap (KEEL milestone P0)**: `FakeProvider` registered unconditionally in production daemon startup (`crates/warshad/src/startup.rs:303`) — CORRECTED (CLEAN-13): this line was a redundant duplicate insert, NOT the silent fake fallback; `ProviderRouter::new()` already pre-registers the fake on every router.
+- **Fix (commit `54ced28`)**: Removed the unconditional `FakeProvider` registration block in `start_daemon_with_interfaces` and replaced with a NOTE comment (reworded in CLEAN-13 to the truth: the fake remains pre-registered and routable via `roles.set`; K3 is met by the `dispatch_chat` env gate at `pipeline/src/lib.rs:1854` plus `NoProviderRouted`). Retained `MockProvider` registrations (`MOCK_PROVIDER_ID`/`"mock"` and `"mock-503"`) for test wiring.
 - **K3 gating verified**: `crates/warsha-pipeline/src/lib.rs:1833-1858` (`dispatch_chat`) gates `FakeProvider::new()` behind `forced_fake = WARSHA_LLM_PROVIDER == "fake"`; unrouted roles return `PipelineError::NoProviderRouted` — no silent fake fallback. `ProviderRouter::new()` pre-registers FakeProvider under `"fake"` on every router (pre-existing, untouched) but it carries no role routing and does not hijack routed roles; the fake answering path constructs `FakeProvider::new()` directly behind the env gate.
 - **Verification on `clean12-fix` tip**:
   - Rust workspace: `cargo fmt --all --check` ✓; `cargo clippy -q --workspace --all-targets -- -D warnings` ✓; `cargo test --workspace --no-fail-fast` (70 suites, **1491+ passed, 0 failed, 13 ignored**) ✓.

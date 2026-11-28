@@ -294,10 +294,13 @@ pub(crate) async fn start_daemon_with_interfaces(
         .write()
         .await
         .register_provider(Box::new(warsha_providers::MockProvider::new("mock-503")));
-    // NOTE: FakeProvider is intentionally NOT registered in production.
-    // It is only used when WARSHA_LLM_PROVIDER=fake is explicitly set in the environment
-    // (see warsha_pipeline::dispatch_chat). Registering it here would create a silent
-    // fake fallback that K3 ("no silent fakes") forbids.
+    // NOTE (K3, truth): the FakeProvider insert that used to sit here was a redundant
+    // duplicate. ProviderRouter::new() already pre-registers FakeProvider under "fake"
+    // on EVERY router, production included, and roles.set can still route a role to
+    // "fake". K3 ("no silent fakes") is met by the WARSHA_LLM_PROVIDER env gate in
+    // warsha_pipeline::dispatch_chat plus PipelineError::NoProviderRouted for unrouted
+    // roles, not by the fake being absent from the router (Option B, deferred:
+    // D-RN-CLEAN13-1).
 
     // The providers the owner configured, before anything is served. This is the
     // bridge C2 was missing: `providers.add` stores a row and files a key, and a
