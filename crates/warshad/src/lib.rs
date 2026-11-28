@@ -152,6 +152,7 @@ mod rpc_extensions;
 mod rpc_impl;
 mod rpc_providers;
 mod rpc_roles_usage;
+mod rpc_tools;
 
 mod helpers;
 pub(crate) use helpers::{
