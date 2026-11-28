@@ -1,6 +1,13 @@
 
 # DECISIONS.md — Architecture and Design Decisions
 
+## 2026-11-28 — D-RN-ENGINE-H1D-1: first per-domain split of the RPC impl — provider domain into `rpc_providers.rs` (ENGINE H1 step 3)
+
+- **What**: the bodies of 10 provider-domain `WarshaApiServer` methods (`list_providers`, `provider_auth_status`, `provider_auth_start`, `provider_auth_complete`, `provider_disconnect`, `add_provider`, `test_provider`, `check_provider_models`, `provider_quota`, `remove_provider`) moved verbatim into `crates/warshad/src/rpc_providers.rs` as `pub(crate) async fn <name>_impl` inherent methods on `WarshaRpc` (`use super::*;`). The trait methods in `crates/warshad/src/rpc_impl.rs` keep their signatures, doc comments and attributes and now only delegate (`self.<name>_impl(..).await`). `lib.rs` declares `mod rpc_providers;` next to `mod rpc_impl;`. There is no `provider_auth_poll` method in the trait; role/budget/usage/device/plugin/integration methods untouched.
+- **Line counts**: `rpc_impl.rs` 4519 -> 4084; `rpc_providers.rs` 530 (new); `lib.rs` +1.
+- **Non-verbatim differences**: none in the bodies (byte-identical vs `HEAD:rpc_impl.rs`, checked per method); signatures only gain the `_impl` suffix and `pub(crate)`, and rustfmt re-wrapped two signatures. No field visibility change was needed. No behaviour, JSON-RPC name, error text, logging or test change.
+- **Evidence**: `cargo fmt --all --check` 0; `cargo clippy -q -p warshad --all-targets -- -D warnings` 0; `cargo test -p warshad --no-fail-fast` 448 passed, 0 failed, 5 ignored; `node scripts/check-engineering-policy.mjs` 8 checks, 0 failures.
+
 ## 2026-11-28 — D-RN-ENGINE-H1C-1: move daemon helper items out of `crates/warshad/src/lib.rs` (ENGINE H1 step 2)
 
 - **What**: `PENDING_PROJECT_BUDGETS`, `delete_branch_hint`, `apply_start_budget`, `StoreRunLiveness` (+ its `RunLiveness` impl), `check_secret_account`, `provider_has_stored_key` moved into `crates/warshad/src/helpers.rs` (`use super::*;`); `lib.rs` re-exports the ones other modules use via `pub(crate) use helpers::{...}`. `lib.rs` 578 -> 293 lines.

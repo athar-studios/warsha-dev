@@ -149,6 +149,7 @@ pub use runtime::{AgentLoopSnapshot, BackendRoutingsConfig};
 // --- end P-H1 A7 ---
 
 mod rpc_impl;
+mod rpc_providers;
 
 mod helpers;
 pub(crate) use helpers::{
