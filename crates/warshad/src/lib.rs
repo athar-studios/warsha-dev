@@ -153,6 +153,7 @@ mod rpc_impl;
 mod rpc_projects;
 mod rpc_providers;
 mod rpc_roles_usage;
+mod rpc_runs;
 mod rpc_tools;
 
 mod helpers;
