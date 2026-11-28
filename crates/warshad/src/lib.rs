@@ -150,6 +150,7 @@ pub use runtime::{AgentLoopSnapshot, BackendRoutingsConfig};
 
 mod rpc_impl;
 mod rpc_providers;
+mod rpc_tools;
 
 mod helpers;
 pub(crate) use helpers::{
