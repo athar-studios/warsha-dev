@@ -81,6 +81,9 @@ RUN_TRIGGER
 graphify-out/
 .graphify*
 
+# Lane worktrees (created outside repo root)
+.agents/worktrees/
+
 # Android signing keys (SECURITY.md)
 *.jks
 *.keystore

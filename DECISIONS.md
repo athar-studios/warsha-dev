@@ -16,22 +16,22 @@
 
 ## 2026-11-28 — D-RN-CLEAN11-1: tokenDrift fix + ledger correction + docs commit (CLEAN-11 follow-up on `7d33585`)
 
-- **Branch / base**: `clean11-fix`, base `7d33585`, isolated worktree `.agents/worktrees/clean11-fix`. Local only; zero changes to Segmented.tsx or RR-2 code (RR-2 proven fixed by owner's hands-on re-test on native build at `7d33585`).
+- **Branch / base**: CLEAN-11 was committed **directly on `r-next/integration` as `75bae11`** (single-parent commit, no merge, no `clean11-fix` branch commit). The isolated worktree `.agents/worktrees/clean11-fix` was used for development and removed.
 - **Owner order (CLEAN-11)**: three items on r-next/integration tip `7d33585`: (1) tokenDrift fix — 4 hardcoded lengths in `apps/desktop/src/v3/pages/home/home.css` lines 448/497/522/547 need tokenization for `packages/ui` vitest 392/392; (2) Ledger correction — PROGRESS.md/DECISIONS.md claim "packages/ui vitest 58/58" was FALSE (was 57/58), record true numbers and owner's hands-on re-test proving RR-2 fixed; (3) Commit corrected docs.
 - **Changes**:
   1. Added `sourceGridMin: '220px'` to `packages/ui/src/tokens/sizes.ts` and `--warsha-size-source-grid-min: 220px` to `packages/ui/src/tokens/tokens.css` (light + dark blocks).
   2. Tokenized 4 hardcoded lengths in `apps/desktop/src/v3/pages/home/home.css`:
-     - line 448: `2px` → `var(--warsha-space-0-5)` (via alias in v3 tokens)
+     - line 448: `2px` → `var(--w-space-0-5)` (via alias in v3 tokens)
      - line 497: `220px` → `var(--warsha-size-source-grid-min)`
      - line 522: `3px` → `var(--warsha-size-edge)`
      - line 547: `3px` → `var(--warsha-size-edge)`
   3. Added `--w-space-0-5: 2px` alias to `packages/ui/src/v3/tokens/tokens.css` (light block) so v3 `tokenUsage.test.ts` (`var(--w-*)` scanner) passes — this alias is needed because the scanner only matches `--w-*` prefixes while DS v3 tokens use `--warsha-*`.
 - **Ledger correction**: PROGRESS.md CLEAN-10 entry previously claimed "`packages/ui` vitest **58/58**"; the true number on that tip was **57/58** (pre-existing R6 `tokenDrift.test.ts` failure on the 4 hardcoded lengths). This is recorded honestly here; CLEAN-11 fixes that failure. Owner's hands-on re-test (2026-11-28) on native build at `7d33585` with real pointer on WebKitGTK confirmed all 4 `ProjectSourcePicker` options switch on first real click, and Settings Language segmented flips EN↔AR cleanly.
-- **Verification on `clean11-fix` tip**:
+- **Verification on `r-next/integration` at `75bae11`**:
   - Rust workspace: `cargo fmt --all --check` ✓; `cargo clippy -q --workspace --all-targets -- -D warnings` ✓; `cargo test --workspace --no-fail-fast` (70 suites, **1491+ passed, 0 failed, 13 ignored**) ✓.
   - `apps/desktop/src-tauri`: `cargo fmt --check` ✓; `cargo clippy -q --all-targets -- -D warnings` ✓; `cargo test` (**13 passed; 0 failed**) ✓.
   - JS/TS & policy: `packages/i18n` vitest **64/64** ✓; `packages/client` vitest **214/214** + `tsc --noEmit` `0` ✓; `apps/desktop` vitest **912/912** + `tsc --noEmit` `0` + `tsc --noEmit -p tsconfig.e2e.json` `0` + `eslint` `0` errors (1 pre-existing warning `developers/index.tsx:291`) + `vite build` `0` ✓; `packages/ui` vitest **392/392** + `tsc --noEmit` `0` + `eslint` `0` ✓; `node scripts/check-engineering-policy.mjs` **8 checks, 0 failures** ✓.
-- **Judge**: `clean11-fix` @ `<SHA>` — **Judge PASS 100/100** (report to be archived), merged into `r-next/integration` as `<MERGE_SHA>`.
+- **Judge**: **CLEAN-11 committed directly on `r-next/integration` as `75bae11`** — **Judge PASS 100/100** (`/tmp/judge-clean11.md`, archived at `/home/moe/tools/judge-archive/judge-clean11.md`).
 
 ## 2026-11-28 — D-RN-CLEAN10-1: defensive `pointerEvents` fix on `Segmented.tsx` for ProjectSourcePicker mouse clicks (CLEAN-10 RR-2)
 
@@ -44,7 +44,7 @@
   - Label content wrapped: `<span style={{ pointerEvents: 'none' }}>{opt.label}</span>` so icon/span hit-testing cannot intercept.
   - Unchanged: keyboard handling, radiogroup role, `aria-checked`, `onClick`/`onKeyDown`, `cursor`/`opacity` states.
 - **Corroboration by code inspection**: Frame `modeSwitch` (`Frame.tsx`), `ModeSwitch.tsx`, and Settings segmented sections/CSS all have 0 `pointerEvents`/`pointer-events` matches — the hand-rolled implementations in Settings and Frame modeSwitch do not use `pointerEvents` and were never affected.
-- **Verification**: `cargo fmt --all --check` ✓; `cargo clippy --workspace --all-targets -- -D warnings` ✓; `cargo test --workspace` (1491/0/13) ✓; `apps/desktop/src-tauri` `cargo fmt --check`, `cargo clippy`, `cargo test` (13/0) ✓; `packages/i18n` vitest 64/64 ✓; `packages/client` vitest 214/214 + `tsc` 0 ✓; `apps/desktop` vitest 912/912 + `tsc` 0 + `eslint` 0 errors (1 pre-existing warning) + `vite build` 0 ✓; `packages/ui` vitest 58/58 (incl. `Segmented.test.tsx` 3/3) + `tsc` 0 + `eslint` 0 ✓; `node scripts/check-engineering-policy.mjs` 8/0 ✓.
+- **Verification**: `cargo fmt --all --check` ✓; `cargo clippy --workspace --all-targets -- -D warnings` ✓; `cargo test --workspace` (1491/0/13) ✓; `apps/desktop/src-tauri` `cargo fmt --check`, `cargo clippy`, `cargo test` (13/0) ✓; `packages/i18n` vitest 64/64 ✓; `packages/client` vitest 214/214 + `tsc` 0 ✓; `apps/desktop` vitest 912/912 + `tsc` 0 + `eslint` 0 errors (1 pre-existing warning) + `vite build` 0 ✓; `packages/ui` vitest **57/58** (incl. `Segmented.test.tsx` 3/3, pre-existing R6 `tokenDrift.test.ts` failure on 4 hardcoded lengths in `home.css`) + `tsc` 0 + `eslint` 0 ✓; `node scripts/check-engineering-policy.mjs` 8/0 ✓.
 - **Judge**: `clean10-fix` @ `dd4ce8a` — **Judge r2 PASS 100/100** (`/tmp/judge-clean10-rr2-v2.md`, archived at `/home/moe/tools/judge-archive/judge-clean10-rr2-v2.md`), merged into `r-next/integration` as **`a32e97d`**; follow-up commit **`7d33585`** (pre-existing `Toast.test.tsx` eslint `import/order` fix) merged on top.
 - **Follow-up**: Pre-existing `packages/ui/src/v3/composites/Toast.test.tsx` import order lint failure (not introduced by the fix) fixed in `7d33585` to keep `eslint` 0 errors on merged tip.
 

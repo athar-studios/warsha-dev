@@ -30,11 +30,12 @@ CLEAN-11 follow-up (base tip `7d33585`) fixed three items only; Segmented.tsx an
 1. **tokenDrift fix** (pre-existing R6 failure): 4 hardcoded lengths in `apps/desktop/src/v3/pages/home/home.css` (line 448: `2px`, 497: `220px`, 522: `3px`, 547: `3px`) tokenized via new `--warsha-size-source-grid-min: 220px` in `packages/ui/src/tokens/{sizes.ts,tokens.css}` (light + dark) and `--w-space-0-5: 2px` alias added to `packages/ui/src/v3/tokens/tokens.css` so v3 `tokenUsage.test.ts` (`var(--w-*)` scanner) passes. `packages/ui` vitest now **392/392 PASS**.
 2. **Ledger correction**: PROGRESS.md and DECISIONS.md now record true numbers (CLEAN-10 `packages/ui` vitest was 57/58, not 58/58) and owner's hands-on re-test proving RR-2 fixed on native build.
 3. **Commit corrected docs**: this entry and the corrected CLEAN-10 entry above committed on `r-next/integration`.
-- **Lane & Judge**: `clean11-fix` @ **`75bae11`** — **Judge PASS 100/100** (report archived), merged into `r-next/integration` as **`75bae11`** (fast-forward, no merge commit).
-- **Gates on merged tip**:
+- **Lane & Judge**: **CLEAN-11 was committed directly on `r-next/integration` as `75bae11`** (single-parent commit, no merge, no `clean11-fix` branch commit). Judge PASS 100/100 (`/tmp/judge-clean11.md` — archived at `/home/moe/tools/judge-archive/judge-clean11.md`).
+- **Gates on merged tip `75bae11`**:
   - Rust workspace: `cargo fmt --all --check`, `cargo clippy -q --workspace --all-targets -- -D warnings`, `cargo test --workspace --no-fail-fast` (**70 suites, 1491+ passed, 0 failed, 13 ignored**).
   - `apps/desktop/src-tauri`: `cargo fmt --check`, `cargo clippy -q --all-targets -- -D warnings`, `cargo test` (**13 passed; 0 failed**).
   - JS/TS & policy: `packages/i18n` vitest **64/64**; `packages/client` vitest **214/214** + `tsc --noEmit` `0`; `apps/desktop` vitest **912/912** + `tsc --noEmit` `0` + `tsc --noEmit -p tsconfig.e2e.json` `0` + `eslint` `0` errors (1 pre-existing warning) + `vite build` `0`; `packages/ui` vitest **392/392** + `tsc --noEmit` `0` + `eslint` `0`; `node scripts/check-engineering-policy.mjs` **8 checks, 0 failures**.
+- **Owner's hands-on re-test (2026-11-28)**: native build at `7d33585` with real pointer on WebKitGTK — all 4 `ProjectSourcePicker` options switch on first real click, and Settings Language segmented flips EN↔AR cleanly. Report: `~/Downloads/Warsha/warsha-hands-on-retest-clean10-2026-11-28.md`.
 
 ## FIXES COMPLETE — CLEAN-9 — 2026-11-27
 
