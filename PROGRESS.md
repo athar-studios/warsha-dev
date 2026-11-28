@@ -9945,3 +9945,7 @@ CLEAN-13 truth-corrections round (base `7de0117`, docs + one comment, no feature
 ## ENGINE H1 step 2 — helper items moved to `helpers.rs` — 2026-11-28
 
 `crates/warshad/src/lib.rs` 578 -> 293 lines; `PENDING_PROJECT_BUDGETS`, `delete_branch_hint`, `apply_start_budget`, `StoreRunLiveness`, `check_secret_account`, `provider_has_stored_key` now in `crates/warshad/src/helpers.rs` (294 lines). Decision `D-RN-ENGINE-H1C-1`. Gates on `cab4bda` (`CARGO_TARGET_DIR=/home/moe/tools/target-h1c`): fmt ok, `cargo clippy --workspace --all-targets -D warnings` 0, `cargo test --workspace --no-fail-fast` **1491 passed, 0 failed, 13 ignored**, policy 8/0. Not run: JS/TS, `src-tauri`, e2e x10 (Rust-internal move). Lead-verified; no Judge score (Judge lane rate-limited). Open for H1: `rpc_impl.rs` is still 4520 lines; the per-domain split of the impl is not done.
+
+## Remaining-gate record for `9e79ea7` (CLEAN-13/14 + ENGINE H1 steps 1-2) — 2026-11-28
+
+Run by the lead agent on `r-next/integration` @ `9e79ea7` after the Rust-only gates already recorded above: `packages/i18n` vitest 64/64 (2 files); `packages/client` vitest 214/214 (2 files); `packages/ui` vitest 392/392 (58 files, tokenDrift included); `apps/desktop` vitest 912/912 (93 files); `tsc --noEmit` exit 0; `eslint src` 0 errors, 1 pre-existing warning; `apps/desktop/src-tauri` fmt ok, clippy `-D warnings` 0, `cargo test` 13 passed 0 failed; `cargo test -p warshad --test e2e_real_arabic_request` x10: 0 failures, 2 tests each. Still no Judge score for these changes (Judge lane rate-limited).
