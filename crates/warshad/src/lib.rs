@@ -150,6 +150,7 @@ pub use runtime::{AgentLoopSnapshot, BackendRoutingsConfig};
 
 mod rpc_extensions;
 mod rpc_impl;
+mod rpc_projects;
 mod rpc_providers;
 mod rpc_roles_usage;
 mod rpc_tools;
