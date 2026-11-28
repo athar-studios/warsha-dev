@@ -1,7 +1,7 @@
 # PROGRESS.md — Warsha Build Log
 
 ## ENGINE H1 h/j/k — merged at afb98e5
-- d4384d1 (projects/interview/secretary, 25), 16f3ee9 (runs/gates/sessions, 23), 42fe728 (agents/backends/handoff/routines, 17); rpc_impl.rs 2601→1311 lines. Gates: fmt, clippy workspace, policy 8/0, tests 1491/0/13, e2e x10 0 failures. Judge pass pending; main 5f4b742 untouched, nothing published.
+- d4384d1 (projects/interview/secretary, 25), 16f3ee9 (runs/gates/sessions, 23), 42fe728 (agents/backends/handoff/routines, 17); rpc_impl.rs 2601→1311 lines. Gates: fmt, clippy workspace, policy 8/0, tests 1491/0/13, e2e x10 0 failures. Judge PASS 10/10 (/home/moe/tools/judge-archive/judge-h1hjk.md); main 5f4b742 untouched, nothing published.
 
 ## ENGINE H1 e/f/g — merged at e00d8ee
 - 83c9b47 (roles/usage/devices/budget, 14), adb6b1f (extensions, 25), 9a6d76b (tools/process/MCP/files, 29); rpc_impl.rs 4084→~2970 lines. Gates: fmt, clippy workspace, policy 8/0, tests 1491/0/13. Judge PASS 10/10 (/home/moe/tools/judge-archive/judge-h1efg.md); main 5f4b742 untouched, nothing published.
