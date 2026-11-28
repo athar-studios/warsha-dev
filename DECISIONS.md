@@ -4,7 +4,7 @@
 ## D-RN-ENGINE-H1EFG-1 — ENGINE H1 steps e/f/g: RPC bodies split by domain (2026-11-28)
 - Decision: moved 68 `WarshaApiServer` method bodies out of `crates/warshad/src/rpc_impl.rs` into `rpc_roles_usage.rs` (14), `rpc_extensions.rs` (25), `rpc_tools.rs` (29) as `pub(crate) async fn <name>_impl`; trait methods delegate. Pure mechanical move (83c9b47, adb6b1f, 9a6d76b) merged into r-next/integration (e00d8ee); only conflict was the `mod` line in lib.rs.
 - Evidence: lead body-comparison script (whitespace-normalized) 14/25/29 moved bodies identical, 0 untouched methods changed; fmt OK, clippy --workspace -D warnings OK, policy 8/0, cargo test --workspace 1491/0/13 on e00d8ee.
-- Judge: attempt-8a1f282a faulted on openrouter free 429 (no verdict). Acceptance is lead-verified (role merge recorded per ENGINEERING_POLICY.md); an independent Judge pass is still owed.
+- Judge: earlier free-lane attempts faulted on openrouter 429; independent Judge attempt-5dea35c8 PASS 10/10 (/home/moe/tools/judge-archive/judge-h1efg.md): 68/68 bodies identical, 75 untouched methods unchanged, no unwrap added; Judge ran cargo check only, tests/clippy/fmt were lead-run.
 
 ## 2026-11-28 — D-RN-ENGINE-H1D-1: first per-domain split of the RPC impl — provider domain into `rpc_providers.rs` (ENGINE H1 step 3)
 
