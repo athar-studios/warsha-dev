@@ -208,9 +208,18 @@ impl CostRecord {
 
 /// Test seam: armed before the first CAS in [`Store::recover_interrupted_runs`]
 /// so a concurrent writer can commit between the stale snapshot and the retry.
+/// The seam is keyed by [`RunId`] (sibling tests cannot steal it) and is a two-way
+/// handshake: recovery signals `ready`, then WAITS for `proceed` so the concurrent
+/// write is guaranteed to commit before recovery's CAS (D-RN-CLEAN14-1). A bare
+/// `yield_now` did not guarantee that ordering once the test did real SQLite I/O.
 #[cfg(test)]
-static RECOVER_BEFORE_CAS: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>> =
-    std::sync::Mutex::new(None);
+type RecoverSeam = (
+    RunId,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+);
+#[cfg(test)]
+static RECOVER_BEFORE_CAS: std::sync::Mutex<Option<RecoverSeam>> = std::sync::Mutex::new(None);
 
 /// Thin wrapper around a SQLite connection pool.
 ///
@@ -662,13 +671,21 @@ impl Store {
             let version = column_int(&row, "version")?.unsigned_abs();
             #[cfg(test)]
             {
-                let tx = RECOVER_BEFORE_CAS
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .take();
-                if let Some(tx) = tx {
+                let tx = {
+                    let mut seam = RECOVER_BEFORE_CAS
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    match seam.take() {
+                        Some((id, tx, proceed)) if id == run.id => Some((tx, proceed)),
+                        other => {
+                            *seam = other;
+                            None
+                        }
+                    }
+                };
+                if let Some((tx, proceed)) = tx {
                     let _ = tx.send(());
-                    tokio::task::yield_now().await;
+                    let _ = proceed.await;
                 }
             }
             run.status = RunStatus::Paused;
@@ -3107,9 +3124,11 @@ mod tests {
             store.update_run(&seeded).await.unwrap();
 
             let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+            let (proceed_tx, proceed_rx) = tokio::sync::oneshot::channel();
             *RECOVER_BEFORE_CAS
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(ready_tx);
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                Some((run.id, ready_tx, proceed_rx));
 
             let recovering = {
                 let store = Arc::clone(&store);
@@ -3132,6 +3151,7 @@ mod tests {
                 },
             );
             store.update_run_cas(&fresh, version).await.unwrap();
+            let _ = proceed_tx.send(());
 
             let recovered = recovering.await.unwrap().unwrap();
             assert_eq!(recovered.len(), 1);

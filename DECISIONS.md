@@ -1,6 +1,13 @@
 
 # DECISIONS.md — Architecture and Design Decisions
 
+## 2026-11-28 — D-RN-CLEAN14-1: deflake `recover_version_conflict_keeps_concurrent_artifacts` (test-seam only)
+
+- **Symptom**: during CLEAN-13 gates, `warsha-store` `tests::cas::recover_version_conflict_keeps_concurrent_artifacts` failed 1 of 15 isolated reruns and once in a full `cargo test --workspace` (`VersionConflict { expected: 2, actual: 3 }` at the test's own `update_run_cas`).
+- **Cause (verified by experiment)**: two test-seam weaknesses in `crates/warsha-store/src/lib.rs`. (1) The `RECOVER_BEFORE_CAS` static was global, so a parallel test calling `recover_interrupted_runs` could take it. (2) After signalling, recovery only did `yield_now()`, which does not guarantee the concurrent write commits before recovery's CAS. Fixing (1) alone (run-scoped seam) still failed 1 of 40; adding the two-way `ready`/`proceed` handshake removed the failure.
+- **Fix**: seam is keyed by `RunId` and carries a `proceed` receiver; recovery waits for `proceed` that the test sends after its own CAS. All changes are inside `#[cfg(test)]` code; production `recover_interrupted_runs` semantics are unchanged.
+- **Evidence**: `cargo test -q -p warsha-store` 60 consecutive runs, 0 failures (before: 1/15 and 1/40 with the partial fix). `cargo fmt --all --check` and `cargo clippy -p warsha-store --all-targets -D warnings` clean. Applied by the lead agent directly (the Coder lane was rate-limited).
+
 ## 2026-11-28 — D-RN-CLEAN13-1: K-1 truth correction (Option A applied, Option B deferred)
 
 - **Why**: external verification of CLEAN-12 (NOT CLEAR, all gates green) proved the K3 commit `54ced28` removed only a redundant duplicate insert: `ProviderRouter::new()` pre-registers `FakeProvider` under `"fake"` on every router including production (`provider_ids() == ["fake"]`), and `roles.set` still accepts `"fake"`.
