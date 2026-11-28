@@ -294,13 +294,10 @@ pub(crate) async fn start_daemon_with_interfaces(
         .write()
         .await
         .register_provider(Box::new(warsha_providers::MockProvider::new("mock-503")));
-    // W5's deterministic fake provider: unrouted pipeline stages already answer
-    // through it inside the pipeline's dispatch, and registering it here makes it
-    // visible to `providers.list` and routable by the owner like any provider.
-    providers
-        .write()
-        .await
-        .register_provider(Box::new(warsha_providers::FakeProvider::new()));
+    // NOTE: FakeProvider is intentionally NOT registered in production.
+    // It is only used when WARSHA_LLM_PROVIDER=fake is explicitly set in the environment
+    // (see warsha_pipeline::dispatch_chat). Registering it here would create a silent
+    // fake fallback that K3 ("no silent fakes") forbids.
 
     // The providers the owner configured, before anything is served. This is the
     // bridge C2 was missing: `providers.add` stores a row and files a key, and a
