@@ -1,5 +1,8 @@
 # PROGRESS.md — Warsha Build Log
 
+## FIX — OpenCode cold-start race retry (D-RN-OC-COLDSTART-1) — 2026-11-28
+- Branch `r-next/oc-cold-start` (base 12e06b5): `crates/warsha-backends/src/lib.rs` `CliBackend::execute` now retries (max 3 attempts, 400ms*attempt + jitter) only the OpenCode `account_state already exists` / `exited before reporting readiness` startup failure when the workspace is unchanged; everything else is unchanged. Tests in `tests::cold_start`. Local only, nothing pushed.
+
 ## ENGINE H1 h/j/k — merged at afb98e5
 - d4384d1 (projects/interview/secretary, 25), 16f3ee9 (runs/gates/sessions, 23), 42fe728 (agents/backends/handoff/routines, 17); rpc_impl.rs 2601→1311 lines. Gates: fmt, clippy workspace, policy 8/0, tests 1491/0/13, e2e x10 0 failures. Judge PASS 10/10 (/home/moe/tools/judge-archive/judge-h1hjk.md); JS gates at b2edc14: i18n 64, client 214, ui 392 (incl. tokenDrift), desktop 912, tsc 0, eslint 0 errors/1 warning; main 5f4b742 untouched, nothing published.
 

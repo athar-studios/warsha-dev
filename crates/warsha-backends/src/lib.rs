@@ -215,7 +215,61 @@ impl CodingBackend for CliBackend {
         permissions::has_permission_mapping(target)
     }
 
+    /// Runs the CLI once; for `opencode` a transient cold-start failure that
+    /// left the workspace untouched is retried (see [`is_transient_cold_start`]).
+    /// Every other outcome is returned exactly as the single attempt produced it.
     async fn execute(&self, task: CodingTask, sandbox: &Sandbox) -> Result<CodingResult> {
+        let mut attempt: u32 = 1;
+        loop {
+            match self.execute_once(task.clone(), sandbox).await {
+                Err(err)
+                    if attempt < COLD_START_MAX_ATTEMPTS
+                        && is_transient_cold_start(&self.name, &err) =>
+                {
+                    // Conservative: any captured change means the CLI did real
+                    // work before failing, so the error is final.
+                    let (_, files_changed) = capture_changes(&sandbox.work_dir).await;
+                    if !files_changed.is_empty() {
+                        return Err(err);
+                    }
+                    tokio::time::sleep(cold_start_backoff(attempt, task.id)).await;
+                    attempt += 1;
+                }
+                other => return other,
+            }
+        }
+    }
+}
+
+/// Total attempts (first run included) for a transient `opencode` cold start.
+const COLD_START_MAX_ATTEMPTS: u32 = 3;
+
+/// Backoff before retry `attempt + 1`: 400ms * attempt plus a 0..250ms jitter
+/// derived from the task id, so lanes that collided do not collide again.
+fn cold_start_backoff(attempt: u32, task_id: ulid::Ulid) -> std::time::Duration {
+    let jitter_ms = (task_id.0 % 250) as u64;
+    std::time::Duration::from_millis(400 * u64::from(attempt) + jitter_ms)
+}
+
+/// True only for the OpenCode first-run race where several processes create its
+/// SQLite schema at once: the loser exits at once with `table account_state
+/// already exists` and/or `Standalone server exited before reporting readiness`.
+/// Timeouts, owner stops, missing installs, sandbox errors and every other
+/// failure are not transient.
+fn is_transient_cold_start(backend_name: &str, err: &BackendError) -> bool {
+    if backend_name != "opencode" {
+        return false;
+    }
+    let BackendError::ExecutionFailed(detail) = err else {
+        return false;
+    };
+    detail.contains("exited before reporting readiness")
+        || (detail.contains("already exists")
+            && (detail.contains("account_state") || detail.contains("CREATE TABLE")))
+}
+
+impl CliBackend {
+    async fn execute_once(&self, task: CodingTask, sandbox: &Sandbox) -> Result<CodingResult> {
         if !self.is_available() {
             return Err(BackendError::NotInstalled(format!(
                 "{} not found in PATH",
@@ -1258,6 +1312,205 @@ mod tests {
         let sandbox = Sandbox::new(PathBuf::from("/tmp"));
         let result = backend.execute(task, &sandbox).await.unwrap();
         assert!(result.success);
+    }
+
+    /// OpenCode cold-start race: classification and bounded retry.
+    mod cold_start {
+        use super::*;
+
+        fn failed(detail: &str) -> BackendError {
+            BackendError::ExecutionFailed(detail.to_string())
+        }
+
+        const READINESS: &str =
+            "run could not resolve its server: Error: Standalone server exited before reporting readiness";
+        const SCHEMA: &str = "EffectDrizzleQueryError: CREATE TABLE account_state (id text) SQLiteError: table account_state already exists";
+
+        #[test]
+        fn the_two_evidence_failures_are_transient_for_opencode() {
+            assert!(is_transient_cold_start("opencode", &failed(READINESS)));
+            assert!(is_transient_cold_start("opencode", &failed(SCHEMA)));
+            assert!(is_transient_cold_start(
+                "opencode",
+                &failed("SQLiteError: table foo already exists in CREATE TABLE foo")
+            ));
+        }
+
+        #[test]
+        fn everything_else_is_not_transient() {
+            assert!(!is_transient_cold_start("claude-code", &failed(READINESS)));
+            assert!(!is_transient_cold_start("codex-cli", &failed(SCHEMA)));
+            assert!(!is_transient_cold_start(
+                "opencode",
+                &BackendError::Timeout(READINESS.to_string())
+            ));
+            assert!(!is_transient_cold_start(
+                "opencode",
+                &BackendError::Sandbox(READINESS.to_string())
+            ));
+            assert!(!is_transient_cold_start(
+                "opencode",
+                &BackendError::NotInstalled(READINESS.to_string())
+            ));
+            assert!(!is_transient_cold_start(
+                "opencode",
+                &failed("Stopped by owner")
+            ));
+            assert!(!is_transient_cold_start(
+                "opencode",
+                &failed("model quota exceeded")
+            ));
+            assert!(!is_transient_cold_start(
+                "opencode",
+                &failed("error: file already exists")
+            ));
+        }
+
+        #[test]
+        fn the_backoff_grows_with_the_attempt_and_stays_bounded() {
+            let id = Ulid::new();
+            let first = cold_start_backoff(1, id);
+            let second = cold_start_backoff(2, id);
+            assert!(first >= std::time::Duration::from_millis(400));
+            assert!(first < std::time::Duration::from_millis(650));
+            assert!(second >= std::time::Duration::from_millis(800));
+            assert!(second > first);
+        }
+
+        #[cfg(unix)]
+        fn script(dir: &std::path::Path, body: &str) -> PathBuf {
+            let path = dir.join("opencode-fake.sh");
+            std::fs::write(&path, format!("{body}\n")).expect("script written");
+            path
+        }
+
+        /// A fake `opencode` that counts invocations in `.warsha/count` of its
+        /// work dir (an internal path, never reported as a workspace change) and
+        /// fails with `fail_msg` while the count is <= `fail_times`.
+        #[cfg(unix)]
+        fn counting_body(fail_times: u32, fail_msg: &str, extra: &str) -> String {
+            format!(
+                "mkdir -p .warsha\nn=$(cat .warsha/count 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > .warsha/count\nif [ $n -le {fail_times} ]; then\n{extra}\necho '{fail_msg}' >&2\nexit 1\nfi\necho done"
+            )
+        }
+
+        #[cfg(unix)]
+        fn invocations(work: &std::path::Path) -> u32 {
+            std::fs::read_to_string(work.join(".warsha/count"))
+                .expect("the fake recorded its count")
+                .trim()
+                .parse()
+                .expect("a number")
+        }
+
+        #[cfg(unix)]
+        async fn run(
+            name: &str,
+            body: &str,
+            git: bool,
+        ) -> (Result<CodingResult>, tempfile::TempDir, tempfile::TempDir) {
+            let bin = tempfile::tempdir().expect("bin dir");
+            let work = tempfile::tempdir().expect("work dir");
+            if git {
+                let status = std::process::Command::new("git")
+                    .current_dir(work.path())
+                    .args(["init", "-q"])
+                    .status()
+                    .expect("git runs");
+                assert!(status.success());
+            }
+            // Run through `sh <script>` so a parallel test's fork can never make
+            // exec of a freshly written file fail with ETXTBSY.
+            let cli = script(bin.path(), body);
+            let backend = CliBackend::new(
+                name,
+                "sh",
+                vec![cli.to_str().expect("utf8 path").to_string()],
+            );
+            let sandbox = Sandbox::new(work.path().to_path_buf());
+            let task = e4::task("Do work", "Anything");
+            let result = backend.execute(task, &sandbox).await;
+            (result, bin, work)
+        }
+
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn a_transient_first_failure_is_retried_and_the_second_attempt_wins() {
+            let (result, _bin, work) =
+                run("opencode", &counting_body(1, READINESS, ""), false).await;
+            let result = result.expect("the retry succeeds");
+            assert!(result.success);
+            assert_eq!(invocations(work.path()), 2);
+        }
+
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn the_schema_race_message_is_retried_too() {
+            let (result, _bin, work) = run(
+                "opencode",
+                &counting_body(1, "table account_state already exists", ""),
+                false,
+            )
+            .await;
+            assert!(result.expect("the retry succeeds").success);
+            assert_eq!(invocations(work.path()), 2);
+        }
+
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn a_non_transient_failure_is_not_retried() {
+            let (result, _bin, work) = run(
+                "opencode",
+                &counting_body(9, "model quota exceeded", ""),
+                false,
+            )
+            .await;
+            match result {
+                Err(BackendError::ExecutionFailed(detail)) => {
+                    assert!(detail.contains("model quota exceeded"), "{detail}")
+                }
+                other => panic!("expected ExecutionFailed, got {other:?}"),
+            }
+            assert_eq!(invocations(work.path()), 1);
+        }
+
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn another_backend_with_the_same_message_is_not_retried() {
+            let (result, _bin, work) = run("fake", &counting_body(9, READINESS, ""), false).await;
+            assert!(matches!(result, Err(BackendError::ExecutionFailed(_))));
+            assert_eq!(invocations(work.path()), 1);
+        }
+
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn a_transient_failure_that_changed_the_workspace_is_not_retried() {
+            let (result, _bin, work) = run(
+                "opencode",
+                &counting_body(9, READINESS, "echo partial > partial.txt"),
+                true,
+            )
+            .await;
+            assert!(matches!(result, Err(BackendError::ExecutionFailed(_))));
+            assert_eq!(invocations(work.path()), 1);
+        }
+
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn three_transient_failures_return_the_error() {
+            let (result, _bin, work) =
+                run("opencode", &counting_body(9, READINESS, ""), false).await;
+            match result {
+                Err(BackendError::ExecutionFailed(detail)) => {
+                    assert!(
+                        detail.contains("exited before reporting readiness"),
+                        "{detail}"
+                    )
+                }
+                other => panic!("expected ExecutionFailed, got {other:?}"),
+            }
+            assert_eq!(invocations(work.path()), 3);
+        }
     }
 
     #[test]
