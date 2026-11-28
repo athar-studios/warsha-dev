@@ -1,6 +1,12 @@
 
 # DECISIONS.md — Architecture and Design Decisions
 
+## 2026-11-28 — D-RN-ENGINE-H1B-1: move `impl WarshaApiServer for WarshaRpc` out of `crates/warshad/src/lib.rs`
+
+- **Why**: ENGINE H1 target (PLAN P1): `crates/warshad/src/lib.rs` was 5091 lines, ~4500 of them one trait impl. Two earlier worker attempts failed (max-tokens; provider 429 mid-move leaving a non-compiling tree), so the move was done in one mechanical step by the lead agent.
+- **What**: lines 354-4867 of `lib.rs` (the `#[async_trait] impl WarshaApiServer for WarshaRpc` block) moved verbatim into `crates/warshad/src/rpc_impl.rs` (`use super::*;`); `lib.rs` now declares `mod rpc_impl;` and is 578 lines. No signature, behaviour or test change; helper fns and `StoreRunLiveness` stay in `lib.rs` for a later step (`helpers.rs` split NOT done).
+- **Evidence**: moved text diffed against `HEAD:crates/warshad/src/lib.rs` lines 354-4867; `cargo check -p warshad` 0 with no unused-import warnings and no blanket `allow`; `cargo clippy -p warshad --all-targets -D warnings` 0; `cargo test -p warshad` 448 passed, 0 failed, 5 ignored.
+
 ## 2026-11-28 — D-RN-CLEAN14-1: deflake `recover_version_conflict_keeps_concurrent_artifacts` (test-seam only)
 
 - **Symptom**: during CLEAN-13 gates, `warsha-store` `tests::cas::recover_version_conflict_keeps_concurrent_artifacts` failed 1 of 15 isolated reruns and once in a full `cargo test --workspace` (`VersionConflict { expected: 2, actual: 3 }` at the test's own `update_run_cas`).
