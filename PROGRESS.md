@@ -1,5 +1,7 @@
 # PROGRESS.md — Warsha Build Log
 
+- Round 13 live proof (tip 35c7bf3): real OpenCode four-lane run, 4/4 subtasks succeeded with non-empty files_changed/diff, merged branch passes scratch-crate tests 3/0; see docs/runs/clean1-live-r13c/README.md. Earlier cold-start race fixed by D-RN-OC-COLDSTART-1.
+
 ## FIX — OpenCode cold-start race retry (D-RN-OC-COLDSTART-1) — 2026-11-28
 - Branch `r-next/oc-cold-start` (base 12e06b5): `crates/warsha-backends/src/lib.rs` `CliBackend::execute` now retries (max 3 attempts, 400ms*attempt + jitter) only the OpenCode `account_state already exists` / `exited before reporting readiness` startup failure when the workspace is unchanged; everything else is unchanged. Tests in `tests::cold_start`. Local only, nothing pushed.
 
