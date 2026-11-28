@@ -9936,3 +9936,4 @@ CLEAN-13 truth-corrections round (base `7de0117`, docs + one comment, no feature
 ## CLEAN-14 — warsha-store flake fix — 2026-11-28
 
 `recover_version_conflict_keeps_concurrent_artifacts` made deterministic (run-scoped seam + `ready`/`proceed` handshake, `#[cfg(test)]` only; see `D-RN-CLEAN14-1`). `cargo test -q -p warsha-store`: 60/60 consecutive passes. Closes the flake disclosed in the CLEAN-13 entry. Judge lane rate-limited; lead-verified.
+- **CLEAN-14 gates on `929c4bb`** (fresh `CARGO_TARGET_DIR=/home/moe/tools/target-clean13`): `cargo test --workspace --no-fail-fast` twice, both **1491 passed, 0 failed, 13 ignored**; `cargo fmt --all --check` and `node scripts/check-engineering-policy.mjs` (8/0) clean. Not re-run for this change: JS/TS, `src-tauri`, e2e x10 (diff is `#[cfg(test)]` code in `crates/warsha-store` plus markdown).
