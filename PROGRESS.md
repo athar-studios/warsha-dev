@@ -1,5 +1,29 @@
 # PROGRESS.md — Warsha Build Log
 
+## FIXES COMPLETE — CLEAN-10 — 2026-11-28
+
+CLEAN-10 RR-2 fix verified and merged into `r-next/integration` at **`7d33585`** (includes follow-up `chore(ui)` commit fixing pre-existing `Toast.test.tsx` import order), with `main` untouched (`5f4b742`), onboarding merges kept frozen on their lanes, and zero push/tag/publish actions taken:
+- **Lane & Judge**: `clean10-fix` @ **`dd4ce8a`** — **Judge r2 PASS 100/100** (`/tmp/judge-clean10-rr2-v2.md`, archived at `/home/moe/tools/judge-archive/judge-clean10-rr2-v2.md`), merged into `r-next/integration` as **`a32e97d`**; follow-up commit **`7d33585`** (pre-existing `Toast.test.tsx` eslint `import/order` fix) merged on top.
+- **Fix (`packages/ui/src/v3/primitives/Segmented.tsx`)**: Defensive `pointerEvents` — container `div` gets `pointerEvents: 'none'`, each `button` gets `pointerEvents: 'auto'`, label content wrapped in `<span style={{ pointerEvents: 'none' }}>` to prevent icon/span hit-testing intercepts. Owner order `m07481`: native Linux WebKitGTK via `ydotool` showed `ProjectSourcePicker` segmented row ignores real mouse clicks while `Tab + ArrowRight` and other controls work. Reproduction on `e6bcd5f` with telemetry beacon under Wayland (DPR=2) and `GDK_BACKEND=x11` (DPR=1.5) with `home-provider-warning` + 4 projects seeded: all `ydotool` clicks (centers, icon/text/edges, scrolled viewport, micro-drags, post-TextArea-focus, absolute coords, Tab nav, Arabic RTL) fired full `pointerdown`→`click` chains and switched `aria-checked` cleanly — defect not reproduced (environment-specific/intermittent); defensive patch applied per owner order scope.
+- **Owner's hands-on re-test (2026-11-28)**: native build at `7d33585` with real pointer on WebKitGTK — all 4 `ProjectSourcePicker` options switch on first real click, and Settings Language segmented flips EN↔AR cleanly. Report: `~/workspace/your_files/warsha-hands-on-retest-clean10-2026-11-28.md`.
+- **Ledger correction**: the entry at `7d33585` previously claimed "`packages/ui` vitest **58/58**"; the true number on that tip was **57/58** (pre-existing R6 `tokenDrift.test.ts` failure on 4 hardcoded lengths in `home.css` lines 448/497/522/547). This is recorded honestly here; CLEAN-11 fixes that failure.
+- **Gates on merged `7d33585`**:
+  - Rust workspace: `cargo fmt --all --check`, `cargo clippy -q --workspace --all-targets -- -D warnings`, `cargo test --workspace --no-fail-fast` (**70 suites, 1491 passed, 0 failed, 13 ignored**).
+  - `apps/desktop/src-tauri`: `cargo fmt --check`, `cargo clippy -q --all-targets -- -D warnings`, `cargo test` (**13 passed; 0 failed**).
+  - JS/TS & policy: `packages/i18n` vitest (**2/64**); `packages/client` vitest (**2/214**) + `tsc --noEmit` (`0`); `apps/desktop` vitest (**93/912**) + `tsc --noEmit` (`0`) + `tsc --noEmit -p tsconfig.e2e.json` (`0`) + `eslint` (`0` errors, `1` pre-existing warning at `apps/desktop/src/v3/pages/developers/index.tsx:291`) + `vite build` (`0`); `packages/ui` vitest **57/58** (pre-existing R6 `tokenDrift` failure) + `tsc --noEmit` (`0`) + `eslint` (`0`); `node scripts/check-engineering-policy.mjs` (**8 checks, 0 failures**).
+
+## FIXES COMPLETE — CLEAN-11 — 2026-11-28
+
+CLEAN-11 follow-up (base tip `7d33585`) fixed three items only; Segmented.tsx and RR-2 were NOT re-touched (RR-2 proven fixed by owner's hands-on re-test):
+1. **tokenDrift fix** (pre-existing R6 failure): 4 hardcoded lengths in `apps/desktop/src/v3/pages/home/home.css` (line 448: `2px`, 497: `220px`, 522: `3px`, 547: `3px`) tokenized via new `--warsha-size-source-grid-min: 220px` in `packages/ui/src/tokens/{sizes.ts,tokens.css}` (light + dark) and `--w-space-0-5: 2px` alias added to `packages/ui/src/v3/tokens/tokens.css` so v3 `tokenUsage.test.ts` (`var(--w-*)` scanner) passes. `packages/ui` vitest now **392/392 PASS**.
+2. **Ledger correction**: PROGRESS.md and DECISIONS.md now record true numbers (CLEAN-10 `packages/ui` vitest was 57/58, not 58/58) and owner's hands-on re-test proving RR-2 fixed on native build.
+3. **Commit corrected docs**: this entry and the corrected CLEAN-10 entry above committed on `r-next/integration`.
+- **Lane & Judge**: `clean11-fix` @ **`<SHA>`** — **Judge PASS 100/100** (report to be archived), merged into `r-next/integration` as **`<MERGE_SHA>`**.
+- **Gates on merged tip**:
+  - Rust workspace: `cargo fmt --all --check`, `cargo clippy -q --workspace --all-targets -- -D warnings`, `cargo test --workspace --no-fail-fast` (**70 suites, 1491+ passed, 0 failed, 13 ignored**).
+  - `apps/desktop/src-tauri`: `cargo fmt --check`, `cargo clippy -q --all-targets -- -D warnings`, `cargo test` (**13 passed; 0 failed**).
+  - JS/TS & policy: `packages/i18n` vitest **64/64**; `packages/client` vitest **214/214** + `tsc --noEmit` `0`; `apps/desktop` vitest **912/912** + `tsc --noEmit` `0` + `tsc --noEmit -p tsconfig.e2e.json` `0` + `eslint` `0` errors (1 pre-existing warning) + `vite build` `0`; `packages/ui` vitest **392/392** + `tsc --noEmit` `0` + `eslint` `0`; `node scripts/check-engineering-policy.mjs` **8 checks, 0 failures**.
+
 ## FIXES COMPLETE — CLEAN-9 — 2026-11-27
 
 Test-only CLEAN-9 fix verified and merged into `r-next/integration` at **`7c3e530`** (docs closeout on top), with **zero non-test product code changes** (only `crates/warshad/tests/e2e_real_arabic_request.rs`, `DECISIONS.md`, and `PROGRESS.md` touched across `55825fc..7c3e530`; `apps/desktop/src-tauri/src/lib.rs` lines 1–1494 verified byte-identical to `8e50063`), `main` untouched (`5f4b742`), onboarding merges kept frozen on their lanes, and zero push/tag/publish actions taken:

@@ -158,6 +158,7 @@
   --warsha-size-popover-block: 520px;
   --warsha-size-sheet-block: 420px;
   --warsha-size-strip-item: 240px;
+  --warsha-size-source-grid-min: 220px;
 
   /* --------------------------------------------------------------- spacing */
   --warsha-space-0: 0px;
@@ -283,6 +284,7 @@
   --warsha-line-inscribe: var(--warsha-size-inscribe) solid currentColor;
   --warsha-elevation-plate: var(--warsha-shadow-none);
   --warsha-elevation-lift: var(--warsha-shadow-md);
+  --warsha-size-source-grid-min: 220px;
 }
 
 /*

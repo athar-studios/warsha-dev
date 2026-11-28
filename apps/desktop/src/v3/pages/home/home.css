@@ -445,7 +445,7 @@
 .v3-source-gh-badge {
   display: inline-flex;
   align-items: center;
-  padding-block: 2px;
+  padding-block: var(--w-space-0-5);
   padding-inline: var(--w-space-2);
   border-radius: var(--w-radius-full);
   font-size: var(--w-font-size-xs);
@@ -494,7 +494,7 @@
 
 .v3-source-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(var(--warsha-size-source-grid-min), 1fr));
   gap: var(--w-space-2);
   align-items: end;
 }
@@ -519,7 +519,7 @@
   flex-wrap: wrap;
   padding-block: var(--w-space-2);
   padding-inline: var(--w-space-3);
-  border-inline-start: 3px solid var(--w-attention);
+  border-inline-start: var(--warsha-size-edge) solid var(--w-attention);
   border-radius: var(--w-radius-sm);
   background: var(--w-surface);
   font-size: var(--w-font-size-xs);
@@ -544,7 +544,7 @@
   gap: var(--w-space-2);
   padding-block: var(--w-space-3);
   padding-inline: var(--w-space-3);
-  border-inline-start: 3px solid var(--w-attention);
+  border-inline-start: var(--warsha-size-edge) solid var(--w-attention);
   border-radius: var(--w-radius-sm);
   background: var(--w-surface);
 }

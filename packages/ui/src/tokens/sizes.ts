@@ -110,6 +110,8 @@ export const sizeTokens = {
   sheetBlock: '420px',
   /** A horizontal agent-strip item. */
   stripItem: '240px',
+  /** Project source picker grid minimum track size. */
+  sourceGridMin: '220px',
 } as const;
 
 /** The name of a size token. */
