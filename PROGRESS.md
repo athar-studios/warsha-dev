@@ -1,5 +1,8 @@
 # PROGRESS.md — Warsha Build Log
 
+## ENGINE H1 e/f/g — merged at e00d8ee
+- 83c9b47 (roles/usage/devices/budget, 14), adb6b1f (extensions, 25), 9a6d76b (tools/process/MCP/files, 29); rpc_impl.rs 4084→~2970 lines. Gates: fmt, clippy workspace, policy 8/0, tests 1491/0/13. Judge 429 (not scored); main 5f4b742 untouched, nothing published.
+
 ## FIXES COMPLETE — CLEAN-10 — 2026-11-28
 
 CLEAN-10 RR-2 fix verified and merged into `r-next/integration` at **`7d33585`** (includes follow-up `chore(ui)` commit fixing pre-existing `Toast.test.tsx` import order), with `main` untouched (`5f4b742`), onboarding merges kept frozen on their lanes, and zero push/tag/publish actions taken:

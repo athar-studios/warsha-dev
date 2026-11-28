@@ -1,6 +1,11 @@
 
 # DECISIONS.md — Architecture and Design Decisions
 
+## D-RN-ENGINE-H1EFG-1 — ENGINE H1 steps e/f/g: RPC bodies split by domain (2026-11-28)
+- Decision: moved 68 `WarshaApiServer` method bodies out of `crates/warshad/src/rpc_impl.rs` into `rpc_roles_usage.rs` (14), `rpc_extensions.rs` (25), `rpc_tools.rs` (29) as `pub(crate) async fn <name>_impl`; trait methods delegate. Pure mechanical move (83c9b47, adb6b1f, 9a6d76b) merged into r-next/integration (e00d8ee); only conflict was the `mod` line in lib.rs.
+- Evidence: lead body-comparison script (whitespace-normalized) 14/25/29 moved bodies identical, 0 untouched methods changed; fmt OK, clippy --workspace -D warnings OK, policy 8/0, cargo test --workspace 1491/0/13 on e00d8ee.
+- Judge: attempt-8a1f282a faulted on openrouter free 429 (no verdict). Acceptance is lead-verified (role merge recorded per ENGINEERING_POLICY.md); an independent Judge pass is still owed.
+
 ## 2026-11-28 — D-RN-ENGINE-H1D-1: first per-domain split of the RPC impl — provider domain into `rpc_providers.rs` (ENGINE H1 step 3)
 
 - **What**: the bodies of 10 provider-domain `WarshaApiServer` methods (`list_providers`, `provider_auth_status`, `provider_auth_start`, `provider_auth_complete`, `provider_disconnect`, `add_provider`, `test_provider`, `check_provider_models`, `provider_quota`, `remove_provider`) moved verbatim into `crates/warshad/src/rpc_providers.rs` as `pub(crate) async fn <name>_impl` inherent methods on `WarshaRpc` (`use super::*;`). The trait methods in `crates/warshad/src/rpc_impl.rs` keep their signatures, doc comments and attributes and now only delegate (`self.<name>_impl(..).await`). `lib.rs` declares `mod rpc_providers;` next to `mod rpc_impl;`. There is no `provider_auth_poll` method in the trait; role/budget/usage/device/plugin/integration methods untouched.
