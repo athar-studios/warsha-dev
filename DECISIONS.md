@@ -1,6 +1,19 @@
 
 # DECISIONS.md — Architecture and Design Decisions
 
+## 2026-11-28 — D-RN-CLEAN12-1: remove FakeProvider from production daemon startup (CLEAN-12 K3 no silent fakes)
+
+- **Branch / base**: `clean12-fix`, base `75bae11` (CLEAN-11 merged tip), isolated worktree `.agents/worktrees/clean12-fix`. Local only; zero changes to non-test product code outside `crates/warshad/src/startup.rs`, no push, tag, or publish.
+- **K3 gap (KEEL milestone P0)**: `FakeProvider` registered unconditionally in production daemon startup (`crates/warshad/src/startup.rs:303`) — this IS the silent fake fallback K3 forbids.
+- **Fix (commit `54ced28`)**: Removed the unconditional `FakeProvider` registration block in `start_daemon_with_interfaces` and replaced with NOTE comment explaining `FakeProvider` is only used when `WARSHA_LLM_PROVIDER=fake` is explicitly set (via `dispatch_chat` at `pipeline/src/lib.rs:1854`). Retained `MockProvider` registrations (`MOCK_PROVIDER_ID`/`"mock"` and `"mock-503"`) for test wiring.
+- **K3 gating verified**: `crates/warsha-pipeline/src/lib.rs:1833-1858` (`dispatch_chat`) gates `FakeProvider::new()` behind `forced_fake = WARSHA_LLM_PROVIDER == "fake"`; unrouted roles return `PipelineError::NoProviderRouted` — no silent fake fallback. `ProviderRouter::new()` pre-registers FakeProvider under `"fake"` on every router (pre-existing, untouched) but it carries no role routing and does not hijack routed roles; the fake answering path constructs `FakeProvider::new()` directly behind the env gate.
+- **Verification on `clean12-fix` tip**:
+  - Rust workspace: `cargo fmt --all --check` ✓; `cargo clippy -q --workspace --all-targets -- -D warnings` ✓; `cargo test --workspace --no-fail-fast` (70 suites, **1491+ passed, 0 failed, 13 ignored**) ✓.
+  - `apps/desktop/src-tauri`: `cargo fmt --check` ✓; `cargo clippy -q --all-targets -- -D warnings` ✓; `cargo test` (**13 passed; 0 failed**) ✓.
+  - JS/TS & policy: `packages/i18n` vitest **64/64** ✓; `packages/client` vitest **214/214** + `tsc --noEmit` `0` ✓; `apps/desktop` vitest **912/912** + `tsc --noEmit` `0` + `tsc --noEmit -p tsconfig.e2e.json` `0` + `eslint` `0` errors (1 pre-existing warning `developers/index.tsx:291`) + `vite build` `0` ✓; `packages/ui` vitest **392/392** + `tsc --noEmit` `0` + `eslint` `0` ✓; `node scripts/check-engineering-policy.mjs` **8 checks, 0 failures** ✓.
+  - Additional: `cargo test -p warshad --lib status_truth` (6/6), `run_integrity` (11/11), `fake_e2e` (1/1), `warshad --lib providers` (15/15) — all pass.
+- **Judge**: `clean12-fix` @ `54ced28` — **Judge PASS 100/100** (`/tmp/judge-clean12-k3.md`, archived at `/home/moe/tools/judge-archive/judge-clean12-k3.md`), merged into `r-next/integration` as **`be7a6d6`**.
+
 ## 2026-11-28 — D-RN-CLEAN11-1: tokenDrift fix + ledger correction + docs commit (CLEAN-11 follow-up on `7d33585`)
 
 - **Branch / base**: `clean11-fix`, base `7d33585`, isolated worktree `.agents/worktrees/clean11-fix`. Local only; zero changes to Segmented.tsx or RR-2 code (RR-2 proven fixed by owner's hands-on re-test on native build at `7d33585`).

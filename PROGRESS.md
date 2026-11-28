@@ -12,13 +12,25 @@ CLEAN-10 RR-2 fix verified and merged into `r-next/integration` at **`7d33585`**
   - `apps/desktop/src-tauri`: `cargo fmt --check`, `cargo clippy -q --all-targets -- -D warnings`, `cargo test` (**13 passed; 0 failed**).
   - JS/TS & policy: `packages/i18n` vitest (**2/64**); `packages/client` vitest (**2/214**) + `tsc --noEmit` (`0`); `apps/desktop` vitest (**93/912**) + `tsc --noEmit` (`0`) + `tsc --noEmit -p tsconfig.e2e.json` (`0`) + `eslint` (`0` errors, `1` pre-existing warning at `apps/desktop/src/v3/pages/developers/index.tsx:291`) + `vite build` (`0`); `packages/ui` vitest **57/58** (pre-existing R6 `tokenDrift` failure) + `tsc --noEmit` (`0`) + `eslint` (`0`); `node scripts/check-engineering-policy.mjs` (**8 checks, 0 failures**).
 
+## FIXES COMPLETE — CLEAN-12 — 2026-11-28
+
+CLEAN-12 K3 fix (base tip `75bae11`, CLEAN-11 merged tip) removes the silent fake fallback in production daemon startup — the primary K3 "no silent fakes" gap identified in KEEL milestone analysis.
+- **Lane & Judge**: `clean12-fix` @ **`54ced28`** — **Judge PASS 100/100** (`/tmp/judge-clean12-k3.md`, archived at `/home/moe/tools/judge-archive/judge-clean12-k3.md`), merged into `r-next/integration` as **`be7a6d6`**.
+- **Fix (`crates/warshad/src/startup.rs`)**: Removed unconditional `FakeProvider` registration (lines 303-309 in `start_daemon_with_interfaces`) that created a silent fake fallback in production. Replaced with NOTE comment explaining `FakeProvider` is only used when `WARSHA_LLM_PROVIDER=fake` is explicitly set (via `dispatch_chat` at `pipeline/src/lib.rs:1854`). Retained `MockProvider` registrations (`MOCK_PROVIDER_ID`/`"mock"` and `"mock-503"`) for test wiring.
+- **K3 gating verified**: `crates/warsha-pipeline/src/lib.rs:1833-1858` (`dispatch_chat`) gates `FakeProvider::new()` behind `forced_fake = WARSHA_LLM_PROVIDER == "fake"`; unrouted roles return `PipelineError::NoProviderRouted` — no silent fake fallback.
+- **Gates on merged `be7a6d6`**:
+  - Rust workspace: `cargo fmt --all --check`, `cargo clippy -q --workspace --all-targets -- -D warnings`, `cargo test --workspace --no-fail-fast` (**70 suites, 1491+ passed, 0 failed, 13 ignored**).
+  - `apps/desktop/src-tauri`: `cargo fmt --check`, `cargo clippy -q --all-targets -- -D warnings`, `cargo test` (**13 passed; 0 failed**).
+  - JS/TS & policy: `packages/i18n` vitest **64/64**; `packages/client` vitest **214/214** + `tsc --noEmit` `0`; `apps/desktop` vitest **912/912** + `tsc --noEmit` `0` + `tsc --noEmit -p tsconfig.e2e.json` `0` + `eslint` `0` errors (1 pre-existing warning at `apps/desktop/src/v3/pages/developers/index.tsx:291`) + `vite build` `0`; `packages/ui` vitest **392/392** + `tsc --noEmit` `0` + `eslint` `0`; `node scripts/check-engineering-policy.mjs` **8 checks, 0 failures**.
+  - Additional verification: `cargo test -p warshad --lib status_truth` (6/6), `run_integrity` (11/11), `fake_e2e` (1/1), `warshad --lib providers` (15/15) — all pass.
+
 ## FIXES COMPLETE — CLEAN-11 — 2026-11-28
 
 CLEAN-11 follow-up (base tip `7d33585`) fixed three items only; Segmented.tsx and RR-2 were NOT re-touched (RR-2 proven fixed by owner's hands-on re-test):
 1. **tokenDrift fix** (pre-existing R6 failure): 4 hardcoded lengths in `apps/desktop/src/v3/pages/home/home.css` (line 448: `2px`, 497: `220px`, 522: `3px`, 547: `3px`) tokenized via new `--warsha-size-source-grid-min: 220px` in `packages/ui/src/tokens/{sizes.ts,tokens.css}` (light + dark) and `--w-space-0-5: 2px` alias added to `packages/ui/src/v3/tokens/tokens.css` so v3 `tokenUsage.test.ts` (`var(--w-*)` scanner) passes. `packages/ui` vitest now **392/392 PASS**.
 2. **Ledger correction**: PROGRESS.md and DECISIONS.md now record true numbers (CLEAN-10 `packages/ui` vitest was 57/58, not 58/58) and owner's hands-on re-test proving RR-2 fixed on native build.
 3. **Commit corrected docs**: this entry and the corrected CLEAN-10 entry above committed on `r-next/integration`.
-- **Lane & Judge**: `clean11-fix` @ **`<SHA>`** — **Judge PASS 100/100** (report to be archived), merged into `r-next/integration` as **`<MERGE_SHA>`**.
+- **Lane & Judge**: `clean11-fix` @ **`75bae11`** — **Judge PASS 100/100** (report archived), merged into `r-next/integration` as **`75bae11`** (fast-forward, no merge commit).
 - **Gates on merged tip**:
   - Rust workspace: `cargo fmt --all --check`, `cargo clippy -q --workspace --all-targets -- -D warnings`, `cargo test --workspace --no-fail-fast` (**70 suites, 1491+ passed, 0 failed, 13 ignored**).
   - `apps/desktop/src-tauri`: `cargo fmt --check`, `cargo clippy -q --all-targets -- -D warnings`, `cargo test` (**13 passed; 0 failed**).
