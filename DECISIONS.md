@@ -1,6 +1,12 @@
 
 # DECISIONS.md — Architecture and Design Decisions
 
+## 2026-11-28 — D-RN-ENGINE-H1C-1: move daemon helper items out of `crates/warshad/src/lib.rs` (ENGINE H1 step 2)
+
+- **What**: `PENDING_PROJECT_BUDGETS`, `delete_branch_hint`, `apply_start_budget`, `StoreRunLiveness` (+ its `RunLiveness` impl), `check_secret_account`, `provider_has_stored_key` moved into `crates/warshad/src/helpers.rs` (`use super::*;`); `lib.rs` re-exports the ones other modules use via `pub(crate) use helpers::{...}`. `lib.rs` 578 -> 293 lines.
+- **Only non-verbatim differences**: `pub(crate)` on moved items plus `StoreRunLiveness.store` (needed for cross-module access from `startup.rs`), and rustfmt line wrapping of the `PENDING_PROJECT_BUDGETS` type. No logic, signature or test change. Two helpers (`delete_branch_hint`, `check_secret_account`) are used only inside `helpers.rs`, so they are not re-exported.
+- **Evidence**: semantic diff vs `HEAD:lib.rs` empty apart from the wrapping above; `cargo check -p warshad` (lib and `--tests`) no warnings; `cargo clippy -p warshad --all-targets -D warnings` 0; `cargo test -p warshad` 448 passed, 0 failed, 5 ignored. Applied by the lead agent (Coder lane rate-limited).
+
 ## 2026-11-28 — D-RN-ENGINE-H1B-1: move `impl WarshaApiServer for WarshaRpc` out of `crates/warshad/src/lib.rs`
 
 - **Why**: ENGINE H1 target (PLAN P1): `crates/warshad/src/lib.rs` was 5091 lines, ~4500 of them one trait impl. Two earlier worker attempts failed (max-tokens; provider 429 mid-move leaving a non-compiling tree), so the move was done in one mechanical step by the lead agent.
