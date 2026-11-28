@@ -1,6 +1,12 @@
 
 # DECISIONS.md — Architecture and Design Decisions
 
+## D-RN-ENGINE-H1HJK-1 — ENGINE H1 steps h/j/k: remaining RPC bodies split by domain (2026-11-28)
+- Decision: moved 65 more `WarshaApiServer` method bodies out of `crates/warshad/src/rpc_impl.rs` into `rpc_projects.rs` (25), `rpc_runs.rs` (23), `rpc_agents.rs` (17) as `pub(crate) async fn <name>_impl`; trait methods delegate. Commits d4384d1, 16f3ee9, 42fe728, merged into r-next/integration (afb98e5); only conflicts were `mod` lines in lib.rs. `rpc_impl.rs` is now 1311 lines (from 2601).
+- Only non-verbatim edit: `#[allow(clippy::needless_question_mark)]` on `secretary_thread_turns_impl` (lint fires on inherent methods but not inside the async_trait impl); the body is untouched.
+- Evidence (lead-run): whitespace-normalized body comparison 25/23/17 identical, 0 untouched methods changed; fmt OK, clippy --workspace -D warnings OK, policy 8/0, cargo test --workspace 1491/0/13, e2e_real_arabic_request x10 0 failures.
+- Judge: independent Judge pass on this step still owed (the Judge lane is the exhausted free tier; a non-Judge worker may run it as for H1 e/f/g).
+
 ## D-RN-ENGINE-H1EFG-1 — ENGINE H1 steps e/f/g: RPC bodies split by domain (2026-11-28)
 - Decision: moved 68 `WarshaApiServer` method bodies out of `crates/warshad/src/rpc_impl.rs` into `rpc_roles_usage.rs` (14), `rpc_extensions.rs` (25), `rpc_tools.rs` (29) as `pub(crate) async fn <name>_impl`; trait methods delegate. Pure mechanical move (83c9b47, adb6b1f, 9a6d76b) merged into r-next/integration (e00d8ee); only conflict was the `mod` line in lib.rs.
 - Evidence: lead body-comparison script (whitespace-normalized) 14/25/29 moved bodies identical, 0 untouched methods changed; fmt OK, clippy --workspace -D warnings OK, policy 8/0, cargo test --workspace 1491/0/13 on e00d8ee.
